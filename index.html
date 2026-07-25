@@ -279,18 +279,27 @@
               </div>
             </div>
             <div style="padding:0 20px 8px">
-              <div style="display:grid;grid-template-columns:58px 96px 1fr 108px 108px 100px 34px;gap:8px;align-items:center;padding:12px 4px;font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">
+              <div style="display:grid;grid-template-columns:58px 96px 1fr 108px 108px 100px 100px;gap:8px;align-items:center;padding:12px 4px;font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">
                 <span>Date</span><span>N°</span><span>Pêcheur</span><span style="text-align:right">Mont. payé</span><span style="text-align:right">Restant à payer</span><span>Statut</span><span></span>
               </div>
               <sc-for list="{{ achatRows }}" as="t" hint-placeholder-count="8">
-                <div style="display:grid;grid-template-columns:58px 96px 1fr 108px 108px 100px 34px;gap:8px;align-items:center;padding:{{ rowPad }};border-top:1px solid #f1f4f8;font-size:13px">
+                <div style="display:grid;grid-template-columns:58px 96px 1fr 108px 108px 100px 100px;gap:8px;align-items:center;padding:{{ rowPad }};border-top:1px solid #f1f4f8;font-size:13px;opacity:{{ t.rowOpacity }}">
                   <span style="color:#69788c;font-family:'IBM Plex Mono',monospace">{{ t.date }}</span>
-                  <span style="color:#3a4a5e;font-family:'IBM Plex Mono',monospace">{{ t.ref }}</span>
+                  <span style="color:#3a4a5e;font-family:'IBM Plex Mono',monospace;text-decoration:{{ t.refDecoration }}">{{ t.ref }}</span>
                   <span style="color:#0e1b2e;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.partner }}</span>
                   <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#0e1b2e">{{ t.paidStr }}</span>
                   <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:{{ t.resteColor }}">{{ t.resteStr }}</span>
                   <span><button style="{{ t.statusButtonStyle }}" onclick="{{ t.onResolve }}" title="{{ t.statusTitle }}">{{ t.status }}</button></span>
-                  <span style="text-align:center"><button style="{{ t.trashStyle }}" onclick="{{ t.onTrash }}" title="Masquer cette ligne (corbeille)">🗑</button></span>
+                  <span style="text-align:center;display:flex;gap:4px;justify-content:center;align-items:center">
+                    <sc-if value="{{ t.notAnnulled }}" hint-placeholder-val="{{ true }}">
+                      <button style="{{ t.trashStyle }}" onclick="{{ t.onTrash }}" title="Masquer cette ligne (corbeille)">🗑</button>
+                      <button style="{{ t.cancelStyle }}" onclick="{{ t.onCancel }}" title="Annuler cette ligne dans Excel (colonne dédiée)">⊘</button>
+                    </sc-if>
+                    <sc-if value="{{ t.annulled }}" hint-placeholder-val="{{ false }}">
+                      <span style="{{ t.annuleBadgeStyle }}">Annulé</span>
+                      <button style="{{ t.restoreStyle }}" onclick="{{ t.onRestore }}">Rétablir</button>
+                    </sc-if>
+                  </span>
                 </div>
               </sc-for>
               <sc-if value="{{ moreLabel }}" hint-placeholder-val="{{ false }}">
@@ -321,17 +330,26 @@
               </div>
             </div>
             <div style="padding:0 20px 8px">
-              <div style="display:grid;grid-template-columns:84px 58px 74px 1fr 112px 92px;gap:8px;align-items:center;padding:12px 4px;font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">
-                <span>N° facture</span><span>Date</span><span>Type</span><span>Partenaire</span><span style="text-align:right">Montant</span><span>Statut</span>
+              <div style="display:grid;grid-template-columns:84px 58px 74px 1fr 112px 92px 100px;gap:8px;align-items:center;padding:12px 4px;font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">
+                <span>N° facture</span><span>Date</span><span>Type</span><span>Partenaire</span><span style="text-align:right">Montant</span><span>Statut</span><span></span>
               </div>
               <sc-for list="{{ filtered }}" as="t" hint-placeholder-count="8">
-                <div style="display:grid;grid-template-columns:84px 58px 74px 1fr 112px 92px;gap:8px;align-items:center;padding:{{ rowPad }};border-top:1px solid #f1f4f8;font-size:13px">
-                  <span style="color:#3a4a5e;font-family:'IBM Plex Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.ref }}</span>
+                <div style="display:grid;grid-template-columns:84px 58px 74px 1fr 112px 92px 100px;gap:8px;align-items:center;padding:{{ rowPad }};border-top:1px solid #f1f4f8;font-size:13px;opacity:{{ t.rowOpacity }}">
+                  <span style="color:#3a4a5e;font-family:'IBM Plex Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:{{ t.refDecoration }}">{{ t.ref }}</span>
                   <span style="color:#69788c;font-family:'IBM Plex Mono',monospace">{{ t.date }}</span>
                   <span><span style="{{ t.typeStyle }}">{{ t.type }}</span></span>
                   <span style="color:#0e1b2e;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.partner }}<span style="color:#9aa7b8;font-weight:400"> · {{ t.cat }}</span></span>
                   <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:{{ t.amountColor }}">{{ t.amount }}</span>
                   <span><span style="{{ t.statusStyle }}">{{ t.status }}</span></span>
+                  <span style="text-align:center;display:flex;gap:4px;justify-content:center;align-items:center">
+                    <sc-if value="{{ t.notAnnulled }}" hint-placeholder-val="{{ false }}">
+                      <button style="{{ t.cancelStyle }}" onclick="{{ t.onCancel }}" title="Annuler cette ligne dans Excel (colonne dédiée)">⊘</button>
+                    </sc-if>
+                    <sc-if value="{{ t.annulled }}" hint-placeholder-val="{{ false }}">
+                      <span style="{{ t.annuleBadgeStyle }}">Annulé</span>
+                      <button style="{{ t.restoreStyle }}" onclick="{{ t.onRestore }}">Rétablir</button>
+                    </sc-if>
+                  </span>
                 </div>
               </sc-for>
               <sc-if value="{{ txPager.show }}" hint-placeholder-val="{{ false }}">
@@ -861,20 +879,29 @@
                 </div>
               </div>
               <div style="padding:0 20px 8px">
-                <div style="display:grid;grid-template-columns:66px 66px 92px 1fr 82px 100px 92px 100px 104px;gap:8px;align-items:center;padding:12px 4px;font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.3px">
-                  <span>Date</span><span>Échéance</span><span>N°</span><span>Partenaire</span><span>Type</span><span style="text-align:right">Montant TTC</span><span style="text-align:right">Payé</span><span style="text-align:right">Reste</span><span>Statut</span>
+                <div style="display:grid;grid-template-columns:66px 66px 92px 1fr 82px 100px 92px 100px 104px 100px;gap:8px;align-items:center;padding:12px 4px;font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.3px">
+                  <span>Date</span><span>Échéance</span><span>N°</span><span>Partenaire</span><span>Type</span><span style="text-align:right">Montant TTC</span><span style="text-align:right">Payé</span><span style="text-align:right">Reste</span><span>Statut</span><span></span>
                 </div>
                 <sc-for list="{{ facRows }}" as="f" hint-placeholder-count="9">
-                  <div style="display:grid;grid-template-columns:66px 66px 92px 1fr 82px 100px 92px 100px 104px;gap:8px;align-items:center;padding:{{ rowPad }};border-top:1px solid #f1f4f8;font-size:13px">
+                  <div style="display:grid;grid-template-columns:66px 66px 92px 1fr 82px 100px 92px 100px 104px 100px;gap:8px;align-items:center;padding:{{ rowPad }};border-top:1px solid #f1f4f8;font-size:13px;opacity:{{ f.rowOpacity }}">
                     <span style="color:#69788c;font-family:'IBM Plex Mono',monospace">{{ f.date }}</span>
                     <span style="color:{{ f.dueColor }};font-family:'IBM Plex Mono',monospace">{{ f.due }}</span>
-                    <span style="color:#3a4a5e;font-family:'IBM Plex Mono',monospace">{{ f.ref }}</span>
+                    <span style="color:#3a4a5e;font-family:'IBM Plex Mono',monospace;text-decoration:{{ f.refDecoration }}">{{ f.ref }}</span>
                     <span style="color:#0e1b2e;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.partner }}</span>
                     <span><span style="{{ f.typeStyle }}">{{ f.typeLabel }}</span></span>
                     <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#0e1b2e">{{ f.ttc }}</span>
                     <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#69788c">{{ f.paid }}</span>
                     <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:{{ f.resteColor }}">{{ f.reste }}</span>
                     <span><button style="{{ f.statusButtonStyle }}" onclick="{{ f.onResolve }}" title="{{ f.statusTitle }}">{{ f.status }}</button></span>
+                    <span style="text-align:center;display:flex;gap:4px;justify-content:center;align-items:center">
+                      <sc-if value="{{ f.notAnnulled }}" hint-placeholder-val="{{ true }}">
+                        <button style="{{ f.cancelStyle }}" onclick="{{ f.onCancel }}" title="Annuler cette ligne dans Excel (colonne dédiée)">⊘</button>
+                      </sc-if>
+                      <sc-if value="{{ f.annulled }}" hint-placeholder-val="{{ false }}">
+                        <span style="{{ f.annuleBadgeStyle }}">Annulé</span>
+                        <button style="{{ f.restoreStyle }}" onclick="{{ f.onRestore }}">Rétablir</button>
+                      </sc-if>
+                    </span>
                   </div>
                 </sc-for>
                 <sc-if value="{{ facPager.show }}" hint-placeholder-val="{{ false }}">

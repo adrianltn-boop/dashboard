@@ -216,7 +216,7 @@ class Component {
     filePreview: null, hiddenOps: {}, grenkeHidden: {}, trashAsk: null, tblStatusF: {},
     banque: null, banqueName: null, bankLinks: {}, bankHidden: {}, bankLink: null, bankLinkQuery: '', bankQ: '', bankFilter: 'Toutes',
     bankCats: {}, bankCatRules: {}, bankCatList: null, bankCatAsk: null, bankCatAskValue: '', bankCatPick: null,
-    heures: {}, heuresMois: {}, filePaths: {}, hRoster: [], hFocus: null, hMode: 'semaine', hRange: null, hCollapse: {}, hDelAsk: null, hNuit: false,
+    heures: {}, heuresMois: {}, filePaths: {}, annule: {}, hRoster: [], hFocus: null, hMode: 'semaine', hRange: null, hCollapse: {}, hDelAsk: null, hNuit: false,
     empDocs: {}, empDelDoc: null, bankSalaryEmp: '', bankSalaryMonth: '',
     agenda: [], agendaMonth: null, agendaEdit: null, agendaDelAsk: null,
     payTrack: [], payDraft: null, payDelAsk: null,
@@ -244,6 +244,7 @@ class Component {
   static HEURES_KEY = 'avHeures';
   static HMOIS_KEY = 'avHeuresMois';
   static FILEPATHS_KEY = 'avFilePaths';
+  static ANNULE_KEY = 'avAnnule';
   static EMPDOCS_KEY = 'avEmpDocs';
   static AGENDA_KEY = 'avAgenda';
   static PAYTRACK_KEY = 'avPayTrack';
@@ -638,6 +639,7 @@ class Component {
     try { const ed = JSON.parse(localStorage.getItem(Component.EMPDOCS_KEY) || 'null'); if (ed && typeof ed === 'object' && !Array.isArray(ed)) this.setState({ empDocs: ed }); } catch (e) {}
     try { const hm = JSON.parse(localStorage.getItem(Component.HMOIS_KEY) || 'null'); if (hm && typeof hm === 'object' && !Array.isArray(hm)) this.setState({ heuresMois: hm }); } catch (e) {}
     try { const fp = JSON.parse(localStorage.getItem(Component.FILEPATHS_KEY) || 'null'); if (fp && typeof fp === 'object' && !Array.isArray(fp)) this.setState({ filePaths: fp }); } catch (e) {}
+    try { const an = JSON.parse(localStorage.getItem(Component.ANNULE_KEY) || 'null'); if (an && typeof an === 'object' && !Array.isArray(an)) this.setState({ annule: an }); } catch (e) {}
     try { const ag = JSON.parse(localStorage.getItem(Component.AGENDA_KEY) || 'null'); if (Array.isArray(ag)) this.setState({ agenda: ag }); } catch (e) {}
     try { const pt = JSON.parse(localStorage.getItem(Component.PAYTRACK_KEY) || 'null'); if (Array.isArray(pt)) this.setState({ payTrack: pt }); } catch (e) {}
     try { const vs = JSON.parse(localStorage.getItem(Component.VSAISIE_KEY) || 'null'); if (Array.isArray(vs)) this.setState({ ventesSaisie: vs }); } catch (e) {}
@@ -1702,16 +1704,19 @@ class Component {
       { key: 'partner', label: 'Nom du pêcheur / client' }, { key: 'amt', label: 'Montant' },
       { key: 'cheque', label: 'N° de chèque' }, { key: 'paid', label: 'Total payé' },
       { key: 'paidDate', label: 'Date de paiement' }, { key: 'solde', label: 'Solde' },
+      { key: 'annule', label: 'Annulé' },
     ];
     if (kind === 'ventes') return [
       { key: 'ref', label: 'Numéro de facture' }, { key: 'partner', label: 'Client' }, { key: 'date', label: 'Date' },
       { key: 'ht', label: 'Montant HT' }, { key: 'tvaIr', label: 'TVA Irlande' }, { key: 'tvaFr', label: 'TVA France' },
       { key: 'grenke', label: 'GRENKE' }, { key: 'ttc', label: 'TOTAL TTC' }, { key: 'delai', label: 'Délai' },
       { key: 'datePrev', label: 'Date prévue' }, { key: 'status', label: 'Statut' },
+      { key: 'annule', label: 'Annulé' },
     ];
     if (kind === 'factures') return [
       { key: 'date', label: 'Date' }, { key: 'partner', label: 'Fournisseur' }, { key: 'ref', label: 'N° de facture' },
       { key: 'ttc', label: 'Montant' }, { key: 'paye', label: 'Paiement' }, { key: 'datePaie', label: 'Date paiement' },
+      { key: 'annule', label: 'Annulé' },
     ];
     return [];
   }
@@ -1893,6 +1898,83 @@ class Component {
       const tail = kind === 'ventes' ? " La vente n'a PAS été enregistrée — corrigez le réglage de l'écriture puis recommencez." : ' Votre saisie est enregistrée dans le tableau de bord.';
       this.setState({ msg: { kind: 'error', text: `Préparation de l'écriture impossible : ${(e && e.message) || 'erreur'}.${tail}` } });
     }
+  }
+  annuleKey(kind, ref) { return kind + '|' + this.nrm(ref || ''); }
+  // Repère une ligne DÉJÀ ENREGISTRÉE par son numéro de référence (pas la prochaine ligne
+  // vide) — nécessaire pour marquer "Annulé" sur la bonne ligne sans y toucher autrement.
+  async _locateRowByRef(buf, sheetName, refColIdx, refValue, firstDataIdx) {
+    const files = await this.unzipAll(buf); const dec = new TextDecoder();
+    const wbXml = dec.decode(files['xl/workbook.xml'] || new Uint8Array());
+    const relsXml = dec.decode(files['xl/_rels/workbook.xml.rels'] || new Uint8Array());
+    const relMap = this._relMapOf(relsXml);
+    const targetByName = {}; [...wbXml.matchAll(/<sheet[^>]*name="([^"]*)"[^>]*r:id="(rId\d+)"/g)].forEach(m => { targetByName[this.unxml(m[1])] = relMap[m[2]]; });
+    const target = targetByName[sheetName];
+    if (!target || !files[target]) throw new Error(`feuille « ${sheetName} » introuvable dans le fichier`);
+    const xml = dec.decode(files[target]);
+    const coln = r => { const mm = r.match(/^([A-Z]+)/); let v = 0; for (const c of mm[1]) v = v * 26 + (c.charCodeAt(0) - 64); return v; };
+    const want = this.nrm(refValue);
+    const rowsRe = /<row[^>]*>[\s\S]*?<\/row>/g; let rm; let rowIdx = -1;
+    while (rm = rowsRe.exec(xml)) {
+      rowIdx++;
+      if (rowIdx < firstDataIdx) continue;
+      const opens = [...rm[0].matchAll(/<row\b[^>]*?\br="(\d+)"/g)];
+      const rowNum = opens.length ? +opens[opens.length - 1][1] : (rowIdx + 1);
+      const cr = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g; let cm; let val = '';
+      while (cm = cr.exec(rm[0])) {
+        const refM = cm[1].match(/\br="([A-Z]+)\d+"/); if (!refM) continue;
+        if (coln(refM[1]) === refColIdx + 1) { const body = cm[2] || ''; const vm = body.match(/<v>([\s\S]*?)<\/v>/); const im = body.match(/<t[^>]*>([\s\S]*?)<\/t>/); val = (im ? im[1] : (vm ? vm[1] : '')).trim(); break; }
+      }
+      if (val && this.nrm(val) === want) return { previewIdx: rowIdx, excelRow: rowNum };
+    }
+    return null;
+  }
+  // Annulation visible (ou rétablissement) d'une ligne déjà enregistrée : on n'efface rien,
+  // on écrit "Annulé" (ou une case vide, pour rétablir) dans la colonne dédiée réglée comme
+  // les autres colonnes d'écriture. Réutilise exactement la même modale/sauvegarde/écriture
+  // que l'ajout d'une ligne (confirmAppendWrite gère la sauvegarde datée + le disque + le verrou).
+  async requestCancelPreview(kind, ref, opts) {
+    opts = opts || {};
+    const cfg = this.writeMapFor(kind);
+    if (!cfg || !cfg.enabled) { this.setState({ msg: { kind: 'error', text: `Écriture non réglée pour « ${this.writeSourceLabel(kind)} » — réglez-la dans Paramètres avant d'annuler une ligne dans Excel.` } }); return; }
+    let sheetName, colsMap, firstDataIdx = cfg.firstDataIdx || 0;
+    if (kind === 'factures' && (cfg.months || cfg.blocks)) {
+      const m = Math.max(1, Math.min(12, opts.month || 1));
+      const block = opts.block === 'crustace' ? 'crustace' : 'normal';
+      const mc = cfg.months && cfg.months[m];
+      if (mc) { sheetName = mc.sheetName; colsMap = (mc.blocks[block] || {}).cols || {}; firstDataIdx = mc.firstDataIdx; }
+      else { sheetName = (cfg.monthSheets || [])[m - 1]; colsMap = ((cfg.blocks && cfg.blocks[block]) || {}).cols || {}; firstDataIdx = cfg.firstDataIdx || 0; }
+      if (!sheetName) { this.setState({ msg: { kind: 'error', text: `Annulation impossible : la feuille du mois de ${Component.MONTHS[m]} n'existe pas dans « ${cfg.fileName} ».` } }); return; }
+    } else {
+      if (!cfg.cols) return;
+      sheetName = cfg.sheetName; colsMap = cfg.cols;
+    }
+    const annuleCol = colsMap.annule;
+    if (annuleCol == null || annuleCol < 0) { this.setState({ msg: { kind: 'error', text: `Aucune colonne « Annulé » réglée pour « ${this.writeSourceLabel(kind)} » — ajoutez-la dans Paramètres → Régler l'écriture.` } }); return; }
+    const refCol = colsMap.ref;
+    if (refCol == null || refCol < 0) { this.setState({ msg: { kind: 'error', text: `Colonne « N° de facture » non réglée pour « ${this.writeSourceLabel(kind)} » — impossible de retrouver la ligne.` } }); return; }
+    const hi = this._writableHandleFor(kind);
+    if (!hi || !hi.handle) { this.setState({ msg: { kind: 'error', text: `Fichier « ${cfg.fileName || this.writeSourceLabel(kind)} » non connecté. Reconnectez-le dans Paramètres.` } }); return; }
+    try {
+      const okPerm = await this._ensureWritePermission(hi.handle);
+      if (!okPerm) { this.setState({ msg: { kind: 'error', text: `Autorisation d'écriture refusée sur « ${hi.name} ». Rien n'a été modifié.` } }); return; }
+      const file = await hi.handle.getFile();
+      const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
+      const buf = await file.arrayBuffer();
+      const loc = await this._locateRowByRef(buf, sheetName, refCol, ref, firstDataIdx);
+      if (!loc) { this.setState({ msg: { kind: 'error', text: `Ligne « ${ref} » introuvable dans « ${sheetName} » — le fichier a peut-être changé. Actualisez puis réessayez.` } }); return; }
+      const colVals = { [annuleCol]: opts.restore ? '' : 'Annulé' };
+      this._pendingWrite = { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: 'patch', colVals, refuseFormula: true, after: () => this.confirmAnnuleAfterWrite(kind, ref, !!opts.restore, { month: opts.month, block: opts.block }) };
+      this.setState({ writePreview: { kind: 'annule', fileName: hi.name, sheetName, excelRow: loc.excelRow, rows: [{ label: 'Annulé', col: this._colLetter(annuleCol + 1), value: opts.restore ? '(case vidée)' : 'Annulé' }], status: null, restore: !!opts.restore, refLabel: ref } });
+    } catch (e) {
+      this.setState({ msg: { kind: 'error', text: `Préparation de l'annulation impossible : ${(e && e.message) || 'erreur'}. Rien n'a été modifié.` } });
+    }
+  }
+  confirmAnnuleAfterWrite(kind, ref, restore, meta) {
+    const m = { ...(this.state.annule || {}) };
+    const key = this.annuleKey(kind, ref);
+    if (restore) delete m[key]; else m[key] = { kind, ref, month: meta && meta.month, block: meta && meta.block, ts: Date.now() };
+    this.setState({ annule: m });
+    this.saveJSON(Component.ANNULE_KEY, m);
   }
   cancelAppendWrite() { const st = this._pendingWrite && this._pendingWrite.step; this._pendingWrite = null; this.setState({ writePreview: null }); if (st && this._achatSteps) { this._achatSteps[st] = 'annulé'; this._maybeFinalizeAchat(); } this._runNextWrite(); }
   // « Noter plus tard » (modale Fichier ouvert) : mémorise la saisie en attente (métadonnées seulement —
@@ -2348,18 +2430,22 @@ class Component {
       out.onFlCancel = () => this.cancelAppendWrite();
     }
     if (wp) {
-      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
+      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
       out.wpSubText = wp.kind === 'stock'
         ? `${wp.title || ''} — je remplis le poids et le prix par espèce/calibre. Le prix moyen se recalcule tout seul (formule non touchée). Sauvegarde datée avant l'écriture.`
         : wp.kind === 'cheque'
         ? `${wp.title || ''} — je remplis seulement les cases vides Date / Description / Montant de cette ligne déjà imprimée. Une copie de sauvegarde datée est faite avant l'écriture.`
+        : wp.kind === 'annule'
+        ? (wp.restore
+          ? `La colonne « Annulé » de la feuille « ${wp.sheetName} » sera vidée pour cette ligne — elle redevient active et recompte dans vos totaux. Une copie de sauvegarde datée est faite avant l'écriture.`
+          : `« Annulé » sera écrit dans la colonne dédiée de la feuille « ${wp.sheetName} », uniquement pour cette ligne. La ligne n'est PAS supprimée : elle reste dans votre fichier, marquée annulée, exclue de vos totaux tant qu'elle n'est pas rétablie. Une copie de sauvegarde datée est faite avant l'écriture.`)
         : wp.update
         ? `Feuille « ${wp.sheetName} » — seules les cases du dossier sont modifiées (paiements, charges, statut). Une copie de sauvegarde datée est faite avant l'écriture.`
         : `Feuille « ${wp.sheetName} »${wp.excelRow != null ? ', ligne ' + wp.excelRow : ''}. Une copie de sauvegarde datée est faite avant l'écriture. Vos lignes existantes ne sont jamais touchées.`;
       out.wpFileName = wp.fileName; out.wpSheetName = wp.sheetName; out.wpExcelRow = wp.excelRow;
       out.wpRows = (wp.rows || []).map(r => ({ label: r.label, col: r.col, value: r.value }));
       out.wpStatus = wp.status || ''; out.wpError = wp.error || ''; out.wpBusy = wp.status === 'writing';
-      out.wpBtnLabel = wp.status === 'writing' ? 'Écriture…' : (wpLocked ? '↻ Réessayer' : 'Confirmer et écrire');
+      out.wpBtnLabel = wp.status === 'writing' ? 'Écriture…' : (wpLocked ? '↻ Réessayer' : wp.kind === 'annule' ? (wp.restore ? 'Confirmer le rétablissement' : "Confirmer l'annulation") : 'Confirmer et écrire');
       out.wpConfirmStyle = wp.status === 'writing'
         ? "padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#8ab89a;border:none;font-family:inherit;cursor:wait"
         : "padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#15803d;border:none;cursor:pointer;font-family:inherit";
@@ -4531,6 +4617,9 @@ class Component {
     const grenkeRows = grenkeRowsAll.filter(g => !grenkeHidden[this.gHideKey(g)]);
     const grenkeHiddenCount = grenkeRowsAll.length - grenkeRows.length;
     const trashBtnStyle = 'width:26px;height:26px;border-radius:7px;border:1px solid #ecdcdc;background:#fff;color:#b91c1c;font-size:12px;cursor:pointer;line-height:1;padding:0';
+    const cancelBtnStyle = 'width:26px;height:26px;border-radius:7px;border:1px solid #e0b85f;background:#fff;color:#b45309;font-size:12px;cursor:pointer;line-height:1;padding:0';
+    const restoreBtnStyle = 'padding:4px 10px;border-radius:7px;border:1px solid #bfe3cc;background:#fff;color:#15803d;font-size:11px;font-weight:600;cursor:pointer;line-height:1.4;font-family:inherit;white-space:nowrap';
+    const annuleBadgeStyle = 'padding:3px 9px;border-radius:6px;font-size:10.5px;font-weight:700;color:#b45309;background:#fff4e5;border:1px solid #f0dcae;white-space:nowrap';
     const F = this._memo('F', [this.state.ventes, this.state.factures, this.state.demoMode], () => this.computeFactures());
     // ---- Rapprochement Grenke ↔ factures internes (résolution partagée KPI + tableau) ----
     const gNum = s => this.gNumKey(s);
@@ -4594,22 +4683,28 @@ class Component {
     const nextStyle = arrowBase + (canNext ? `color:${accent}` : 'color:#c8d0dc;cursor:default');
     const periods = ['Cette semaine', 'Ce mois', 'Trimestre', 'Année'].map(name => ({ name, onClick: () => this.setState({ period: name, weekOff: 0 }), style: this.state.period === name ? `white-space:nowrap;padding:6px 13px;border-radius:8px;font-size:12.5px;font-weight:600;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit` : 'white-space:nowrap;padding:6px 13px;border-radius:8px;font-size:12.5px;font-weight:500;color:#69788c;background:transparent;border:none;cursor:pointer;font-family:inherit' }));
 
+    // Lignes annulées (Excel) : gardées visibles dans les tableaux (grisées), mais exclues
+    // de tous les totaux/KPI. inPeriod/inPrev restent complets pour l'affichage des listes.
+    const isAnnule = r => !!(this.state.annule || {})[this.annuleKey(r.type === 'Vente' ? 'ventes' : 'operations', r.ref)];
+    const inPeriodActive = inPeriod.filter(r => !isAnnule(r));
+    const inPrevActive = inPrev.filter(r => !isAnnule(r));
+
     // stats
     const stats = rs => { const v = rs.filter(r => r.type === 'Vente'), a = rs.filter(r => r.type === 'Achat'); const ca = v.reduce((s, r) => s + r.amt, 0), ach = a.reduce((s, r) => s + Math.abs(r.amt), 0);
       return { ca, ach, marge: ca - ach, nbV: v.length, nbA: a.length, taux: ca ? (ca - ach) / ca * 100 : 0, panier: v.length ? ca / v.length : 0, avgA: a.length ? ach / a.length : 0 }; };
-    const S = stats(inPeriod), Sp = stats(inPrev);
+    const S = stats(inPeriodActive), Sp = stats(inPrevActive);
     const tauxStr = S.taux.toFixed(1).replace('.', ',');
     const kpi = (label, value, cur, prev, goodUp, isCount) => { let delta = '—', color = gray, note = 'pas de comparatif';
       if (inPrev.length && isFinite(prev) && prev !== 0) { const diff = isCount ? cur - prev : (cur - prev) / Math.abs(prev) * 100; const sign = diff >= 0 ? '+' : '−'; delta = isCount ? sign + Math.abs(diff) : sign + Math.abs(diff).toFixed(1).replace('.', ',') + ' %'; color = diff === 0 ? gray : (diff > 0) === goodUp ? green : red; note = vsNote; }
       return { label, value, delta, deltaColor: color, note, spark: accent }; };
     let kpis;
-    if (view === 'Achats') { const aPaid = r => r.paid != null ? r.paid : (r.status === 'Payé' ? Math.abs(r.amt) : 0); const aReste = r => r.reste != null ? r.reste : (r.status === 'Payé' ? 0 : Math.abs(r.amt)); const aRows = inPeriod.filter(r => r.type === 'Achat'); const paidA = aRows.reduce((s, r) => s + aPaid(r), 0); const resteA = aRows.reduce((s, r) => s + aReste(r), 0); const paidAp = inPrev.filter(r => r.type === 'Achat').reduce((s, r) => s + aPaid(r), 0); kpis = [kpi('Total des achats', this.fmt(S.ach), S.ach, Sp.ach, false), kpi('Total payé', this.fmt(paidA), paidA, paidAp, true), kpi('Restant à payer', this.fmt(resteA), resteA, 0, false), kpi('Fournisseurs actifs', String(new Set(aRows.map(r => r.partner)).size), 0, 0, true)]; }
+    if (view === 'Achats') { const aPaid = r => r.paid != null ? r.paid : (r.status === 'Payé' ? Math.abs(r.amt) : 0); const aReste = r => r.reste != null ? r.reste : (r.status === 'Payé' ? 0 : Math.abs(r.amt)); const aRows = inPeriodActive.filter(r => r.type === 'Achat'); const paidA = aRows.reduce((s, r) => s + aPaid(r), 0); const resteA = aRows.reduce((s, r) => s + aReste(r), 0); const paidAp = inPrevActive.filter(r => r.type === 'Achat').reduce((s, r) => s + aPaid(r), 0); kpis = [kpi('Total des achats', this.fmt(S.ach), S.ach, Sp.ach, false), kpi('Total payé', this.fmt(paidA), paidA, paidAp, true), kpi('Restant à payer', this.fmt(resteA), resteA, 0, false), kpi('Fournisseurs actifs', String(new Set(aRows.map(r => r.partner)).size), 0, 0, true)]; }
     else if (view === 'Ventes') {
-      const vRows = inPeriod.filter(r => r.type === 'Vente');
+      const vRows = inPeriodActive.filter(r => r.type === 'Vente');
       const caHT = vRows.reduce((s, r) => s + (r.ht != null ? r.ht : r.amt), 0);
-      const caHTp = inPrev.filter(r => r.type === 'Vente').reduce((s, r) => s + (r.ht != null ? r.ht : r.amt), 0);
+      const caHTp = inPrevActive.filter(r => r.type === 'Vente').reduce((s, r) => s + (r.ht != null ? r.ht : r.amt), 0);
       const caTTC = vRows.reduce((s, r) => s + r.amt, 0);
-      const caTTCp = inPrev.filter(r => r.type === 'Vente').reduce((s, r) => s + r.amt, 0);
+      const caTTCp = inPrevActive.filter(r => r.type === 'Vente').reduce((s, r) => s + r.amt, 0);
       const caDisp = amountMode === 'HT' ? caHT : caTTC;
       const caDispP = amountMode === 'HT' ? caHTp : caTTCp;
       const gRecvOf = g => (g.recv != null && g.recv !== 0) ? g.recv : ((g.p1 || 0) + (g.p2 || 0));
@@ -4636,17 +4731,19 @@ class Component {
         kpiGrenke,
       ];
     }
-    else { const encP = inPeriod.filter(r => r.type === 'Vente' && r.status === 'Payé').reduce((s, r) => s + r.amt, 0); const decP = inPeriod.filter(r => r.type === 'Achat' && r.status === 'Payé').reduce((s, r) => s + Math.abs(r.amt), 0); const encPp = inPrev.filter(r => r.type === 'Vente' && r.status === 'Payé').reduce((s, r) => s + r.amt, 0); const decPp = inPrev.filter(r => r.type === 'Achat' && r.status === 'Payé').reduce((s, r) => s + Math.abs(r.amt), 0);
+    else { const encP = inPeriodActive.filter(r => r.type === 'Vente' && r.status === 'Payé').reduce((s, r) => s + r.amt, 0); const decP = inPeriodActive.filter(r => r.type === 'Achat' && r.status === 'Payé').reduce((s, r) => s + Math.abs(r.amt), 0); const encPp = inPrevActive.filter(r => r.type === 'Vente' && r.status === 'Payé').reduce((s, r) => s + r.amt, 0); const decPp = inPrevActive.filter(r => r.type === 'Achat' && r.status === 'Payé').reduce((s, r) => s + Math.abs(r.amt), 0);
       kpis = [kpi('CA ventes', this.fmt(S.ca), S.ca, Sp.ca, true), kpi('Achats pêcheurs', this.fmt(S.ach), S.ach, Sp.ach, false), kpi('Marge brute', this.fmt(S.marge), S.marge, Sp.marge, true), kpi('Flux net (période)', this.fmt(encP - decP), encP - decP, encPp - decPp, true)]; }
 
     // trésorerie
     const sum = (arr, f) => arr.reduce((s, x) => s + f(x), 0);
-    const clientOpen = F.filter(f => f.sens === 'Client' && f.reste > 0);
-    const fournOpen = F.filter(f => f.sens === 'Fournisseur' && f.reste > 0);
+    const isAnnuleF = f => !!(this.state.annule || {})[this.annuleKey(f.sens === 'Fournisseur' ? 'factures' : 'ventes', f.ref)];
+    const FActive = F.filter(f => !isAnnuleF(f));
+    const clientOpen = FActive.filter(f => f.sens === 'Client' && f.reste > 0);
+    const fournOpen = FActive.filter(f => f.sens === 'Fournisseur' && f.reste > 0);
     // Une relance concerne uniquement une créance client. Les factures fournisseurs échues
     // restent dans « Je dois » / Factures et ne doivent jamais gonfler la carte des Ventes.
-    const overdueAll = F.filter(f => f.sens === 'Client' && f.over);
-    const onMeDoit = sum(clientOpen, f => f.reste), jeDois = sum(fournOpen, f => f.reste), enRelance = sum(overdueAll, f => f.reste), encaisse = sum(F.filter(f => f.sens === 'Client'), f => f.paid);
+    const overdueAll = FActive.filter(f => f.sens === 'Client' && f.over);
+    const onMeDoit = sum(clientOpen, f => f.reste), jeDois = sum(fournOpen, f => f.reste), enRelance = sum(overdueAll, f => f.reste), encaisse = sum(FActive.filter(f => f.sens === 'Client'), f => f.paid);
     const mensNow = (this.state.credits || (demo ? C.CREDITS : [])).reduce((s, c) => s + (c.mens || 0), 0);
     // Solde du compte = solde courant lu dans le relevé bancaire (ligne la plus récente qui porte un solde) ; à défaut, somme des mouvements du relevé.
     const bankForSolde = this.state.banque || (demo ? C.BANQUE.map(a => ({ y: a[0], m: a[1], d: a[2], label: a[3], amt: a[4], solde: a[5] != null ? a[5] : null })) : []);
@@ -4736,9 +4833,13 @@ class Component {
     grenkeRows.forEach(g => { const L = resolveLink(g); if (L.ref) { grenkeLinkedFactRefs.add(this.nrm(L.ref)); const k = gNum(L.ref); if (k) grenkeNumSet.add(k); } else { const k = gNum(g.ref); if (k) grenkeNumSet.add(k); } });
     const filtered = txPager.slice.map(r => {
       const isHt = amountMode === 'HT' && r.type === 'Vente' && r.ht != null; const dispAmt = isHt ? (r.amt < 0 ? -r.ht : r.ht) : r.amt; const isGrk = r.type === 'Vente' && r.ref && (grenkeLinkedFactRefs.has(this.nrm(r.ref)) || (gNum(r.ref) && grenkeNumSet.has(gNum(r.ref)))); const canResolve = r.type === 'Vente' && r.status === 'À vérifier'; const stStyle = opStatus[r.status] || `${badge}background:#eef1f5;color:${slate}`;
+      const annulled = r.type === 'Vente' && isAnnule(r);
       return ({ ref: r.ref || '—', date: `${this.dd(r.d)}/${this.dd(r.m)}`, type: isGrk ? 'Grenke' : r.type, partner: (r.manual ? '✎ ' : '') + r.partner, cat: r.cat, amount: (dispAmt < 0 ? '−' : '+') + Math.abs(dispAmt).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' € ' + (isHt ? 'HT' : 'TTC'), amountColor: dispAmt < 0 ? red : green, status: r.status + (r.paymentWarning ? ' ⚠' : ''),
         statusStyle: stStyle, statusButtonStyle: `${stStyle};border:${canResolve || r.paymentWarning ? '1px solid #e0b85f' : 'none'};cursor:${canResolve ? 'pointer' : 'default'};font-family:inherit`, statusTitle: canResolve ? 'Cliquez pour comprendre et résoudre cette anomalie' : (r.paymentWarning || ''), onResolve: canResolve ? () => this.setState({ payResolveRef: r.ref }) : null,
-        typeStyle: isGrk ? `${badge}background:#ede9fe;color:#6d28d9` : r.type === 'Vente' ? `${badge}background:${soft};color:${accent}` : `${badge}background:#eef1f5;color:${slate}` });
+        typeStyle: isGrk ? `${badge}background:#ede9fe;color:#6d28d9` : r.type === 'Vente' ? `${badge}background:${soft};color:${accent}` : `${badge}background:#eef1f5;color:${slate}`,
+        canCancel: r.type === 'Vente', annulled, notAnnulled: r.type === 'Vente' && !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none',
+        onCancel: r.type === 'Vente' ? () => this.requestCancelPreview('ventes', r.ref) : null, cancelStyle: cancelBtnStyle,
+        onRestore: r.type === 'Vente' ? () => this.requestCancelPreview('ventes', r.ref, { restore: true }) : null, restoreStyle: restoreBtnStyle, annuleBadgeStyle });
     });
     const moreLabel = (view === 'Achats' && scoped.length > cap) ? `Affichage des ${cap} premières lignes sur ${scoped.length} — réduisez la période pour tout voir.` : '';
     const isAchatView = view === 'Achats';
@@ -4830,7 +4931,7 @@ class Component {
     const grenkeLinkCardStyle = 'width:560px;max-width:100%;max-height:88vh;overflow:auto;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px';
     const grenkeUnlinkStyle = 'padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#b91c1c;background:#fff;border:1px solid #f0c9c9;cursor:pointer;font-family:inherit';
     const grenkeAutoStyle = 'padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#69788c;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit';
-    const achatAll = (isAchatView ? scoped : []).map(r => { const gross = Math.abs(r.amt); const paid = r.paid != null ? r.paid : (r.status === 'Payé' ? gross : 0); const reste = r.reste != null ? r.reste : Math.max(0, gross - paid); const st = reste > 0.005 ? (r.status === 'Retard' ? 'Retard' : 'Non payé') : 'Payé'; return { date: `${this.dd(r.d)}/${this.dd(r.m)}`, ref: r.ref, partner: (r.manual ? '✎ ' : '') + r.partner, paidStr: this.fmt(paid), resteStr: this.fmt(reste), resteColor: reste > 0.005 ? red : green, status: st, statusStyle: st === 'Payé' ? `${badge}background:#e7f5ec;color:${green}` : st === 'Retard' ? `${badge}background:#fdeaea;color:${red}` : `${badge}background:#fef4e6;color:${amber}`, statusButtonStyle: (st === 'Payé' ? `${badge}background:#e7f5ec;color:${green}` : st === 'Retard' ? `${badge}background:#fdeaea;color:${red}` : `${badge}background:#fef4e6;color:${amber}`) + ';border:none;cursor:default;font-family:inherit', onResolve: null, statusTitle: '', onTrash: () => this.setState({ trashAsk: { kind: 'op', key: this.opHideKey(r), label: 'Facture ' + (r.ref || '—') + ' · ' + (r.partner || '—') + ' · ' + this.fmt(gross) } }), trashStyle: trashBtnStyle }; });
+    const achatAll = (isAchatView ? scoped : []).map(r => { const gross = Math.abs(r.amt); const paid = r.paid != null ? r.paid : (r.status === 'Payé' ? gross : 0); const reste = r.reste != null ? r.reste : Math.max(0, gross - paid); const st = reste > 0.005 ? (r.status === 'Retard' ? 'Retard' : 'Non payé') : 'Payé'; const annulled = isAnnule(r); return { date: `${this.dd(r.d)}/${this.dd(r.m)}`, ref: r.ref, partner: (r.manual ? '✎ ' : '') + r.partner, paidStr: this.fmt(paid), resteStr: this.fmt(reste), resteColor: reste > 0.005 ? red : green, status: st, statusStyle: st === 'Payé' ? `${badge}background:#e7f5ec;color:${green}` : st === 'Retard' ? `${badge}background:#fdeaea;color:${red}` : `${badge}background:#fef4e6;color:${amber}`, statusButtonStyle: (st === 'Payé' ? `${badge}background:#e7f5ec;color:${green}` : st === 'Retard' ? `${badge}background:#fdeaea;color:${red}` : `${badge}background:#fef4e6;color:${amber}`) + ';border:none;cursor:default;font-family:inherit', onResolve: null, statusTitle: '', onTrash: () => this.setState({ trashAsk: { kind: 'op', key: this.opHideKey(r), label: 'Facture ' + (r.ref || '—') + ' · ' + (r.partner || '—') + ' · ' + this.fmt(gross) } }), trashStyle: trashBtnStyle, annulled, notAnnulled: !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none', onCancel: () => this.requestCancelPreview('operations', r.ref), cancelStyle: cancelBtnStyle, onRestore: () => this.requestCancelPreview('operations', r.ref, { restore: true }), restoreStyle: restoreBtnStyle, annuleBadgeStyle }; });
     const achatStatusVals = [...new Set(achatAll.map(t => t.status))];
     const achatStatusEff = effStatus('achat', achatStatusVals);
     const achatStatusChips = statusChipsFor('achat', achatStatusVals);
@@ -4872,22 +4973,23 @@ class Component {
     const effFacTab = this.state.facTab;
     const dashBody = isDash;
     const facIsList = effFacTab === 'Factures', facIsCredits = effFacTab === 'Crédits', facIsReco = effFacTab === 'Rapprochement';
-    const enAttente = sum(F.filter(f => f.reste > 0 && !f.over), f => f.reste);
-    const foF = F.filter(f => f.sens === 'Fournisseur');
-    const totalAchete = sum(foF, f => f.ttc);
-    const resteFourn = sum(foF, f => f.reste);
+    const enAttente = sum(FActive.filter(f => f.reste > 0 && !f.over), f => f.reste);
+    const foF = F.filter(f => f.sens === 'Fournisseur'); // affichage : inclut les lignes annulées (grisées)
+    const foFActive = FActive.filter(f => f.sens === 'Fournisseur'); // totaux uniquement
+    const totalAchete = sum(foFActive, f => f.ttc);
+    const resteFourn = sum(foFActive, f => f.reste);
     const TD = Component.TODAY; const Tdays = this.days(TD);
     const dowT = (new Date(Date.UTC(TD.y, TD.m - 1, TD.d)).getUTCDay() + 6) % 7; const wkStart = Tdays - dowT;
     const inWeek = f => { const d = this.days(f.em); return d >= wkStart && d <= wkStart + 6; };
     const inMonth = f => f.em.y === TD.y && f.em.m === TD.m;
     const inQuarter = f => f.em.y === TD.y && Math.floor((f.em.m - 1) / 3) === Math.floor((TD.m - 1) / 3);
     const inYear = f => f.em.y === TD.y;
-    const foInPeriod = foF.filter(f => inSelPeriod(f.em));
+    const foInPeriod = foFActive.filter(f => inSelPeriod(f.em));
     const facCards = [
       card('Achats — ' + periodLabel, this.fmt(sum(foInPeriod, f => f.ttc)), '#0e1b2e', `${foInPeriod.length} facture${foInPeriod.length > 1 ? 's' : ''} sur la période`, accent),
       card('Payé — ' + periodLabel, this.fmt(sum(foInPeriod, f => f.paid)), '#0e1b2e', 'réglé sur la période', slate),
-      card('Reste à payer — total', this.fmt(resteFourn), amber, `${foF.filter(f => f.reste > 0).length} facture${foF.filter(f => f.reste > 0).length > 1 ? 's' : ''} à régler`, amber),
-      card('Total acheté — tout', this.fmt(totalAchete), '#0e1b2e', `${foF.length} facture${foF.length > 1 ? 's' : ''} fournisseur`, slate),
+      card('Reste à payer — total', this.fmt(resteFourn), amber, `${foFActive.filter(f => f.reste > 0).length} facture${foFActive.filter(f => f.reste > 0).length > 1 ? 's' : ''} à régler`, amber),
+      card('Total acheté — tout', this.fmt(totalAchete), '#0e1b2e', `${foFActive.length} facture${foFActive.length > 1 ? 's' : ''} fournisseur`, slate),
     ];
     const facFilterList = ['Tous', 'Payée', 'Partiellement payée', 'Non payée', 'À vérifier', 'En retard', 'À relancer'];
     const facFilters = facFilterList.map(name => ({ name, onClick: () => this.setState({ facFilter: name, q: '', page: 0 }), style: this.state.facFilter === name ? `padding:6px 12px;border-radius:99px;font-size:12px;font-weight:600;color:#fff;background:${accent};border:1px solid ${accent};cursor:pointer;font-family:inherit` : 'padding:6px 12px;border-radius:99px;font-size:12px;font-weight:500;color:#5b6b7f;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit' }));
@@ -4899,10 +5001,14 @@ class Component {
     const facPager = paginate(facQ);
     const facRows = facPager.slice.map(f => {
       const isGr = grenkeLinkedFactRefs.has(this.nrm(f.ref)), canResolve = f.status === 'À vérifier' && f.sens === 'Client';
+      const annulled = isAnnuleF(f);
       return { date: `${this.dd(f.em.d)}/${this.dd(f.em.m)}`, due: `${this.dd(f.dueO.d)}/${this.dd(f.dueO.m)}`, dueColor: f.over ? red : '#69788c', ref: f.ref, partner: f.partner, typeLabel: isGr ? 'Grenke' : (f.sens === 'Client' ? 'Client' : 'Fourn.'), typeStyle: isGr ? `${badge}background:#e7f5ec;color:${green}` : (f.sens === 'Client' ? `${badge}background:${soft};color:${accent}` : `${badge}background:#eef1f5;color:${slate}`), ttc: this.fmt(f.ttc), paid: f.paid ? this.fmt(f.paid) : '—', reste: f.reste ? this.fmt(f.reste) : '—', resteColor: f.reste ? (f.over ? red : '#0e1b2e') : green, status: f.status + (f.paymentWarning ? ' ⚠' : ''),
         statusButtonStyle: `${statusStyle(f.status)};border:${canResolve || f.paymentWarning ? '1px solid #e0b85f' : 'none'};cursor:${canResolve ? 'pointer' : 'default'};font-family:inherit`,
         statusTitle: canResolve ? 'Cliquez pour comprendre et résoudre cette anomalie' : (f.paymentWarning || ''),
         onResolve: canResolve ? () => this.setState({ payResolveRef: f.ref }) : null,
+        annulled, notAnnulled: !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none',
+        onCancel: () => this.requestCancelPreview('factures', f.ref, { month: f.em.m }), cancelStyle: cancelBtnStyle,
+        onRestore: () => this.requestCancelPreview('factures', f.ref, { restore: true, month: f.em.m }), restoreStyle: restoreBtnStyle, annuleBadgeStyle,
       };
     });
 
