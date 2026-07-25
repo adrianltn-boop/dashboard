@@ -821,7 +821,9 @@ class Component {
       const anchorKeys = this._anchorFieldsFor('operations');
       const af = this.writeFieldsFor('operations').filter(x => cfg.cols[x.key] != null && anchorKeys.indexOf(x.key) >= 0);
       const idxs = af.length ? af.map(x => cfg.cols[x.key]) : Object.keys(cfg.cols).map(k => cfg.cols[k]);
-      const loc = await this._locateAppendTarget(buf.slice(0), cfg.sheetName, idxs, cfg.firstDataIdx != null ? cfg.firstDataIdx : (hdrIdx + 1));
+      const dateKey = Object.keys(this._dateFieldsFor('operations')).find(k => anchorKeys.indexOf(k) >= 0 && cfg.cols[k] != null && cfg.cols[k] >= 0);
+      const dateColIdx = dateKey != null ? cfg.cols[dateKey] : -1;
+      const loc = await this._locateAppendTarget(buf.slice(0), cfg.sheetName, idxs, cfg.firstDataIdx != null ? cfg.firstDataIdx : (hdrIdx + 1), dateColIdx);
       const row = sh.rows[loc.previewIdx] || []; const preNum = String(row[invCol] == null ? '' : row[invCol]).trim();
       if (preNum) {
         if (this.state.view !== 'SaisieCompta' || this.state.compTab !== 'Achat') return; // vue/onglet quittés pendant l'attente : abandon silencieux
@@ -841,7 +843,10 @@ class Component {
       let invCol = -1; for (let c = 0; c < hdr.length; c++) { const h = this._norm(hdr[c]); if (h.indexOf('facture') >= 0 || h.indexOf('numero') >= 0) { invCol = c; break; } }
       if (invCol < 0) return;
       const fields = this.writeFieldsFor('ventes').filter(x => cfg.cols[x.key] != null && cfg.cols[x.key] >= 0);
-      const loc = await this._locateAppendTarget(buf.slice(0), cfg.sheetName, fields.map(x => cfg.cols[x.key]), cfg.firstDataIdx != null ? cfg.firstDataIdx : (hdrIdx + 1));
+      const venteAnchorKeys = this._anchorFieldsFor('ventes');
+      const venteDateKey = Object.keys(this._dateFieldsFor('ventes')).find(k => venteAnchorKeys.indexOf(k) >= 0 && cfg.cols[k] != null && cfg.cols[k] >= 0);
+      const venteDateColIdx = venteDateKey != null ? cfg.cols[venteDateKey] : -1;
+      const loc = await this._locateAppendTarget(buf.slice(0), cfg.sheetName, fields.map(x => cfg.cols[x.key]), cfg.firstDataIdx != null ? cfg.firstDataIdx : (hdrIdx + 1), venteDateColIdx);
       const row = sh.rows[loc.previewIdx] || [];
       const preNum = String(row[invCol] == null ? '' : row[invCol]).trim();
       if (preNum) { const d = this.state.venteDraft; if (d && !d.editing) this.setState({ venteDraft: { ...d, num: preNum, numFromFile: true, numRow: loc.excelRow } }); }
@@ -898,6 +903,7 @@ class Component {
     const espLbl = lignes.map(l => `${l.espece} ${l.calibre} −${l.poids} kg`).join(' · ');
     const cards = [{ l: '📦 Stock', v: espLbl }, { l: '🏷️ Facture client', v: `${rec.num} — ${client} · TTC ${this.fmt(ttc)} · ${delai === 0 ? 'comptant' : 'délai ' + delai + ' j'} · prévue ${this.dd((datePrev.split('-')[2] || 0))}/${this.dd((datePrev.split('-')[1] || 0))}` }, { l: '💳 Suivi de paiement', v: `Solde à encaisser ${this.fmt(ttc)}` }, { l: '📊 Analytique', v: `Chiffre d'affaires (HT) ${this.fmt(ht)}` }];
     if (grenke) cards.push({ l: '🏦 Grenke', v: `Financé ${this.fmt(grenke.montant)} · restant dû ${this.fmt(grenke.rest)}` });
+    this._appendNextBlankRow('ventes'); // CORRECTION 2 — best-effort, ne bloque jamais la saisie
     this.setState({ venteDraft: this.venteDefault(), compFan: { mode: 'vente', title: `Vente de ${lignes.length} espèce${lignes.length > 1 ? 's' : ''} à ${client}`, cards } });
   }
   // ---------- Enregistrement des paiements Grenke (manuel, structure feuille « Grenke ») ----------
@@ -1052,6 +1058,9 @@ class Component {
       { l: '📦 Stock', v: `${ic(s.stock)} ${s.stock === 'ok' ? 'poids/prix ajoutés' : s.stock === 'na' ? 'non configuré' : s.stock === 'fail' ? 'ÉCHEC' : s.stock}` },
       { l: '🔍 Relecture', v: `${s.pecheur === 'ok' ? '✓ vérifiée' : '—'}` },
     ];
+    // CORRECTION 2 — seulement si l'écriture pêcheur a réussi (et une fois chèque/stock résolus,
+    // pour ne jamais lire/écrire le fichier « operations » en même temps que ces étapes). Best-effort.
+    if (s.pecheur === 'ok') this._appendNextBlankRow('operations');
     this.setState({ compFan: { mode: 'achat', title: anyFail ? `Achat de ${rec.pecheur || ''} — ⚠ une étape a échoué (voir ci-dessous)` : `Achat de ${rec.pecheur || ''} — enregistré, toutes les étapes OK ✓`, cards } });
   }
   // Appelé UNIQUEMENT après une écriture Excel confirmée et vérifiée.
@@ -1135,6 +1144,7 @@ class Component {
     if (i >= 0) arr[i] = rec; else arr.unshift(rec); this.saveFournSaisie(arr);
     const blkLbl = rec.type === 'crustace' ? 'Fournisseurs crustacé' : 'Fournisseurs';
     const cards = [{ l: '📄 Factures à payer', v: `${rec.fournisseur}${rec.num ? ' · ' + rec.num : ''} · ${this.fmt(rec.montant)} — ${blkLbl} (${Component.MONTHS[moisNum]})` }, { l: '💶 Trésorerie', v: `À régler : ${this.fmt(rec.montant)}` }];
+    this._appendNextBlankRow('factures', { month: moisNum, block: rec.type }); // CORRECTION 2 — best-effort
     this.setState({ fournDraft: this.fournDefault(), compFan: { mode: 'fourn', title: `Facture fournisseur — ${rec.fournisseur}`, cards } });
   }
   // Auto-détection des 2 blocs (FOURNISSEURS / FOURNISSEURS CRUSTACE) — PAR MOIS, car la ligne
@@ -1766,7 +1776,7 @@ class Component {
   // vraie écriture métier (au moins une colonne de saisie renseignée). On ne réutilise JAMAIS une
   // ligne vide située au milieu d'anciennes écritures, et on ignore les lignes seulement formatées
   // ou les formules préparées loin sous le tableau. Retourne { previewIdx, excelRow, mode:'patch'|'append' }.
-  async _locateAppendTarget(buf, sheetName, colIdxs, firstDataIdx) {
+  async _locateAppendTarget(buf, sheetName, colIdxs, firstDataIdx, dateColIdx) {
     const files = await this.unzipAll(buf); const dec = new TextDecoder();
     const wbXml = dec.decode(files['xl/workbook.xml'] || new Uint8Array());
     const relsXml = dec.decode(files['xl/_rels/workbook.xml.rels'] || new Uint8Array());
@@ -1790,14 +1800,24 @@ class Component {
         const normAgg = s => this._norm(s);
         const AGG_ROOTS = ['total', 'sous-total', 'sous total', 'somme', 'solde', 'report', 'cumul', 'grand total', 'totaux'];
         const isAgg = v => AGG_ROOTS.some(root => v === root || v.startsWith(root) || v.endsWith(root) || v.includes(root));
-        hasContent = colIdxs.some(ci => {
+        const cellOk = ci => {
           const raw = cellsRaw[ci + 1]; if (!raw) return false;
           if (/<f[\s>/]/.test(raw)) return false; // FILTRE 1 — cellule ancre en formule, ignorée
           if (isAgg(normAgg(cells[ci + 1]))) return false; // FILTRE 2 — libellé agrégat, ignoré (préfixe/inclusion)
           const numVal = parseFloat(String(cells[ci + 1]).replace(',', '.'));
           if (!isNaN(numVal) && numVal <= 1) return false; // FILTRE 3 — date nulle Excel (série ≤ 1, ex. 00/01/1900) ou zéro, ignorée
           return !!cells[ci + 1];
-        }); // au moins une colonne de saisie renseignée (hors formule / libellé agrégat)
+        };
+        // RÈGLE : une ligne pré-imprimée (n° de facture + année seuls) n'est PAS du contenu métier
+        // réel. On exige une date ancre valide (> 1 en série Excel) ET au moins une AUTRE colonne
+        // ancre renseignée (montant ou partenaire) — pas l'une ou l'autre seule.
+        if (dateColIdx != null && dateColIdx >= 0) {
+          const dateOk = cellOk(dateColIdx);
+          const otherOk = colIdxs.some(ci => ci !== dateColIdx && cellOk(ci));
+          hasContent = dateOk && otherOk;
+        } else {
+          hasContent = colIdxs.some(cellOk); // colonne date inconnue de l'appelant : comportement précédent
+        }
       }
       rows.push({ previewIdx: rowIdx, excelRow: rowNum });
       if (hasContent) lastContentIdx = rowIdx;
@@ -1814,6 +1834,60 @@ class Component {
     // Pas de ligne préformatée disponible après → nouvelle ligne en fin de tableau.
     const last = rows[lastContentIdx];
     return { previewIdx: lastContentIdx + 1, excelRow: (last ? last.excelRow : maxRowNum) + 1, mode: 'append' };
+  }
+
+  // CORRECTION 2 : après une écriture réussie, prépare automatiquement la ligne pré-imprimée
+  // SUIVANTE (n° de facture + année, tout le reste vide) — pour que le prochain "n° lu du fichier"
+  // trouve toujours une ligne prête. Best-effort : toute erreur est journalée en silence et
+  // n'affecte jamais la saisie qui vient de réussir (jamais d'exception propagée, jamais de modale).
+  async _appendNextBlankRow(kind, opts) {
+    try {
+      const cfg = this.writeMapFor(kind); if (!cfg || !cfg.enabled) return;
+      let sheetName, colsMap, firstDataIdx = cfg.firstDataIdx || 0;
+      if (kind === 'factures' && (cfg.months || cfg.blocks)) {
+        const m = Math.max(1, Math.min(12, (opts && opts.month) || 1));
+        const block = (opts && opts.block) === 'crustace' ? 'crustace' : 'normal';
+        const mc = cfg.months && cfg.months[m];
+        if (mc) { sheetName = mc.sheetName; colsMap = (mc.blocks[block] || {}).cols || {}; firstDataIdx = mc.firstDataIdx; }
+        else { sheetName = (cfg.monthSheets || [])[m - 1]; colsMap = ((cfg.blocks && cfg.blocks[block]) || {}).cols || {}; firstDataIdx = cfg.firstDataIdx || 0; }
+        if (!sheetName) return;
+      } else {
+        if (!cfg.cols) return;
+        sheetName = cfg.sheetName; colsMap = cfg.cols;
+      }
+      const refCol = colsMap.ref; if (refCol == null || refCol < 0) return;
+      const hi = this._writableHandleFor(kind); if (!hi || !hi.handle) return;
+      const okPerm = await this._ensureWritePermission(hi.handle); if (!okPerm) return;
+      const file = await hi.handle.getFile(); const buf = await file.arrayBuffer();
+      const wb = await this.readWorkbook(buf.slice(0)); const sh = wb.find(s => s.name === sheetName); if (!sh) return;
+      // Dernier numéro du tableau : on scanne toute la colonne référence, on garde le format
+      // (préfixe + zéros de tête) du numéro le plus élevé pour générer le suivant à l'identique.
+      let bestNum = -1, bestRef = '';
+      for (let r = firstDataIdx; r < sh.rows.length; r++) {
+        const v = String((sh.rows[r] || [])[refCol] == null ? '' : (sh.rows[r] || [])[refCol]).trim();
+        const digits = v.match(/\d+/); if (!digits) continue;
+        const n = parseInt(digits[0], 10);
+        if (n > bestNum) { bestNum = n; bestRef = v; }
+      }
+      if (bestNum < 0) return; // aucun numéro exploitable dans le tableau : on n'invente rien
+      const digits = bestRef.match(/\d+/)[0];
+      const nextRef = bestRef.replace(digits, String(bestNum + 1).padStart(digits.length, '0'));
+      const anchorKeys = this._anchorFieldsFor(kind);
+      const dateKeyN = Object.keys(this._dateFieldsFor(kind)).find(k => anchorKeys.indexOf(k) >= 0 && colsMap[k] != null && colsMap[k] >= 0);
+      const dateColIdxN = dateKeyN != null ? colsMap[dateKeyN] : -1;
+      const anchorIdxsN = anchorKeys.map(k => colsMap[k]).filter(ci => ci != null && ci >= 0);
+      const loc = await this._locateAppendTarget(buf.slice(0), sheetName, anchorIdxsN.length ? anchorIdxsN : [refCol], firstDataIdx, dateColIdxN);
+      const colVals = { [refCol]: nextRef };
+      if (colsMap.annee != null && colsMap.annee >= 0) colVals[colsMap.annee] = String(new Date().getFullYear());
+      const bak = await this._backupBeforeWrite(hi.name, buf);
+      if (!bak || !bak.ok) return; // pas de sauvegarde → pas d'écriture, comme pour les écritures normales
+      let patched;
+      if (loc.mode === 'append') patched = await this._appendXlsxRow(buf, sheetName, loc.excelRow, colVals);
+      else { const edits = {}; edits[sheetName] = {}; Object.keys(colVals).forEach(ci => { edits[sheetName][loc.previewIdx + ':' + ci] = colVals[ci]; }); patched = await this.patchXlsxFile(buf, edits, { refuseFormula: true }); }
+      const patchedBuf = await patched.arrayBuffer();
+      const w = await hi.handle.createWritable(); await w.write(patchedBuf); await w.close();
+      try { const wm = this._watched || {}; for (const k of Object.keys(wm)) if (wm[k] && wm[k].handle === hi.handle) wm[k].lastMod = 0; } catch (e) {}
+    } catch (e) { console.error('Ajout de la ligne pré-imprimée suivante impossible (non bloquant) :', e); }
   }
 
   // Insère une nouvelle <row> (cas où il n'y a plus de ligne vide préformatée). Préserve tout le reste.
@@ -1877,7 +1951,9 @@ class Component {
       const anchorKeys = this._anchorFieldsFor(kind);
       let anchorIdxs = fields.filter(f => anchorKeys.indexOf(f.key) >= 0).map(f => colsMap[f.key]);
       if (!anchorIdxs.length) anchorIdxs = colIdxs;
-      const loc = await this._locateAppendTarget(buf, sheetName, anchorIdxs, firstDataIdx);
+      const dateKey2 = Object.keys(dateFields).find(k => anchorKeys.indexOf(k) >= 0 && colsMap[k] != null && colsMap[k] >= 0);
+      const dateColIdx2 = dateKey2 != null ? colsMap[dateKey2] : -1;
+      const loc = await this._locateAppendTarget(buf, sheetName, anchorIdxs, firstDataIdx, dateColIdx2);
       // RÈGLE 4 : revérifier que les en-têtes des colonnes écrites existent encore (structure non bousculée).
       const hdrIdx = Math.max(0, firstDataIdx - 1);
       const wbH = await this.readWorkbook(buf.slice(0)); const shH = wbH.find(s => s.name === sheetName);
