@@ -78,3 +78,12 @@
 - Empaqueter avec Electron pour usage desktop Windows
 - Une seule utilisatrice : Faustine
 - Objectif : double-clic sur icône, zéro terminal
+
+Note architecture : au moment du passage 
+Electron, retirer server.py, l'endpoint 
+/open-file et la contrainte Chrome/Edge. 
+Les remplacer par fs Node (lecture/écriture 
+Excel) et shell.openPath (ouverture Excel). 
+La règle "aucune dépendance externe" 
+s'applique au code métier uniquement, 
+pas au packaging final.
