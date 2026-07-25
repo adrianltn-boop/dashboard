@@ -1893,6 +1893,24 @@ class Component {
     }
   }
   cancelAppendWrite() { const st = this._pendingWrite && this._pendingWrite.step; this._pendingWrite = null; this.setState({ writePreview: null }); if (st && this._achatSteps) { this._achatSteps[st] = 'annulé'; this._maybeFinalizeAchat(); } this._runNextWrite(); }
+  // « Noter plus tard » (modale Fichier ouvert) : mémorise la saisie en attente (métadonnées seulement —
+  // buf/handle non sérialisables ne sont pas stockés) puis abandonne comme un Annuler classique.
+  savePendingWriteLater() {
+    const pw = this._pendingWrite;
+    if (pw) {
+      try {
+        const list = JSON.parse(localStorage.getItem('avPendingWrites') || '[]');
+        const arr = Array.isArray(list) ? list : [];
+        arr.push({ kind: pw.kind, name: pw.name, sheetName: pw.sheetName, excelRow: pw.excelRow, previewIdx: pw.previewIdx, mode: pw.mode, colVals: pw.colVals, refuseFormula: pw.refuseFormula, step: pw.step, ts: Date.now() });
+        localStorage.setItem('avPendingWrites', JSON.stringify(arr));
+      } catch (e) {}
+    }
+    const st = pw && pw.step;
+    this._pendingWrite = null;
+    this.setState({ writePreview: null });
+    if (st && this._achatSteps) { this._achatSteps[st] = 'annulé'; this._maybeFinalizeAchat(); }
+    this._runNextWrite();
+  }
   // File d'attente des écritures enchaînées après une saisie (ex. achat → chèque → stock).
   // Chaque écriture confirmée (ou annulée) déclenche la suivante, avec son propre aperçu.
   _runNextWrite() { const q = this._writeQueue; if (q && q.length) { const fn = q.shift(); setTimeout(() => { try { fn(); } catch (e) {} }, 0); } }
@@ -2317,7 +2335,16 @@ class Component {
     out.pwCardStyle = 'width:760px;max-width:100%;max-height:90vh;overflow:auto;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px';
     out.pwMiniStyle = 'padding:3px 11px;border-radius:7px;font-size:12px;font-weight:600;color:' + accent + ';background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit';
     const wp = this.state.writePreview;
-    out.writePreviewOpen = !!wp;
+    const wpLocked = !!(wp && wp.status === 'error' && wp.locked); // RÈGLE 11 : fichier ouvert dans Excel → modale dédiée
+    out.writePreviewOpen = !!wp && !wpLocked;
+    out.fileLockedOpen = wpLocked;
+    if (wpLocked) {
+      out.flFileName = wp.fileName;
+      out.flMessage = `Le fichier ${wp.fileName} est actuellement ouvert dans un autre programme. Fermez-le puis réessayez.`;
+      out.onFlRetry = () => this.confirmAppendWrite();
+      out.onFlLater = () => this.savePendingWriteLater();
+      out.onFlCancel = () => this.cancelAppendWrite();
+    }
     if (wp) {
       out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
       out.wpSubText = wp.kind === 'stock'
@@ -2330,7 +2357,6 @@ class Component {
       out.wpFileName = wp.fileName; out.wpSheetName = wp.sheetName; out.wpExcelRow = wp.excelRow;
       out.wpRows = (wp.rows || []).map(r => ({ label: r.label, col: r.col, value: r.value }));
       out.wpStatus = wp.status || ''; out.wpError = wp.error || ''; out.wpBusy = wp.status === 'writing';
-      const wpLocked = wp.status === 'error' && wp.locked; // RÈGLE 11 : fichier ouvert dans Excel → Réessayer
       out.wpBtnLabel = wp.status === 'writing' ? 'Écriture…' : (wpLocked ? '↻ Réessayer' : 'Confirmer et écrire');
       out.wpConfirmStyle = wp.status === 'writing'
         ? "padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#8ab89a;border:none;font-family:inherit;cursor:wait"
