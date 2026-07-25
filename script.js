@@ -823,7 +823,10 @@ class Component {
       const idxs = af.length ? af.map(x => cfg.cols[x.key]) : Object.keys(cfg.cols).map(k => cfg.cols[k]);
       const loc = await this._locateAppendTarget(buf.slice(0), cfg.sheetName, idxs, cfg.firstDataIdx != null ? cfg.firstDataIdx : (hdrIdx + 1));
       const row = sh.rows[loc.previewIdx] || []; const preNum = String(row[invCol] == null ? '' : row[invCol]).trim();
-      if (preNum) { const d = this.state.achatDraft; if (d && !d.editing) this.setState({ achatDraft: { ...d, num: preNum, numFromFile: true, numRow: loc.excelRow } }); }
+      if (preNum) {
+        if (this.state.view !== 'SaisieCompta' || this.state.compTab !== 'Achat') return; // vue/onglet quittés pendant l'attente : abandon silencieux
+        const d = this.state.achatDraft; if (d && !d.editing) this.setState({ achatDraft: { ...d, num: preNum, numFromFile: true, numRow: loc.excelRow } });
+      }
     } catch (e) { /* non bloquant */ }
   }
   // RÈGLE 5 : le n° de facture est LU dans le fichier (n° réellement pré-imprimé de la prochaine ligne
@@ -4766,7 +4769,7 @@ class Component {
     // ---- Cockpit (accueil) : saisie rapide + points d'attention du jour ----
     const cockAct = (label, col, patch) => ({ label, onClick: () => this.setState(patch), style: `flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:8px;padding:14px 16px;border-radius:12px;font-size:13.5px;font-weight:600;color:#fff;background:${col};border:none;cursor:pointer;font-family:inherit;box-shadow:0 1px 2px rgba(16,32,54,.08)` });
     const cockpitActions = [
-      cockAct('🎣 Saisir un achat', '#b45309', { view: 'SaisieCompta', compTab: 'Achat', compFan: null }),
+      { label: '🎣 Saisir un achat', onClick: () => { this.setState({ view: 'SaisieCompta' }); this.openCompForm('Achat'); }, style: `flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:8px;padding:14px 16px;border-radius:12px;font-size:13.5px;font-weight:600;color:#fff;background:#b45309;border:none;cursor:pointer;font-family:inherit;box-shadow:0 1px 2px rgba(16,32,54,.08)` },
       cockAct('🏷️ Saisir une vente', accent, { view: 'SaisieCompta', compTab: 'Vente', compFan: null }),
       cockAct('💳 Enregistrer un paiement', '#0f766e', { view: 'Relance' }),
       cockAct('📅 Agenda', '#6d28d9', { view: 'Agenda' }),
@@ -6116,7 +6119,7 @@ class Component {
       return {
         name: (hasMessages && msgUnread) ? `${g.label} 💬 ${msgUnread}` : g.label,
         help: NAVGROUPHELP[g.key] || '',
-        onClick: () => { const first = visItems[0] || g.items[0]; this.setState({ view: first.view, cat: 'Toutes', q: '', page: 0 }); if (first.view === 'Messages') this.markMessagesRead(); },
+        onClick: () => { const first = visItems[0] || g.items[0]; this.setState({ view: first.view, cat: 'Toutes', q: '', page: 0 }); if (first.view === 'Messages') this.markMessagesRead(); if (first.view === 'SaisieCompta') this.openCompForm(this.state.compTab || 'Achat'); },
         tabStyle: active
           ? `display:block;width:100%;text-align:left;padding:9px 12px;border-radius:9px;font-size:13px;font-weight:600;color:${accent};background:${soft};border:none;cursor:pointer;font-family:inherit;white-space:nowrap`
           : 'display:block;width:100%;text-align:left;padding:9px 12px;border-radius:9px;font-size:13px;font-weight:500;color:#4c5b6e;background:transparent;border:none;cursor:pointer;font-family:inherit;white-space:nowrap',
