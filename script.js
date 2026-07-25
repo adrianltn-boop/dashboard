@@ -4154,7 +4154,13 @@ class Component {
       if (!val || !val.handle) continue;
       const mode = (val.role === 'backup' || val.role === 'suivi') ? 'readwrite' : 'read';
       let perm = 'prompt';
-      try { perm = val.handle.queryPermission ? await val.handle.queryPermission({ mode }) : 'granted'; } catch (e) { perm = 'prompt'; }
+      try {
+        perm = val.handle.queryPermission ? await val.handle.queryPermission({ mode }) : 'granted';
+        // Permission expirée (courant après redémarrage du navigateur) : on retente silencieusement
+        // requestPermission() avant d'imposer une reconnexion manuelle — la resélection reste le
+        // dernier recours, réservée aux handles invalides/introuvables (catch ci-dessous).
+        if (perm !== 'granted' && val.handle.requestPermission) perm = await val.handle.requestPermission({ mode });
+      } catch (e) { perm = 'prompt'; }
       if (perm === 'granted') { this._applyRestored(val); granted++; } else need++;
     }
     if (granted) { this.startWatching(); this.pollWatched(); this.refreshFolders(); this.setState({ lastSync: Date.now() }); }
