@@ -2880,6 +2880,23 @@ class Component {
     }
   }
   openUrl(u) { if (!u) return false; let url = String(u).trim(); if (!url) return false; if (!/^(https?:|mailto:|file:)/i.test(url)) url = 'https://' + url; try { window.open(url, '_blank', 'noopener'); return true; } catch (e) { return false; } }
+  // Demande au serveur local (server.py) d'ouvrir un fichier dans son application par défaut
+  // (Excel pour un .xlsx). Ne fonctionne que servi depuis ce serveur local — pas en file://.
+  async openInExcel(path) {
+    try {
+      const res = await fetch('/open-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `échec (HTTP ${res.status})`);
+      return true;
+    } catch (e) {
+      this.setState({ msg: { kind: 'error', text: `Impossible d'ouvrir « ${path} » dans Excel : ${(e && e.message) || 'erreur inconnue'}.` } });
+      return false;
+    }
+  }
   setLink(key, val) { const links = { ...(this.state.links || {}) }; links[key] = val; this.setState({ links }); this.saveJSON(Component.LINKS_KEY, links); }
   setModel(key, val) { const models = { ...(this.state.models || {}) }; models[key] = val; this.setState({ models }); this.saveJSON(Component.MODELS_KEY, models); }
   setObj(key, val) { const obj = { ...(this.state.obj || {}) }; obj[key] = val; this.setState({ obj }); this.saveJSON(Component.OBJ_KEY, obj); }
