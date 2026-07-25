@@ -30,3 +30,46 @@
 ## Gestion des Doublons et Routage
 - Avant toute modification, vérifier et supprimer systématiquement les fonctions en double ou mal routées (notamment entre les vues comme 'piloter' et 'saisie comptable').
 - Garantir que chaque bouton pointe directement vers la bonne fonction dédiée.
+
+## Contraintes Système
+- 100% offline, aucune connexion internet
+- Fichiers Excel en local uniquement
+- Serveur local localhost:8080 pour contourner 
+  les restrictions file:// de Chrome
+- Navigateurs supportés : Chrome et Edge desktop 
+  uniquement (File System Access API requise)
+
+## Fichiers Excel Sources
+- ventes : suivi des paiements clients, 
+  lecture + écriture, toujours feuille 0
+- operations : achats pêcheurs, lecture + écriture,
+  triple écriture (pêcheur + chèque + stock)
+- factures : fournisseurs, lecture + écriture,
+  12 feuilles mensuelles + 2 tableaux côte à côte
+- credits : crédits et assurances, lecture seule
+- bordereaux : livraisons, lecture seule, 
+  dossier surveillé
+- comptable : export comptable, lecture seule,
+  rapprochement uniquement
+- banque : relevé bancaire, lecture seule
+- stock : pipeline dédié, dossier surveillé,
+  un fichier par semaine
+
+## Règles Métier Critiques
+- Numérotation facture : premier numéro non utilisé
+  dans le fichier Excel source, jamais depuis les
+  saisies locales seules
+- Numéro de chèque : incrémenté UNIQUEMENT après
+  succès réel de l'écriture Excel
+- Modification/suppression d'une écriture existante :
+  INTERDITE depuis l'interface, rediriger vers Excel
+- Total mensuel heures théorique : 151.67h
+- Aucune dépendance externe, tout en JS pur
+
+## Bugs Corrigés (ne pas réintroduire)
+- _locateAppendTarget : filtre formules et 
+  libellés agrégat (total/somme/solde/report/cumul)
+- ctxStop : défini dans renderVals(), 
+  était manquant et cassait toutes les modales
+- Bascule HT/TTC : suit amountMode correctement
+- Numérotation : intègre les numéros du fichier Excel
