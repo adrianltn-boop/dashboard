@@ -216,7 +216,7 @@ class Component {
     filePreview: null, hiddenOps: {}, grenkeHidden: {}, trashAsk: null, tblStatusF: {},
     banque: null, banqueName: null, bankLinks: {}, bankHidden: {}, bankLink: null, bankLinkQuery: '', bankQ: '', bankFilter: 'Toutes',
     bankCats: {}, bankCatRules: {}, bankCatList: null, bankCatAsk: null, bankCatAskValue: '', bankCatPick: null,
-    heures: {}, heuresMois: {}, hRoster: [], hFocus: null, hMode: 'semaine', hRange: null, hCollapse: {}, hDelAsk: null, hNuit: false,
+    heures: {}, heuresMois: {}, filePaths: {}, hRoster: [], hFocus: null, hMode: 'semaine', hRange: null, hCollapse: {}, hDelAsk: null, hNuit: false,
     empDocs: {}, empDelDoc: null, bankSalaryEmp: '', bankSalaryMonth: '',
     agenda: [], agendaMonth: null, agendaEdit: null, agendaDelAsk: null,
     payTrack: [], payDraft: null, payDelAsk: null,
@@ -243,6 +243,7 @@ class Component {
   static OPS_KEY = 'avOps';
   static HEURES_KEY = 'avHeures';
   static HMOIS_KEY = 'avHeuresMois';
+  static FILEPATHS_KEY = 'avFilePaths';
   static EMPDOCS_KEY = 'avEmpDocs';
   static AGENDA_KEY = 'avAgenda';
   static PAYTRACK_KEY = 'avPayTrack';
@@ -636,6 +637,7 @@ class Component {
     } catch (e) {}
     try { const ed = JSON.parse(localStorage.getItem(Component.EMPDOCS_KEY) || 'null'); if (ed && typeof ed === 'object' && !Array.isArray(ed)) this.setState({ empDocs: ed }); } catch (e) {}
     try { const hm = JSON.parse(localStorage.getItem(Component.HMOIS_KEY) || 'null'); if (hm && typeof hm === 'object' && !Array.isArray(hm)) this.setState({ heuresMois: hm }); } catch (e) {}
+    try { const fp = JSON.parse(localStorage.getItem(Component.FILEPATHS_KEY) || 'null'); if (fp && typeof fp === 'object' && !Array.isArray(fp)) this.setState({ filePaths: fp }); } catch (e) {}
     try { const ag = JSON.parse(localStorage.getItem(Component.AGENDA_KEY) || 'null'); if (Array.isArray(ag)) this.setState({ agenda: ag }); } catch (e) {}
     try { const pt = JSON.parse(localStorage.getItem(Component.PAYTRACK_KEY) || 'null'); if (Array.isArray(pt)) this.setState({ payTrack: pt }); } catch (e) {}
     try { const vs = JSON.parse(localStorage.getItem(Component.VSAISIE_KEY) || 'null'); if (Array.isArray(vs)) this.setState({ ventesSaisie: vs }); } catch (e) {}
@@ -2896,6 +2898,20 @@ class Component {
       this.setState({ msg: { kind: 'error', text: `Impossible d'ouvrir « ${path} » dans Excel : ${(e && e.message) || 'erreur inconnue'}.` } });
       return false;
     }
+  }
+  saveFilePaths(m) { this.setState({ filePaths: m }); this.saveJSON(Component.FILEPATHS_KEY, m); }
+  // Bouton « Ouvrir dans Excel » (Paramètres) : la File System Access API ne donne jamais le
+  // chemin absolu d'un fichier (par sécurité navigateur) — on le demande une fois et on le
+  // mémorise par source, pour les prochains clics.
+  openSourceInExcel(kind, label) {
+    const paths = this.state.filePaths || {};
+    let path = paths[kind];
+    if (!path) {
+      path = (window.prompt(`Chemin complet du fichier « ${label} » sur cet ordinateur :`, '') || '').trim();
+      if (!path) return;
+      this.saveFilePaths({ ...paths, [kind]: path });
+    }
+    this.openInExcel(path);
   }
   setLink(key, val) { const links = { ...(this.state.links || {}) }; links[key] = val; this.setState({ links }); this.saveJSON(Component.LINKS_KEY, links); }
   setModel(key, val) { const models = { ...(this.state.models || {}) }; models[key] = val; this.setState({ models }); this.saveJSON(Component.MODELS_KEY, models); }
@@ -5765,7 +5781,8 @@ class Component {
     const impBtn = `padding:7px 13px;border-radius:8px;font-size:12px;font-weight:600;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit`;
     const ghost = `padding:7px 13px;border-radius:8px;font-size:12px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.3)};cursor:pointer;font-family:inherit`;
     const openStyle = `padding:7px 11px;border-radius:8px;font-size:13px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.3)};cursor:pointer;font-family:inherit;flex-shrink:0`;
-    const mkSrc = (key, name, desc, columns, connected, cname) => ({ name, desc, columns, connected, ...srcStatus(connected, cname), importStyle: impBtn, ghostStyle: ghost, openStyle, remapStyle: ghost, canRemap: connected && !['stock', 'bordereaux', 'transport', 'livraison'].includes(key), onRemap: () => this.reopenMapping(key), importLabel: key === 'stock' ? '📁 Choisir le dossier Stock' : key === 'bordereaux' ? '📁 Choisir le dossier Bordereaux' : 'Importer le fichier', onImport: () => this.importFile(key), onReset: () => this.resetSource(key), linkValue: (this.state.links || {})[key] || '', onLinkChange: e => this.setLink(key, e.target.value), onOpen: () => { const l = (this.state.links || {})[key]; if (l) this.openUrl(l); else this.setState({ msg: { kind: 'error', text: `Renseignez d'abord le lien du fichier « ${name} » ci-dessus.` } }); }, menuOpen: !!(this.state.srcMenuOpen || {})[key], onMenu: () => this.setState({ srcMenuOpen: { ...(this.state.srcMenuOpen || {}), [key]: !(this.state.srcMenuOpen || {})[key] } }), moreLabel: (this.state.srcMenuOpen || {})[key] ? '▴ Fermer' : '⋯ Réglages', ...(this.writeableKinds().indexOf(key) >= 0 ? this._srcWriteProps(key) : { canWrite: false }) });
+    const EXCEL_OPEN_KINDS = ['ventes', 'operations', 'factures', 'credits', 'comptable', 'banque'];
+    const mkSrc = (key, name, desc, columns, connected, cname) => ({ name, desc, columns, connected, ...srcStatus(connected, cname), importStyle: impBtn, ghostStyle: ghost, openStyle, remapStyle: ghost, canRemap: connected && !['stock', 'bordereaux', 'transport', 'livraison'].includes(key), onRemap: () => this.reopenMapping(key), importLabel: key === 'stock' ? '📁 Choisir le dossier Stock' : key === 'bordereaux' ? '📁 Choisir le dossier Bordereaux' : 'Importer le fichier', onImport: () => this.importFile(key), onReset: () => this.resetSource(key), linkValue: (this.state.links || {})[key] || '', onLinkChange: e => this.setLink(key, e.target.value), onOpen: () => { const l = (this.state.links || {})[key]; if (l) this.openUrl(l); else this.setState({ msg: { kind: 'error', text: `Renseignez d'abord le lien du fichier « ${name} » ci-dessus.` } }); }, canOpenExcel: connected && EXCEL_OPEN_KINDS.includes(key), onOpenExcel: () => this.openSourceInExcel(key, name), menuOpen: !!(this.state.srcMenuOpen || {})[key], onMenu: () => this.setState({ srcMenuOpen: { ...(this.state.srcMenuOpen || {}), [key]: !(this.state.srcMenuOpen || {})[key] } }), moreLabel: (this.state.srcMenuOpen || {})[key] ? '▴ Fermer' : '⋯ Réglages', ...(this.writeableKinds().indexOf(key) >= 0 ? this._srcWriteProps(key) : { canWrite: false }) });
     const mkModel = (key, label) => ({
       hasModel: true, modelLabel: label,
       modelValue: (this.state.models || {})[key] || '',

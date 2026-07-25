@@ -1910,6 +1910,9 @@
                   <div style="display:flex;gap:6px;align-items:center">
                     <input style="{{ inputStyle }}" placeholder="Lien du fichier (OneDrive, Drive, réseau…)" value="{{ s.linkValue }}" onchange="{{ s.onLinkChange }}">
                     <button style="{{ s.openStyle }}" onclick="{{ s.onOpen }}" title="Ouvrir le fichier">↗</button>
+                    <sc-if value="{{ s.canOpenExcel }}" hint-placeholder-val="{{ false }}">
+                      <button style="{{ s.openStyle }}" onclick="{{ s.onOpenExcel }}" title="Ouvrir le fichier local dans Excel">📗 Ouvrir dans Excel</button>
+                    </sc-if>
                   </div>
                   <sc-if value="{{ s.hasModel }}" hint-placeholder-val="{{ false }}">
                     <div style="display:flex;gap:6px;align-items:center">
