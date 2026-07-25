@@ -4770,7 +4770,7 @@ class Component {
     const cockAct = (label, col, patch) => ({ label, onClick: () => this.setState(patch), style: `flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:8px;padding:14px 16px;border-radius:12px;font-size:13.5px;font-weight:600;color:#fff;background:${col};border:none;cursor:pointer;font-family:inherit;box-shadow:0 1px 2px rgba(16,32,54,.08)` });
     const cockpitActions = [
       { label: '🎣 Saisir un achat', onClick: () => { this.setState({ view: 'SaisieCompta' }); this.openCompForm('Achat'); }, style: `flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:8px;padding:14px 16px;border-radius:12px;font-size:13.5px;font-weight:600;color:#fff;background:#b45309;border:none;cursor:pointer;font-family:inherit;box-shadow:0 1px 2px rgba(16,32,54,.08)` },
-      cockAct('🏷️ Saisir une vente', accent, { view: 'SaisieCompta', compTab: 'Vente', compFan: null }),
+      { label: '🏷️ Saisir une vente', onClick: () => { this.setState({ view: 'SaisieCompta' }); this.openCompForm('Vente'); }, style: `flex:1;min-width:150px;display:flex;align-items:center;justify-content:center;gap:8px;padding:14px 16px;border-radius:12px;font-size:13.5px;font-weight:600;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit;box-shadow:0 1px 2px rgba(16,32,54,.08)` },
       cockAct('💳 Enregistrer un paiement', '#0f766e', { view: 'Relance' }),
       cockAct('📅 Agenda', '#6d28d9', { view: 'Agenda' }),
     ];
