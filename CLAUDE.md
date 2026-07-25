@@ -73,3 +73,8 @@
   était manquant et cassait toutes les modales
 - Bascule HT/TTC : suit amountMode correctement
 - Numérotation : intègre les numéros du fichier Excel
+
+## Déploiement final (à faire en dernier)
+- Empaqueter avec Electron pour usage desktop Windows
+- Une seule utilisatrice : Faustine
+- Objectif : double-clic sur icône, zéro terminal
