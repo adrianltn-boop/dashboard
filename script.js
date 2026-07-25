@@ -216,7 +216,7 @@ class Component {
     filePreview: null, hiddenOps: {}, grenkeHidden: {}, trashAsk: null, tblStatusF: {},
     banque: null, banqueName: null, bankLinks: {}, bankHidden: {}, bankLink: null, bankLinkQuery: '', bankQ: '', bankFilter: 'Toutes',
     bankCats: {}, bankCatRules: {}, bankCatList: null, bankCatAsk: null, bankCatAskValue: '', bankCatPick: null,
-    heures: {}, hRoster: [], hFocus: null, hMode: 'semaine', hRange: null, hCollapse: {}, hDelAsk: null, hNuit: false,
+    heures: {}, heuresMois: {}, hRoster: [], hFocus: null, hMode: 'semaine', hRange: null, hCollapse: {}, hDelAsk: null, hNuit: false,
     empDocs: {}, empDelDoc: null, bankSalaryEmp: '', bankSalaryMonth: '',
     agenda: [], agendaMonth: null, agendaEdit: null, agendaDelAsk: null,
     payTrack: [], payDraft: null, payDelAsk: null,
@@ -242,6 +242,7 @@ class Component {
 
   static OPS_KEY = 'avOps';
   static HEURES_KEY = 'avHeures';
+  static HMOIS_KEY = 'avHeuresMois';
   static EMPDOCS_KEY = 'avEmpDocs';
   static AGENDA_KEY = 'avAgenda';
   static PAYTRACK_KEY = 'avPayTrack';
@@ -634,6 +635,7 @@ class Component {
       this.saveJSON(Component.HEURES_KEY, { weeks, roster });
     } catch (e) {}
     try { const ed = JSON.parse(localStorage.getItem(Component.EMPDOCS_KEY) || 'null'); if (ed && typeof ed === 'object' && !Array.isArray(ed)) this.setState({ empDocs: ed }); } catch (e) {}
+    try { const hm = JSON.parse(localStorage.getItem(Component.HMOIS_KEY) || 'null'); if (hm && typeof hm === 'object' && !Array.isArray(hm)) this.setState({ heuresMois: hm }); } catch (e) {}
     try { const ag = JSON.parse(localStorage.getItem(Component.AGENDA_KEY) || 'null'); if (Array.isArray(ag)) this.setState({ agenda: ag }); } catch (e) {}
     try { const pt = JSON.parse(localStorage.getItem(Component.PAYTRACK_KEY) || 'null'); if (Array.isArray(pt)) this.setState({ payTrack: pt }); } catch (e) {}
     try { const vs = JSON.parse(localStorage.getItem(Component.VSAISIE_KEY) || 'null'); if (Array.isArray(vs)) this.setState({ ventesSaisie: vs }); } catch (e) {}
@@ -1175,6 +1177,9 @@ class Component {
   hParse(iso) { const p = String(iso).split('-').map(Number); return new Date(p[0], (p[1] || 1) - 1, p[2] || 1); }
   hFocusKey() { return this.state.hFocus || this.hISO(this.hMonday(new Date())); }
   hSaveHeures(weeks, roster) { this.saveJSON(Component.HEURES_KEY, { weeks: weeks || this.state.heures, roster: roster || this.state.hRoster }); }
+  hMoisKey(name, mo) { return String(name || '').trim() + '|' + mo; }
+  hMoisRow(name, mo) { const m = this.state.heuresMois || {}; return m[this.hMoisKey(name, mo)] || {}; }
+  hSetMois(name, mo, field, val) { const key = this.hMoisKey(name, mo); const m = { ...(this.state.heuresMois || {}) }; m[key] = { ...(m[key] || {}), [field]: val }; this.setState({ heuresMois: m }); this.saveJSON(Component.HMOIS_KEY, m); }
   hEmpsFromRoster() { const r = (this.state.hRoster && this.state.hRoster.length) ? this.state.hRoster : ['Employé 1']; return r.map((n, i) => ({ id: this.hNewId(i), name: n, days: {} })); }
   hWeekObj(weeks, key) { return weeks[key] ? { ...weeks[key], employees: (weeks[key].employees || []).slice() } : { employees: this.hEmpsFromRoster() }; }
   hGoWeek(deltaOrKey) {
@@ -6536,6 +6541,39 @@ class Component {
     let hMonthTot = 0;
     Object.keys(hStore).forEach(k => { const wk = hStore[k]; hWeekDates(k).forEach(iso => { const dt = this.hParse(iso); if (dt.getMonth() === hMonthI && dt.getFullYear() === hYearI) (wk.employees || []).forEach(e => { hMonthTot += hDayTot((e.days || {})[iso]); }); }); });
 
+    // Fiche mensuelle par personne : théorique 151,67h (35h × 52 / 12), réel recalculé par nom
+    // (l'id d'employé n'est pas stable d'une semaine à l'autre — seul le nom l'est).
+    const H_THEORIQUE_MENSUEL = 151.67;
+    const hDecH = h => (Math.round((h || 0) * 100) / 100).toFixed(2) + 'h';
+    const hMonthKeyStr = hYearI + '-' + this.dd(hMonthI + 1);
+    const hEmpHoursMap = this.empHoursByMonth();
+    const hMoisCardStyle = 'background:#fff;border:1px solid #e9edf4;border-radius:12px;box-shadow:0 1px 2px rgba(16,32,54,.04);padding:14px 16px';
+    const hMoisInputStyle = 'width:120px;box-sizing:border-box;padding:7px 9px;border:1px solid #e4e9f1;border-radius:8px;font-size:13px;font-family:\'IBM Plex Mono\',monospace;color:#0e1b2e;background:#fff';
+    const hRosterNames = (this.state.hRoster || []).filter((n, i, a) => n && a.indexOf(n) === i);
+    const hMonthlyCards = hRosterNames.map(name => {
+      const nm = String(name).trim();
+      const reel = hEmpHoursMap[nm + '|' + hMonthKeyStr] || 0;
+      const diff = Math.round((reel - H_THEORIQUE_MENSUEL) * 100) / 100;
+      const positive = diff >= 0;
+      const mois = this.hMoisRow(nm, hMonthKeyStr);
+      return {
+        name: nm,
+        theoriqueLabel: hDecH(H_THEORIQUE_MENSUEL),
+        reelLabel: hDecH(reel),
+        diffLabel: (positive ? '+' : '') + hDecH(diff),
+        badgeLabel: positive ? 'Heures supplémentaires' : 'Heures à rattraper',
+        badgeStyle: positive
+          ? 'padding:5px 12px;border-radius:20px;font-size:11.5px;font-weight:600;color:#166534;background:#e7f5ec;border:1px solid #bfe3cc;white-space:nowrap'
+          : 'padding:5px 12px;border-radius:20px;font-size:11.5px;font-weight:600;color:#b45309;background:#fff4e5;border:1px solid #f0dcae;white-space:nowrap',
+        paniersValue: mois.paniers == null ? '' : String(mois.paniers),
+        onPaniers: e => this.hSetMois(nm, hMonthKeyStr, 'paniers', e.target.value),
+        avantagesValue: mois.avantages == null ? '' : String(mois.avantages),
+        onAvantages: e => this.hSetMois(nm, hMonthKeyStr, 'avantages', e.target.value),
+        hsPayeesValue: mois.hsPayees == null ? '' : String(mois.hsPayees),
+        onHsPayees: e => this.hSetMois(nm, hMonthKeyStr, 'hsPayees', e.target.value),
+      };
+    });
+
     const hEmpCardStyle = 'background:#fff;border:1px solid #e9edf4;border-radius:12px;box-shadow:0 1px 2px rgba(16,32,54,.04);overflow:hidden';
     const hChevStyle = 'width:26px;height:26px;flex-shrink:0;border:none;background:transparent;color:#8291a5;font-size:11px;cursor:pointer;font-family:inherit;border-radius:7px';
     const hNameStyle = 'font-size:14px;font-weight:600;color:#0e1b2e;border:1px solid #eef1f6;border-radius:8px;padding:6px 10px;font-family:inherit;background:#fff;min-width:150px;max-width:280px;flex:0 1 auto';
@@ -6823,6 +6861,7 @@ class Component {
       importOpen, importTitle, importFileName, importSheets, importSheetValue, onImportSheet, importHeaderOptions, importHeaderValue, onImportHeader, importFieldRows, importNote, importCombine, importCombineable, onImportCombine, importPreviewHead, importPreviewRows, importCount, importReady, importZeroWarn, onImportConfirm, onImportCancel, importSelStyle, importOverlayStyle, importCardStyle, importConfirmStyle, importCancelStyle,
       isHeures, hMode, hIsSemaine, hIsArchives, hModeTabs, hNavLabel, onHPrev, onHNext, hNavBtnStyle, onHToday, hTodayStyle,
       hWeekTotalLabel, hMonthTotalLabel, hMonthName, hStatCardStyle, hStatLabelStyle, hStatValStyle, onPrintHeures, printHeuresBtnStyle, hPrintOpen, hPrintItems, onHPrintCancel,
+      hMonthlyCards, hMoisCardStyle, hMoisInputStyle,
       hPrintChooseEmployee, hPrintChoosePeriod, hPrintEmployeeName, hPrintWeekLabel, hPrintMonthLabel, onHPrintWeek, onHPrintMonth, onHPrintBack, hPrintPeriodStyle, hPrintBackStyle,
       hEmployees, hEmpty, onHAddEmp, hAddStyle, hEmpCardStyle, hChevStyle, hNameStyle, hCellStyle, hTotCellStyle, hDelStyle, hEmpTotStyle, hGridHeadStyle, hLegendStyle, hEmptyStyle,
       arFrom, arTo, onArFrom, onArTo, arMonthValue, arYearValue, arMonthOptions, arYearOptions, onArMonth, onArYear, hDateStyle, arRows, arEmpty, arPeriodLabel, arCountLabel, hArHeadStyle, hArLineStyle, hArChevStyle, hEditStyle,

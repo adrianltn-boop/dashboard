@@ -1452,6 +1452,35 @@
         </div>
 
         <sc-if value="{{ hIsSemaine }}" hint-placeholder-val="{{ true }}">
+          <div style="margin-bottom:16px">
+            <div style="font-size:13px;font-weight:600;color:#0e1b2e;margin-bottom:8px">Fiche mensuelle — {{ hMonthName }}</div>
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <sc-for list="{{ hMonthlyCards }}" as="mc" hint-placeholder-count="1">
+                <div style="{{ hMoisCardStyle }}">
+                  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                    <span style="font-size:13.5px;font-weight:600;color:#0e1b2e;min-width:150px">{{ mc.name }}</span>
+                    <span style="font-size:12.5px;color:#69788c">Théorique <b style="color:#0e1b2e">{{ mc.theoriqueLabel }}</b></span>
+                    <span style="font-size:12.5px;color:#69788c">Réel <b style="color:#0e1b2e">{{ mc.reelLabel }}</b></span>
+                    <span style="{{ mc.badgeStyle }}">{{ mc.badgeLabel }} ({{ mc.diffLabel }})</span>
+                  </div>
+                  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
+                    <label style="display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:#69788c">Paniers repas
+                      <input style="{{ hMoisInputStyle }}" inputmode="numeric" value="{{ mc.paniersValue }}" oninput="{{ mc.onPaniers }}">
+                    </label>
+                    <label style="display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:#69788c">Avantages en nature (€)
+                      <input style="{{ hMoisInputStyle }}" inputmode="decimal" value="{{ mc.avantagesValue }}" oninput="{{ mc.onAvantages }}">
+                    </label>
+                    <label style="display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:#69788c">Heures sup. à payer
+                      <input style="{{ hMoisInputStyle }}" inputmode="decimal" value="{{ mc.hsPayeesValue }}" oninput="{{ mc.onHsPayees }}">
+                    </label>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ hIsSemaine }}" hint-placeholder-val="{{ true }}">
           <div>
             <div style="{{ hLegendStyle }}">Mode agenda : saisissez l'<strong>heure d'arrivée</strong>, l'<strong>heure de départ</strong> et la <strong>pause</strong> (ex. <strong>45</strong> pour 45 min, ou <strong>1h30</strong>). Total du jour = départ − arrivée − pause, calculé automatiquement.</div>
             <div style="display:flex;flex-direction:column;gap:12px">
