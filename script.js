@@ -3344,7 +3344,7 @@ class Component {
     let file = null, handle = null;
     if (window.showOpenFilePicker) {
       try { const [h] = await window.showOpenFilePicker({ types: [{ description: 'Excel', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx', '.xlsm'] } }] }); handle = h; file = await h.getFile(); }
-      catch (e) { if (e && e.name === 'AbortError') return { aborted: true }; }
+      catch (e) { console.error('showOpenFilePicker erreur:', e); if (e && e.name === 'AbortError') return { aborted: true }; }
     }
     if (!file) file = await new Promise(res => { const inp = document.createElement('input'); inp.type = 'file'; inp.accept = accept || '.xlsx,.xlsm'; inp.onchange = () => res(inp.files && inp.files[0]); inp.click(); });
     return { file, handle };
