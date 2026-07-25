@@ -798,7 +798,7 @@ class Component {
   saveGrenkeMan(arr) { this.setState({ grenkeMan: arr }); this.saveJSON(Component.GRKMAN_KEY, arr); }
   _vNum(v) { const n = parseFloat(String(v == null ? '' : v).replace(',', '.').replace(/[^\d.-]/g, '')); return isFinite(n) ? n : 0; }
   _addDaysIso(iso, days) { if (!iso) return ''; const p = String(iso).split('-').map(Number); const d = new Date(p[0], (p[1] || 1) - 1, p[2] || 1); d.setDate(d.getDate() + (+days || 0)); return d.getFullYear() + '-' + this.dd(d.getMonth() + 1) + '-' + this.dd(d.getDate()); }
-  _venteNextId() { const ids = [...this.venteSaisieRows().map(r => +r.id || 0), ...this.payTrackRows().map(r => +r.id || 0)]; return (ids.length ? Math.max(...ids) : 141) + 1; }
+  _venteNextId() { const fromFile = (this.state.ventes || []).map(r => +String(r.ref || '').replace(/\D/g, '') || 0); const ids = [...fromFile, ...this.venteSaisieRows().map(r => +r.id || 0), ...this.payTrackRows().map(r => +r.id || 0)]; return (ids.length ? Math.max(...ids) : 0) + 1; }
   compEmptyLigne() { const e = Object.keys(Component.ESP)[0]; return { espece: e, calibre: (Component.ESP[e] || ['Standard'])[0], poids: '', prixKg: '' }; }
   openCompForm(mode) { this.setState({ compTab: mode, compFan: null }); if (mode === 'Achat') { this.resetAchatDraft(); this.refreshAchatInvoiceNumber(); } else if (mode === 'Fournisseur') this.resetFournDraft(); else { this.resetVenteDraft(); this.refreshVenteInvoiceNumber(); } }
   // RÈGLE 5 (achat pêcheur) : lit le n° de facture pré-imprimé de la prochaine ligne à remplir
@@ -999,7 +999,7 @@ class Component {
   saveAchatSaisie(arr) { this.setState({ achatsSaisie: arr }); this.saveJSON(Component.ACHSAISIE_KEY, arr); }
   chequierRows() { return Array.isArray(this.state.chequiers) ? this.state.chequiers : []; }
   saveChequiers(arr) { this.setState({ chequiers: arr }); this.saveJSON(Component.CHEQ_KEY, arr); }
-  _achatNextId() { const ids = this.achatSaisieRows().map(r => +r.id || 0); return (ids.length ? Math.max(...ids) : 0) + 1; }
+  _achatNextId() { const fromFile = (this.state.ops || []).map(r => +String(r.ref || '').replace(/\D/g, '') || 0); const ids = [...fromFile, ...this.achatSaisieRows().map(r => +r.id || 0)]; return (ids.length ? Math.max(...ids) : 0) + 1; }
   achatDefault() { return { id: this._achatNextId(), num: '', pecheur: '', date: this._payTodayIso(), lignes: [this.compEmptyLigne()], paiement: 'virement', chequier: '', chequeNum: '', editing: false }; }
   setAchatField(k, v) { const d = this.state.achatDraft || this.achatDefault(); const patch = { ...d, [k]: v }; if (k === 'paiement' && v === 'cheque') { const first = this.chequierRows()[0]; if (first && !patch.chequier) { patch.chequier = first.nom; patch.chequeNum = String(first.next || ''); } } if (k === 'chequier') { const cq = this.chequierRows().find(c => c.nom === v); if (cq) patch.chequeNum = String(cq.next || ''); } this.setState({ achatDraft: patch }); }
   setAchatLigne(i, k, v) { const d = this.state.achatDraft || this.achatDefault(); const lignes = (d.lignes || []).map((l, j) => { if (j !== i) return l; const nl = { ...l, [k]: v }; if (k === 'espece') nl.calibre = (Component.ESP[v] || ['Standard'])[0]; return nl; }); this.setState({ achatDraft: { ...d, lignes } }); }
@@ -1770,9 +1770,16 @@ class Component {
       maxRowNum = Math.max(maxRowNum, rowNum);
       let hasContent = false;
       if (rowIdx >= firstDataIdx) {
-        const cells = {}; const cr = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g; let cm;
-        while (cm = cr.exec(rm[0])) { const refM = cm[1].match(/\br="([A-Z]+)\d+"/); if (!refM) continue; const body = cm[2] || ''; const vm = body.match(/<v>([\s\S]*?)<\/v>/); const im = body.match(/<t[^>]*>([\s\S]*?)<\/t>/); cells[coln(refM[1])] = (im ? im[1] : (vm ? vm[1] : '')).trim(); }
-        hasContent = colIdxs.some(ci => cells[ci + 1]); // au moins une colonne de saisie renseignée
+        const cells = {}; const cellsRaw = {}; const cr = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g; let cm;
+        while (cm = cr.exec(rm[0])) { const refM = cm[1].match(/\br="([A-Z]+)\d+"/); if (!refM) continue; const body = cm[2] || ''; const vm = body.match(/<v>([\s\S]*?)<\/v>/); const im = body.match(/<t[^>]*>([\s\S]*?)<\/t>/); const ci = coln(refM[1]); cells[ci] = (im ? im[1] : (vm ? vm[1] : '')).trim(); cellsRaw[ci] = cm[0]; }
+        const normAgg = s => this._norm(s);
+        const AGG_LABELS = ['total', 'sous-total', 'somme', 'solde', 'report', 'cumul'];
+        hasContent = colIdxs.some(ci => {
+          const raw = cellsRaw[ci + 1]; if (!raw) return false;
+          if (/<f[\s>/]/.test(raw)) return false; // FILTRE 1 — cellule ancre en formule, ignorée
+          if (AGG_LABELS.includes(normAgg(cells[ci + 1]))) return false; // FILTRE 2 — libellé agrégat, ignoré
+          return !!cells[ci + 1];
+        }); // au moins une colonne de saisie renseignée (hors formule / libellé agrégat)
       }
       rows.push({ previewIdx: rowIdx, excelRow: rowNum });
       if (hasContent) lastContentIdx = rowIdx;
@@ -4531,6 +4538,10 @@ class Component {
       const vRows = inPeriod.filter(r => r.type === 'Vente');
       const caHT = vRows.reduce((s, r) => s + (r.ht != null ? r.ht : r.amt), 0);
       const caHTp = inPrev.filter(r => r.type === 'Vente').reduce((s, r) => s + (r.ht != null ? r.ht : r.amt), 0);
+      const caTTC = vRows.reduce((s, r) => s + r.amt, 0);
+      const caTTCp = inPrev.filter(r => r.type === 'Vente').reduce((s, r) => s + r.amt, 0);
+      const caDisp = amountMode === 'HT' ? caHT : caTTC;
+      const caDispP = amountMode === 'HT' ? caHTp : caTTCp;
       const gRecvOf = g => (g.recv != null && g.recv !== 0) ? g.recv : ((g.p1 || 0) + (g.p2 || 0));
       const gRemOf = g => (g.rem != null ? g.rem : Math.round(((g.ttc || 0) - (g.p1 || 0) - (g.p2 || 0) - (g.charge || 0)) * 100) / 100);
       // « À percevoir » = Total TTC − paiements − charges, TOUJOURS recalculé (jamais la colonne
@@ -4549,7 +4560,7 @@ class Component {
       const kpiGrenke = kpi('À recevoir Grenke', this.fmt(gRecevoir), gRecevoir, 0, false);
       kpiGrenke.note = 'non soldé total : ' + this.fmt(gRecevoirTotal);
       kpis = [
-        kpi("Chiffre d'affaires (HT)", this.fmt(caHT), caHT, caHTp, true),
+        kpi(`Chiffre d'affaires (${amountMode})`, this.fmt(caDisp), caDisp, caDispP, true),
         kpi('Total payé (avec Grenke)', this.fmt(paidHors + gRecv), paidHors + gRecv, 0, true),
         kpi('À recevoir (hors Grenke)', this.fmt(recevHors), recevHors, 0, false),
         kpiGrenke,
@@ -6700,10 +6711,12 @@ class Component {
     const prefixCancelStyle = 'padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#69788c;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit';
     const prefixOverlayStyle = 'position:fixed;inset:0;z-index:72;background:rgba(14,27,46,.42);display:flex;align-items:center;justify-content:center;padding:24px';
     const prefixCardStyle = 'width:460px;max-width:100%;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px';
+    const ctxStop = e => { if (e) e.stopPropagation(); };
     const pwv = this._pwRenderVals();
 
     return {
       ...pwv,
+      ctxStop,
       isDash, isOverview, isFactures, isCredits, isBordereaux, isStock, isVehicles, isTiers, isSettings, isBibliotheque, isEmployes, isAgenda,
       empCards, empEmpty, empGrandHours, empGrandSalaire, empAddNote, empDelDocOpen, empDelDocName, onEmpDelDocConfirm, onEmpDelDocCancel, accentColor: accent,
       agWeeks, agMonthLabel, agUpcoming, agEmptyUpcoming, agTodayCount, agSoonHome, agHasAny, agHomeReminderStyle, agLegend,
