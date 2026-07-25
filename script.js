@@ -1791,6 +1791,8 @@ class Component {
           const raw = cellsRaw[ci + 1]; if (!raw) return false;
           if (/<f[\s>/]/.test(raw)) return false; // FILTRE 1 — cellule ancre en formule, ignorée
           if (isAgg(normAgg(cells[ci + 1]))) return false; // FILTRE 2 — libellé agrégat, ignoré (préfixe/inclusion)
+          const numVal = parseFloat(String(cells[ci + 1]).replace(',', '.'));
+          if (!isNaN(numVal) && numVal <= 1) return false; // FILTRE 3 — date nulle Excel (série ≤ 1, ex. 00/01/1900) ou zéro, ignorée
           return !!cells[ci + 1];
         }); // au moins une colonne de saisie renseignée (hors formule / libellé agrégat)
       }
