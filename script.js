@@ -1785,11 +1785,12 @@ class Component {
         const cells = {}; const cellsRaw = {}; const cr = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g; let cm;
         while (cm = cr.exec(rm[0])) { const refM = cm[1].match(/\br="([A-Z]+)\d+"/); if (!refM) continue; const body = cm[2] || ''; const vm = body.match(/<v>([\s\S]*?)<\/v>/); const im = body.match(/<t[^>]*>([\s\S]*?)<\/t>/); const ci = coln(refM[1]); cells[ci] = (im ? im[1] : (vm ? vm[1] : '')).trim(); cellsRaw[ci] = cm[0]; }
         const normAgg = s => this._norm(s);
-        const AGG_LABELS = ['total', 'sous-total', 'somme', 'solde', 'report', 'cumul'];
+        const AGG_ROOTS = ['total', 'sous-total', 'sous total', 'somme', 'solde', 'report', 'cumul', 'grand total', 'totaux'];
+        const isAgg = v => AGG_ROOTS.some(root => v === root || v.startsWith(root) || v.endsWith(root) || v.includes(root));
         hasContent = colIdxs.some(ci => {
           const raw = cellsRaw[ci + 1]; if (!raw) return false;
           if (/<f[\s>/]/.test(raw)) return false; // FILTRE 1 — cellule ancre en formule, ignorée
-          if (AGG_LABELS.includes(normAgg(cells[ci + 1]))) return false; // FILTRE 2 — libellé agrégat, ignoré
+          if (isAgg(normAgg(cells[ci + 1]))) return false; // FILTRE 2 — libellé agrégat, ignoré (préfixe/inclusion)
           return !!cells[ci + 1];
         }); // au moins une colonne de saisie renseignée (hors formule / libellé agrégat)
       }
