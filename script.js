@@ -222,7 +222,7 @@ class Component {
     payTrack: [], payDraft: null, payDelAsk: null,
     ventesSaisie: [], venteDraft: null,
     grenkeMan: [], grkDraft: null, grkDelAsk: null,
-    achatsSaisie: [], achatDraft: null, chequiers: [], chequierDraft: null, compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null,
+    achatsSaisie: [], achatDraft: null, chequiers: [], chequierDraft: null, compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null, chqEditDraft: null,
     fournSaisie: [], fournDraft: null,
     backupFolderName: null, backupStatus: null, backupLast: null, backupError: null, restoreStatus: null, restorePreview: null,
     suiviFolderName: null, suiviStatus: null, suiviError: null, suiviLast: null,
@@ -1724,7 +1724,6 @@ class Component {
       { key: 'partner', label: 'Nom du pêcheur / client' }, { key: 'amt', label: 'Montant' },
       { key: 'cheque', label: 'N° de chèque' }, { key: 'paid', label: 'Total payé' },
       { key: 'paidDate', label: 'Date de paiement' }, { key: 'solde', label: 'Solde' },
-      { key: 'etat', label: 'État (chèque encaissé)' },
       { key: 'annule', label: 'Annulé' },
     ];
     if (kind === 'ventes') return [
@@ -2079,34 +2078,6 @@ class Component {
     this.setState({ annule: m });
     this.saveJSON(Component.ANNULE_KEY, m);
   }
-  // Module Paiement pêcheur — bascule « Passé » / « Non passé » d'un chèque déjà émis : écrit
-  // littéralement « PAYER » (ou vide, pour revenir en arrière) dans la colonne « État » réglée
-  // dans Paramètres. Même mécanique d'aperçu/sauvegarde/relecture que requestCancelPreview.
-  async requestChequeEtatPreview(ref, restore) {
-    const cfg = this.writeMapFor('operations');
-    if (!cfg || !cfg.enabled || !cfg.cols) { this.setState({ msg: { kind: 'error', text: `Écriture non réglée pour « ${this.writeSourceLabel('operations')} » — réglez-la dans Paramètres.` } }); return; }
-    const colsMap = cfg.cols, sheetName = cfg.sheetName, firstDataIdx = cfg.firstDataIdx || 0;
-    const etatCol = colsMap.etat;
-    if (etatCol == null || etatCol < 0) { this.setState({ msg: { kind: 'error', text: `Aucune colonne « État » réglée pour « ${this.writeSourceLabel('operations')} » — ajoutez-la dans Paramètres → Régler l'écriture.` } }); return; }
-    const refCol = colsMap.ref;
-    if (refCol == null || refCol < 0) { this.setState({ msg: { kind: 'error', text: 'Colonne « N° de facture » non réglée — impossible de retrouver la ligne.' } }); return; }
-    const hi = this._writableHandleFor('operations');
-    if (!hi || !hi.handle) { this.setState({ msg: { kind: 'error', text: `Fichier « ${cfg.fileName || this.writeSourceLabel('operations')} » non connecté. Reconnectez-le dans Paramètres.` } }); return; }
-    try {
-      const okPerm = await this._ensureWritePermission(hi.handle);
-      if (!okPerm) { this.setState({ msg: { kind: 'error', text: `Autorisation d'écriture refusée sur « ${hi.name} ». Rien n'a été modifié.` } }); return; }
-      const file = await hi.handle.getFile();
-      const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
-      const buf = await file.arrayBuffer();
-      const loc = await this._locateRowByRef(buf, sheetName, refCol, ref, firstDataIdx);
-      if (!loc) { this.setState({ msg: { kind: 'error', text: `Ligne « ${ref} » introuvable dans « ${sheetName} » — actualisez puis réessayez.` } }); return; }
-      const colVals = { [etatCol]: restore ? '' : 'PAYER' };
-      this._pendingWrite = { kind: 'operations', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: 'patch', colVals, refuseFormula: true, after: () => this.setState({ msg: { kind: 'ok', text: `Statut du chèque de la facture ${ref} mis à jour.` } }) };
-      this.setState({ writePreview: { kind: 'etat', fileName: hi.name, sheetName, excelRow: loc.excelRow, rows: [{ label: 'État', col: this._colLetter(etatCol + 1), value: restore ? '(case vidée)' : 'PAYER' }], status: null, restore: !!restore, refLabel: ref } });
-    } catch (e) {
-      this.setState({ msg: { kind: 'error', text: `Préparation impossible : ${(e && e.message) || 'erreur'}. Rien n'a été modifié.` } });
-    }
-  }
   cancelAppendWrite() { const st = this._pendingWrite && this._pendingWrite.step; this._pendingWrite = null; this.setState({ writePreview: null }); if (st && this._achatSteps) { this._achatSteps[st] = 'annulé'; this._maybeFinalizeAchat(); } this._runNextWrite(); }
   // « Noter plus tard » (modale Fichier ouvert) : mémorise la saisie en attente (métadonnées seulement —
   // buf/handle non sérialisables ne sont pas stockés) puis abandonne comme un Annuler classique.
@@ -2200,7 +2171,12 @@ class Component {
     if (k === 'chequier') { const cq = this.chequierRows().find(c => c.nom === v); if (cq) patch.chequeNum = String(cq.next || ''); }
     this.setState({ paiementDraft: patch });
   }
-  selectPaiementAchat(row) { this.setState({ paiementDraft: { ...this.paiementDefault(), ref: row.ref, pecheur: row.partner } }); }
+  selectPaiementAchat(row) { this.setState({ paiementDraft: { ...this.paiementDefault(), ref: row.ref, pecheur: row.partner }, chqEditDraft: null }); }
+  // Édition ✏️ du contenu déjà présent dans la colonne Chèque d'une facture (moyen déjà détecté).
+  openChqEdit(ref, val) { this.setState({ chqEditDraft: { ref, val: val || '' } }); }
+  setChqEditVal(v) { const d = this.state.chqEditDraft; if (!d) return; this.setState({ chqEditDraft: { ...d, val: v } }); }
+  cancelChqEdit() { this.setState({ chqEditDraft: null }); }
+  commitChqEdit() { const d = this.state.chqEditDraft; if (!d || !d.ref) return; this.requestChequeModifPreview(d.ref, d.val); }
   // Paiement a posteriori d'un achat pêcheur déjà enregistré : écriture atomique multi-feuilles
   // (ligne « operations » + ligne chéquier correspondante si mode chèque). Réutilise l'infra
   // existante (_locateRowByRef, patchXlsxFile multi-feuilles, _backupBeforeWrite via confirmAppendWrite).
@@ -2292,6 +2268,115 @@ class Component {
     }
   }
   _paiementAfterWrite(ref) { this.setState({ paiementDraft: null, msg: { kind: 'ok', text: `Paiement enregistré pour la facture ${ref}.` } }); }
+  // Prépare les réglages/handle communs aux actions du module Paiement pêcheur (Encaissé/Annuler/Modifier).
+  // Retourne null (et affiche l'erreur) si quoi que ce soit manque.
+  _paiementOpsSetup() {
+    const cfg = this.writeMapFor('operations');
+    if (!cfg || !cfg.enabled || !cfg.cols) { this.setState({ msg: { kind: 'error', text: `Écriture non réglée pour « ${this.writeSourceLabel('operations')} » — réglez-la dans Paramètres.` } }); return null; }
+    const colsMap = cfg.cols; const sheetName = cfg.sheetName; const firstDataIdx = cfg.firstDataIdx || 0;
+    const refCol = colsMap.ref, amtCol = colsMap.amt, paidCol = colsMap.paid, paidDateCol = colsMap.paidDate, soldeCol = colsMap.solde, chequeCol = colsMap.cheque;
+    if (refCol == null || refCol < 0) { this.setState({ msg: { kind: 'error', text: 'Colonne « N° de facture » non réglée — impossible de retrouver la ligne.' } }); return null; }
+    if (chequeCol == null || chequeCol < 0) { this.setState({ msg: { kind: 'error', text: 'Colonne « N° de chèque » non réglée — réglez-la dans Paramètres → Régler l’écriture.' } }); return null; }
+    const hi = this._writableHandleFor('operations');
+    if (!hi || !hi.handle) { this.setState({ msg: { kind: 'error', text: `Fichier « ${cfg.fileName || this.writeSourceLabel('operations')} » non connecté.` } }); return null; }
+    return { sheetName, firstDataIdx, refCol, amtCol, paidCol, paidDateCol, soldeCol, chequeCol, hi };
+  }
+  // Bouton « Encaissé » (chèque déjà détecté dans la colonne Chèque) : écrit Paiement/État « PAYE »
+  // sur la ligne déjà imprimée du chéquier (Date/Description/Montant y sont déjà, saisis à l'achat),
+  // et solde la facture pêcheur (Total payé = montant, Solde = 0, Date de paiement = aujourd'hui).
+  async requestChequeEncaissePreview(ref) {
+    const s = this._paiementOpsSetup(); if (!s) return;
+    try {
+      const okPerm = await this._ensureWritePermission(s.hi.handle);
+      if (!okPerm) { this.setState({ msg: { kind: 'error', text: `Autorisation d'écriture refusée sur « ${s.hi.name} ». Rien n'a été modifié.` } }); return; }
+      const file = await s.hi.handle.getFile();
+      const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
+      const buf = await file.arrayBuffer();
+      const loc = await this._locateRowByRef(buf, s.sheetName, s.refCol, ref, s.firstDataIdx);
+      if (!loc) { this.setState({ msg: { kind: 'error', text: `Ligne « ${ref} » introuvable dans « ${s.sheetName} » — actualisez puis réessayez.` } }); return; }
+      const wb = await this.readWorkbook(buf.slice(0));
+      const sh = wb.find(x => x.name === s.sheetName);
+      const row = (sh && sh.rows[loc.previewIdx]) || [];
+      const montantTotal = this._vNum(s.amtCol != null && s.amtCol >= 0 ? row[s.amtCol] : 0);
+      const chequeRaw = String(row[s.chequeCol] == null ? '' : row[s.chequeCol]).trim();
+      if (!/^\d+$/.test(chequeRaw)) { this.setState({ msg: { kind: 'error', text: `Aucun numéro de chèque enregistré pour la facture ${ref} — impossible de l'encaisser.` } }); return; }
+      const chequeSheetName = this._chequeSheetForNumber(chequeRaw, wb);
+      if (!chequeSheetName) { this.setState({ msg: { kind: 'error', text: `Aucune feuille chéquier ne correspond au n° ${chequeRaw}.` } }); return; }
+      let cLoc; try { cLoc = this._locateChequeRow(wb, chequeSheetName, chequeRaw); }
+      catch (e) { this.setState({ msg: { kind: 'error', text: e.message } }); return; }
+      const serial = this._excelSerial(this._payTodayIso());
+      const editsBySheet = {}; const verifyTargets = []; const preview = [];
+      const colName = n => this._colLetter(n + 1);
+      editsBySheet[s.sheetName] = {};
+      if (s.paidCol != null && s.paidCol >= 0) { editsBySheet[s.sheetName][loc.previewIdx + ':' + s.paidCol] = montantTotal; verifyTargets.push({ sheetName: s.sheetName, rowIdx: loc.previewIdx, col: s.paidCol, val: montantTotal }); preview.push({ label: 'Total payé', col: colName(s.paidCol), value: this.fmt(montantTotal) }); }
+      if (s.soldeCol != null && s.soldeCol >= 0) { editsBySheet[s.sheetName][loc.previewIdx + ':' + s.soldeCol] = 0; verifyTargets.push({ sheetName: s.sheetName, rowIdx: loc.previewIdx, col: s.soldeCol, val: 0 }); preview.push({ label: 'Solde', col: colName(s.soldeCol), value: this.fmt(0) }); }
+      if (s.paidDateCol != null && s.paidDateCol >= 0) { editsBySheet[s.sheetName][loc.previewIdx + ':' + s.paidDateCol] = serial; verifyTargets.push({ sheetName: s.sheetName, rowIdx: loc.previewIdx, col: s.paidDateCol, val: serial }); preview.push({ label: 'Date de paiement', col: colName(s.paidDateCol), value: this._isoToFr(this._payTodayIso()) }); }
+      editsBySheet[chequeSheetName] = editsBySheet[chequeSheetName] || {};
+      if (cLoc.paieCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.paieCol] = montantTotal; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.paieCol, val: montantTotal }); preview.push({ label: 'Chéquier — Paiement', col: colName(cLoc.paieCol), value: this.fmt(montantTotal) }); }
+      if (cLoc.etatCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.etatCol] = 'PAYE'; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.etatCol, val: 'PAYE' }); preview.push({ label: 'Chéquier — Etat', col: colName(cLoc.etatCol), value: 'PAYE' }); }
+      this._pendingWrite = { kind: 'operations', buf, handle: s.hi.handle, name: s.hi.name, fingerprint, sheetName: `${s.sheetName}, ${chequeSheetName}`, editsBySheet, verifyTargets, refuseFormula: true, after: () => this.setState({ msg: { kind: 'ok', text: `Chèque de la facture ${ref} marqué encaissé — facture soldée.` } }) };
+      this.setState({ writePreview: { kind: 'encaisse', fileName: s.hi.name, sheetName: `${s.sheetName} + ${chequeSheetName}`, rows: preview, status: null, refLabel: ref } });
+    } catch (e) {
+      this.setState({ msg: { kind: 'error', text: `Préparation impossible : ${(e && e.message) || 'erreur'}. Rien n'a été modifié.` } });
+    }
+  }
+  // Bouton « Annuler » (chèque déjà détecté) : écrit « CANCELLED » sur Date/Description/Montant/Paiement
+  // de la ligne du chéquier, et remet la facture pêcheur à zéro (Total payé = 0, Solde = montant initial).
+  async requestChequeAnnulePreview(ref) {
+    const s = this._paiementOpsSetup(); if (!s) return;
+    try {
+      const okPerm = await this._ensureWritePermission(s.hi.handle);
+      if (!okPerm) { this.setState({ msg: { kind: 'error', text: `Autorisation d'écriture refusée sur « ${s.hi.name} ». Rien n'a été modifié.` } }); return; }
+      const file = await s.hi.handle.getFile();
+      const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
+      const buf = await file.arrayBuffer();
+      const loc = await this._locateRowByRef(buf, s.sheetName, s.refCol, ref, s.firstDataIdx);
+      if (!loc) { this.setState({ msg: { kind: 'error', text: `Ligne « ${ref} » introuvable dans « ${s.sheetName} » — actualisez puis réessayez.` } }); return; }
+      const wb = await this.readWorkbook(buf.slice(0));
+      const sh = wb.find(x => x.name === s.sheetName);
+      const row = (sh && sh.rows[loc.previewIdx]) || [];
+      const montantTotal = this._vNum(s.amtCol != null && s.amtCol >= 0 ? row[s.amtCol] : 0);
+      const chequeRaw = String(row[s.chequeCol] == null ? '' : row[s.chequeCol]).trim();
+      if (!/^\d+$/.test(chequeRaw)) { this.setState({ msg: { kind: 'error', text: `Aucun numéro de chèque enregistré pour la facture ${ref} — impossible de l'annuler.` } }); return; }
+      const chequeSheetName = this._chequeSheetForNumber(chequeRaw, wb);
+      if (!chequeSheetName) { this.setState({ msg: { kind: 'error', text: `Aucune feuille chéquier ne correspond au n° ${chequeRaw}.` } }); return; }
+      let cLoc; try { cLoc = this._locateChequeRow(wb, chequeSheetName, chequeRaw); }
+      catch (e) { this.setState({ msg: { kind: 'error', text: e.message } }); return; }
+      const editsBySheet = {}; const verifyTargets = []; const preview = [];
+      const colName = n => this._colLetter(n + 1);
+      editsBySheet[s.sheetName] = {};
+      if (s.paidCol != null && s.paidCol >= 0) { editsBySheet[s.sheetName][loc.previewIdx + ':' + s.paidCol] = 0; verifyTargets.push({ sheetName: s.sheetName, rowIdx: loc.previewIdx, col: s.paidCol, val: 0 }); preview.push({ label: 'Total payé', col: colName(s.paidCol), value: this.fmt(0) }); }
+      if (s.soldeCol != null && s.soldeCol >= 0) { editsBySheet[s.sheetName][loc.previewIdx + ':' + s.soldeCol] = montantTotal; verifyTargets.push({ sheetName: s.sheetName, rowIdx: loc.previewIdx, col: s.soldeCol, val: montantTotal }); preview.push({ label: 'Solde', col: colName(s.soldeCol), value: this.fmt(montantTotal) }); }
+      editsBySheet[chequeSheetName] = editsBySheet[chequeSheetName] || {};
+      [['dateCol', 'Date'], ['descCol', 'Description'], ['montCol', 'Montant'], ['paieCol', 'Paiement']].forEach(([k, label]) => {
+        const col = cLoc[k];
+        if (col >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + col] = 'CANCELLED'; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col, val: 'CANCELLED' }); preview.push({ label: 'Chéquier — ' + label, col: colName(col), value: 'CANCELLED' }); }
+      });
+      this._pendingWrite = { kind: 'operations', buf, handle: s.hi.handle, name: s.hi.name, fingerprint, sheetName: `${s.sheetName}, ${chequeSheetName}`, editsBySheet, verifyTargets, refuseFormula: true, after: () => this.setState({ msg: { kind: 'ok', text: `Chèque de la facture ${ref} annulé — facture remise à zéro.` } }) };
+      this.setState({ writePreview: { kind: 'chqannule', fileName: s.hi.name, sheetName: `${s.sheetName} + ${chequeSheetName}`, rows: preview, status: null, refLabel: ref } });
+    } catch (e) {
+      this.setState({ msg: { kind: 'error', text: `Préparation impossible : ${(e && e.message) || 'erreur'}. Rien n'a été modifié.` } });
+    }
+  }
+  // Bouton ✏️ : remplace le contenu (déjà détecté) de la colonne Chèque par un texte libre.
+  async requestChequeModifPreview(ref, newVal) {
+    const s = this._paiementOpsSetup(); if (!s) return;
+    try {
+      const okPerm = await this._ensureWritePermission(s.hi.handle);
+      if (!okPerm) { this.setState({ msg: { kind: 'error', text: `Autorisation d'écriture refusée sur « ${s.hi.name} ». Rien n'a été modifié.` } }); return; }
+      const file = await s.hi.handle.getFile();
+      const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
+      const buf = await file.arrayBuffer();
+      const loc = await this._locateRowByRef(buf, s.sheetName, s.refCol, ref, s.firstDataIdx);
+      if (!loc) { this.setState({ msg: { kind: 'error', text: `Ligne « ${ref} » introuvable dans « ${s.sheetName} » — actualisez puis réessayez.` } }); return; }
+      const val = String(newVal || '').trim();
+      const colVals = { [s.chequeCol]: val };
+      this._pendingWrite = { kind: 'operations', buf, handle: s.hi.handle, name: s.hi.name, fingerprint, sheetName: s.sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: 'patch', colVals, refuseFormula: true, after: () => this.setState({ chqEditDraft: null, msg: { kind: 'ok', text: `Colonne Chèque de la facture ${ref} modifiée.` } }) };
+      this.setState({ writePreview: { kind: 'chqmodif', fileName: s.hi.name, sheetName: s.sheetName, excelRow: loc.excelRow, rows: [{ label: 'Chèque', col: this._colLetter(s.chequeCol + 1), value: val || '(case vidée)' }], status: null, refLabel: ref } });
+    } catch (e) {
+      this.setState({ msg: { kind: 'error', text: `Préparation impossible : ${(e && e.message) || 'erreur'}. Rien n'a été modifié.` } });
+    }
+  }
 
   // ---------- Circuit D — stock hebdo : remplir poids + prix par espèce/calibre (depuis les achats) ----------
   // Espèce du tableau de bord → feuille (les feuilles combinées portent l'espèce EN COLONNE, pas en onglet).
@@ -2661,7 +2746,7 @@ class Component {
       out.onFlCancel = () => this.cancelAppendWrite();
     }
     if (wp) {
-      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'etat' ? (wp.restore ? `Remettre à zéro le statut du chèque « ${wp.refLabel} » ?` : `Marquer le chèque « ${wp.refLabel} » comme passé ?`) : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
+      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
       out.wpSubText = wp.kind === 'stock'
         ? `${wp.title || ''} — je remplis le poids et le prix par espèce/calibre. Le prix moyen se recalcule tout seul (formule non touchée). Sauvegarde datée avant l'écriture.`
         : wp.kind === 'cheque'
@@ -2670,10 +2755,12 @@ class Component {
         ? (wp.restore
           ? `La colonne « Annulé » de la feuille « ${wp.sheetName} » sera vidée pour cette ligne — elle redevient active et recompte dans vos totaux. Une copie de sauvegarde datée est faite avant l'écriture.`
           : `« Annulé » sera écrit dans la colonne dédiée de la feuille « ${wp.sheetName} », uniquement pour cette ligne. La ligne n'est PAS supprimée : elle reste dans votre fichier, marquée annulée, exclue de vos totaux tant qu'elle n'est pas rétablie. Une copie de sauvegarde datée est faite avant l'écriture.`)
-        : wp.kind === 'etat'
-        ? (wp.restore
-          ? `La colonne « État » de la feuille « ${wp.sheetName} » sera vidée pour cette ligne. Une copie de sauvegarde datée est faite avant l'écriture.`
-          : `« PAYER » sera écrit dans la colonne « État » de la feuille « ${wp.sheetName} », uniquement pour cette ligne. Une copie de sauvegarde datée est faite avant l'écriture.`)
+        : wp.kind === 'encaisse'
+        ? `Feuille(s) « ${wp.sheetName} » — écrit Paiement/État « PAYE » sur la ligne du chèque déjà imprimée, et solde la facture (Total payé = montant, Solde = 0). Une copie de sauvegarde datée est faite avant l'écriture.`
+        : wp.kind === 'chqannule'
+        ? `Feuille(s) « ${wp.sheetName} » — écrit « CANCELLED » sur la ligne du chèque (Date/Description/Montant/Paiement) et remet le fichier achat à zéro (Total payé = 0, Solde = montant initial). Une copie de sauvegarde datée est faite avant l'écriture.`
+        : wp.kind === 'chqmodif'
+        ? `Feuille « ${wp.sheetName} » — remplace le contenu de la colonne « Chèque » de cette ligne. Une copie de sauvegarde datée est faite avant l'écriture.`
         : wp.kind === 'paiement'
         ? `Feuille(s) « ${wp.sheetName} » — met à jour Total payé / Date de paiement / Solde de l'achat, et complète la ligne du chéquier si un chèque est utilisé. Une copie de sauvegarde datée est faite avant l'écriture.`
         : wp.update
@@ -2682,7 +2769,7 @@ class Component {
       out.wpFileName = wp.fileName; out.wpSheetName = wp.sheetName; out.wpExcelRow = wp.excelRow;
       out.wpRows = (wp.rows || []).map(r => ({ label: r.label, col: r.col, value: r.value }));
       out.wpStatus = wp.status || ''; out.wpError = wp.error || ''; out.wpBusy = wp.status === 'writing';
-      out.wpBtnLabel = wp.status === 'writing' ? 'Écriture…' : (wpLocked ? '↻ Réessayer' : wp.kind === 'annule' ? (wp.restore ? 'Confirmer le rétablissement' : "Confirmer l'annulation") : wp.kind === 'etat' ? (wp.restore ? 'Confirmer la remise à zéro' : 'Confirmer « Passé »') : wp.kind === 'paiement' ? 'Confirmer le paiement' : 'Confirmer et écrire');
+      out.wpBtnLabel = wp.status === 'writing' ? 'Écriture…' : (wpLocked ? '↻ Réessayer' : wp.kind === 'annule' ? (wp.restore ? 'Confirmer le rétablissement' : "Confirmer l'annulation") : wp.kind === 'encaisse' ? 'Confirmer « Encaissé »' : wp.kind === 'chqannule' ? "Confirmer l'annulation" : wp.kind === 'chqmodif' ? 'Confirmer la modification' : wp.kind === 'paiement' ? 'Confirmer le paiement' : 'Confirmer et écrire');
       out.wpConfirmStyle = wp.status === 'writing'
         ? "padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#8ab89a;border:none;font-family:inherit;cursor:wait"
         : "padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#15803d;border:none;cursor:pointer;font-family:inherit";
@@ -3304,7 +3391,8 @@ class Component {
       let status = reste > 0.005 ? 'Non payé' : 'Payé';
       if (ci.status >= 0) { const st = norm(f[ci.status]); if (st.includes('retard') || st.includes('impay')) status = 'Retard'; }
       const chq = ci.chq >= 0 ? String(f[ci.chq] == null ? '' : f[ci.chq]).trim() : '';
-      list.push({ y: dt.y, m: dt.m, d: dt.d, ref: (ci.ref >= 0 && f[ci.ref]) || 'OP-' + (i + 1), type, partner: (ci.partner >= 0 && f[ci.partner]) || '—', cat: (ci.cat >= 0 && f[ci.cat]) || 'Autre', amt: type === 'Achat' ? -gross : gross, paid, reste, status, chq }); });
+      const colA = String(f[0] == null ? '' : f[0]).trim();
+      list.push({ y: dt.y, m: dt.m, d: dt.d, ref: (ci.ref >= 0 && f[ci.ref]) || 'OP-' + (i + 1), type, partner: (ci.partner >= 0 && f[ci.partner]) || '—', cat: (ci.cat >= 0 && f[ci.cat]) || 'Autre', amt: type === 'Achat' ? -gross : gross, paid, reste, status, chq, colA }); });
     list.sort((a, b) => (b.y * 12 + b.m) - (a.y * 12 + a.m) || b.d - a.d);
     return { list, skipped };
   }
@@ -3316,6 +3404,11 @@ class Component {
     if (/^\d+$/.test(s)) return 'cheque_num';
     if (/bb/i.test(s)) return 'virement_bb';
     return 'texte';
+  }
+  // Ligne annulée dans le fichier achat pêcheur : colonne A contient ANNULÉ/ANNULE/CANCELLED.
+  _isAnnuleColA(raw) {
+    const s = this._norm(raw);
+    return s.includes('annule') || s.includes('cancelled');
   }
   mapFactures(text) {
     const { header, rows, find } = this.parseTable(text);
@@ -5363,32 +5456,56 @@ class Component {
     const asRows0 = this.achatSaisieRows();
     const vsRows0 = this.venteSaisieRows();
     // cartes d'action + onglet actif
-    const compModeTabs = [{ k: 'Achat', lbl: '🎣 Achat pêcheur', col: '#b45309' }, { k: 'Vente', lbl: '🏷️ Vente client', col: accent }, { k: 'Fournisseur', lbl: '📄 Facture fournisseur', col: '#7c3aed' }, { k: 'Paiement', lbl: '💳 Paiement pêcheur', col: '#0f766e' }].map(t => ({ name: t.lbl, onClick: () => this.openCompForm(t.k), style: compTab === t.k ? `flex:1;min-width:150px;padding:13px 18px;border-radius:10px;font-size:14px;font-weight:700;color:#fff;background:${t.col};border:none;cursor:pointer;font-family:inherit` : `flex:1;min-width:150px;padding:13px 18px;border-radius:10px;font-size:14px;font-weight:600;color:#5b6b7f;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit` }));
+    const compModeTabs = [{ k: 'Achat', lbl: '🎣 Achat pêcheur', col: '#b45309' }, { k: 'Paiement', lbl: '💳 Paiement pêcheur', col: '#0f766e' }, { k: 'Vente', lbl: '🏷️ Vente client', col: accent }, { k: 'Fournisseur', lbl: '📄 Facture fournisseur', col: '#7c3aed' }].map(t => ({ name: t.lbl, onClick: () => this.openCompForm(t.k), style: compTab === t.k ? `flex:1;min-width:150px;padding:13px 18px;border-radius:10px;font-size:14px;font-weight:700;color:#fff;background:${t.col};border:none;cursor:pointer;font-family:inherit` : `flex:1;min-width:150px;padding:13px 18px;border-radius:10px;font-size:14px;font-weight:600;color:#5b6b7f;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit` }));
     const compIsPaiement = compTab === 'Paiement';
     // Achats pêcheurs non soldés (Solde > 0), toutes périodes confondues — source : fichier operations.
+    // Triée par N° de facture croissant ; les lignes annulées (colonne A) sont ignorées.
     const pmd = this.state.paiementDraft || this.paiementDefault();
-    const impayesAchats = ops.filter(r => r.type === 'Achat' && (r.reste != null ? r.reste : Math.abs(r.amt)) > 0.005).map(r => {
-      const reste = r.reste != null ? r.reste : Math.abs(r.amt);
-      const selected = pmd.ref === r.ref;
-      const chequeKind = this._chequeKind(r.chq);
-      const chequeLabel = chequeKind === 'cheque_num' ? `🧾 Chèque n°${r.chq}` : chequeKind === 'virement_bb' ? '🏦 Virement émis' : chequeKind === 'texte' ? `📝 ${r.chq}` : '— à régler —';
-      const showEtatActions = chequeKind === 'cheque_num';
-      return { ref: r.ref || '—', partner: r.partner || '—', montant: this.fmt(Math.abs(r.amt)), reste: this.fmt(reste), selected, chequeLabel, showEtatActions,
-        rowStyle: `display:grid;grid-template-columns:90px 1fr 95px 95px 230px;gap:8px;align-items:center;padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;${selected ? `background:${soft};border:1px solid ${this.hexToRgba(accent, 0.35)}` : 'border:1px solid transparent'}`,
-        onSelect: () => this.selectPaiementAchat({ ref: r.ref, partner: r.partner }),
-        onPasse: e => { e.stopPropagation(); this.requestChequeEtatPreview(r.ref, false); },
-        onNonPasse: e => { e.stopPropagation(); this.requestChequeEtatPreview(r.ref, true); } };
-    });
+    const chqEditDraft = this.state.chqEditDraft;
+    const impayesAchats = ops
+      .filter(r => r.type === 'Achat' && (r.reste != null ? r.reste : Math.abs(r.amt)) > 0.005 && !this._isAnnuleColA(r.colA))
+      .slice()
+      .sort((a, b) => (parseInt(String(a.ref).replace(/\D/g, ''), 10) || 0) - (parseInt(String(b.ref).replace(/\D/g, ''), 10) || 0))
+      .map(r => {
+        const reste = r.reste != null ? r.reste : Math.abs(r.amt);
+        const paidAmt = r.paid || 0;
+        const selected = pmd.ref === r.ref;
+        const chequeKind = this._chequeKind(r.chq);
+        const chequeLabel = chequeKind === 'cheque_num' ? `🧾 Chèque n°${r.chq}` : chequeKind === 'virement_bb' ? '🏦 Virement émis' : chequeKind === 'texte' ? `📝 ${r.chq}` : '—';
+        const enAttente = chequeKind === 'vide' && paidAmt < 0.005;
+        return { ref: r.ref || '—', partner: r.partner || '—', montant: this.fmt(Math.abs(r.amt)), paid: this.fmt(paidAmt), reste: this.fmt(reste), selected, chequeLabel, enAttente,
+          rowStyle: `display:grid;grid-template-columns:90px 1fr 90px 90px 90px 190px;gap:8px;align-items:center;padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;${selected ? `background:${soft};border:1px solid ${this.hexToRgba(accent, 0.35)}` : 'border:1px solid transparent'}`,
+          onSelect: () => this.selectPaiementAchat({ ref: r.ref, partner: r.partner }) };
+      });
     const paiementEmpty = impayesAchats.length === 0;
-    const paiementModeOpts = [{ k: 'virement', lbl: 'Virement' }, { k: 'cheque', lbl: 'Chèque' }, { k: 'liquide', lbl: 'Espèces' }, { k: 'autre', lbl: 'Autre' }, { k: 'partiel', lbl: 'Partiel' }].map(m => ({ name: m.lbl, onClick: () => this.setPaiementField('mode', m.k), style: pmd.mode === m.k ? `flex:1;min-width:100px;padding:10px 14px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#0f766e;border:none;cursor:pointer;font-family:inherit` : `flex:1;min-width:100px;padding:10px 14px;border-radius:9px;font-size:13px;font-weight:600;color:#5b6b7f;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit` }));
-    const paiementIsPartiel = pmd.mode === 'partiel'; const paiementIsCheque = pmd.mode === 'cheque'; const paiementIsAutre = pmd.mode === 'autre';
-    const paiementSelectedLabel = pmd.ref ? `${pmd.ref} — ${pmd.pecheur}` : 'Aucune facture sélectionnée';
+    // Facture sélectionnée : source de vérité pour la détection du moyen de paiement (colonne Chèque).
+    const selOp = ops.find(r => r.type === 'Achat' && r.ref === pmd.ref);
+    const selChequeKind = selOp ? this._chequeKind(selOp.chq) : 'vide';
+    const selReste = selOp ? (selOp.reste != null ? selOp.reste : Math.abs(selOp.amt)) : 0;
+    const paiementLocked = selChequeKind !== 'vide';
+    const paiementFree = !paiementLocked;
+    const paiementShowChqActions = selChequeKind === 'cheque_num';
+    const paiementSelectedLabel = pmd.ref
+      ? `N° ${pmd.ref} — ${pmd.pecheur} · Montant ${this.fmt(selOp ? Math.abs(selOp.amt) : 0)} · Solde ${this.fmt(selReste)}`
+      : 'Aucune facture sélectionnée';
+    const lockedBtnStyle = 'flex:1;min-width:100px;padding:10px 14px;border-radius:9px;font-size:13px;font-weight:600;color:#b6bfcc;background:#f4f6f9;border:1px solid #e9edf4;cursor:not-allowed;font-family:inherit';
+    const paiementModeOpts = [{ k: 'cheque', lbl: 'Chèque' }, { k: 'virement', lbl: 'Virement' }, { k: 'liquide', lbl: 'Espèces' }, { k: 'autre', lbl: 'Autre' }, { k: 'comptant', lbl: 'Comptant' }, { k: 'partiel', lbl: 'Partiel' }].map(m => ({ name: m.lbl, onClick: paiementLocked ? () => {} : () => this.setPaiementField('mode', m.k), style: paiementLocked ? lockedBtnStyle : (pmd.mode === m.k ? `flex:1;min-width:100px;padding:10px 14px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#0f766e;border:none;cursor:pointer;font-family:inherit` : `flex:1;min-width:100px;padding:10px 14px;border-radius:9px;font-size:13px;font-weight:600;color:#5b6b7f;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit`) }));
+    const paiementIsPartiel = !paiementLocked && pmd.mode === 'partiel'; const paiementIsCheque = !paiementLocked && pmd.mode === 'cheque'; const paiementIsAutre = !paiementLocked && pmd.mode === 'autre'; const paiementIsComptant = !paiementLocked && pmd.mode === 'comptant';
+    const paiementComptantSolde = this.fmt(selReste);
+    const paiementChqEditing = !!(chqEditDraft && chqEditDraft.ref === pmd.ref);
+    const paiementChqEditVal = paiementChqEditing ? (chqEditDraft.val || '') : '';
+    const onChqEditOpen = () => this.openChqEdit(pmd.ref, selOp ? selOp.chq : '');
+    const onChqEditVal = e => this.setChqEditVal(e.target.value);
+    const onChqEditCancel = () => this.cancelChqEdit();
+    const onChqEditCommit = () => this.commitChqEdit();
+    const onChqEncaisse = () => this.requestChequeEncaissePreview(pmd.ref);
+    const onChqAnnuler = () => this.requestChequeAnnulePreview(pmd.ref);
     const onPaiementMontant = e => this.setPaiementField('montant', e.target.value);
     const onPaiementChequier = e => this.setPaiementField('chequier', e.target.value);
     const onPaiementChequeNum = e => this.setPaiementField('chequeNum', e.target.value);
     const onPaiementObservation = e => this.setPaiementField('observation', e.target.value);
     const onPaiementCommit = () => this.requestAchatPaiementPreview();
-    const onPaiementReset = () => this.setState({ paiementDraft: null });
+    const onPaiementReset = () => this.setState({ paiementDraft: null, chqEditDraft: null });
     // confirmation « écrit dans… »
     const cf = this.state.compFan; const compFanShow = !!cf; const compFanBuy = !!(cf && cf.mode === 'achat'); const compFanTitle = cf ? cf.title : ''; const compFanCards = cf ? cf.cards : [];
     const compFanStyle = `border-radius:14px;padding:14px 18px;margin-bottom:16px;border:1px solid ${compFanBuy ? '#f0d9b8' : '#cadcfa'};background:${compFanBuy ? '#fdf6ec' : '#eef4fe'}`;
@@ -7259,7 +7376,8 @@ class Component {
       payDelOpen, payDelName, onPayDelConfirm, onPayDelCancel,
       onHealthOpen: () => this.openHealthCheck(),
       isSaisieCompta, compTab, compIsAchat, compIsVente, compIsFourn, compIsPaiement,
-      impayesAchats, paiementEmpty, paiementModeOpts, paiementIsPartiel, paiementIsCheque, paiementIsAutre, paiementSelectedLabel,
+      impayesAchats, paiementEmpty, paiementModeOpts, paiementIsPartiel, paiementIsCheque, paiementIsAutre, paiementIsComptant, paiementComptantSolde, paiementSelectedLabel,
+      paiementLocked, paiementFree, paiementShowChqActions, paiementChqEditing, paiementChqEditVal, onChqEditOpen, onChqEditVal, onChqEditCancel, onChqEditCommit, onChqEncaisse, onChqAnnuler,
       paiementDraft: pmd, onPaiementMontant, onPaiementChequier, onPaiementChequeNum, onPaiementObservation, onPaiementCommit, onPaiementReset, chequierOptions,
       fournDraft, fournTypeTabs, fournSaveLabel, onFournFourn, onFournNum, onFournDate, onFournMontant, onFournCommit, onFournReset,
       compModeTabs, compFanShow, compFanStyle, compFanTitle, compFanCards, onCompFanClose: () => this.setState({ compFan: null }),
