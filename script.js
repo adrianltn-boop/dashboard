@@ -2175,6 +2175,7 @@ class Component {
     const cfg = this.writeMapFor('operations');
     console.log('cfg:', cfg);
     if (!cfg || !cfg.enabled || !cfg.cols) { this.setState({ msg: { kind: 'error', text: `Écriture non réglée pour « ${this.writeSourceLabel('operations')} » — réglez-la dans Paramètres.` } }); return; }
+    console.log('toutes les cols:', cfg.cols);
     const colsMap = cfg.cols; const sheetName = cfg.sheetName; const firstDataIdx = cfg.firstDataIdx || 0;
     const refCol = colsMap.ref, amtCol = colsMap.amt, paidCol = colsMap.paid, paidDateCol = colsMap.paidDate, soldeCol = colsMap.solde, chequeCol = colsMap.cheque;
     if (refCol == null || refCol < 0) { this.setState({ msg: { kind: 'error', text: 'Colonne « N° de facture » non réglée — impossible de retrouver la ligne.' } }); return; }
