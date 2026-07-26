@@ -2004,7 +2004,7 @@ class Component {
     const xmlPreview = xml.substring(0, 2000);
     console.log('[XML brut début feuille]:', xmlPreview);
     const coln = r => { const mm = r.match(/^([A-Z]+)/); let v = 0; for (const c of mm[1]) v = v * 26 + (c.charCodeAt(0) - 64); return v; };
-    const want = this.nrm(refValue);
+    const want = this.nrm(refValue).replace(/^0+(?=\d)/, '');
     console.log('[_locateRowByRef] sheetName ciblé :', sheetName);
     console.log('[_locateRowByRef] refValue cherché :', refValue);
     const rowsRe = /<row[^>]*>[\s\S]*?<\/row>/g; let rm; let rowIdx = -1;
@@ -2029,7 +2029,8 @@ class Component {
         previewVals.push(val);
         if (previewVals.length === 10) console.log('[_locateRowByRef] colonne lue:', String.fromCharCode(64 + refColIdx + 1), '— 10 premières valeurs:', previewVals);
       }
-      if (val && this.nrm(val) === want) return { previewIdx: rowIdx, excelRow: rowNum };
+      const valNorm = this.nrm(val).replace(/^0+(?=\d)/, '');
+      if (valNorm && valNorm === want) return { previewIdx: rowIdx, excelRow: rowNum };
     }
     if (previewVals.length < 10) console.log('[_locateRowByRef] colonne lue:', String.fromCharCode(64 + refColIdx + 1), '— 10 premières valeurs:', previewVals);
     return null;
