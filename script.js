@@ -2006,10 +2006,16 @@ class Component {
     console.log('[_locateRowByRef] sheetName ciblé :', sheetName);
     console.log('[_locateRowByRef] refValue cherché :', refValue);
     const rowsRe = /<row[^>]*>[\s\S]*?<\/row>/g; let rm; let rowIdx = -1;
-    const previewVals = [];
+    const previewVals = []; let xmlDumped = 0;
     while (rm = rowsRe.exec(xml)) {
       rowIdx++;
       if (rowIdx < firstDataIdx) continue;
+      if (xmlDumped < 3) {
+        xmlDumped++;
+        const cellRefs = [...rm[0].matchAll(/\br="([A-Z]+\d+)"/g)].map(m => m[1]);
+        console.log(`[_locateRowByRef] XML brut ligne de données #${xmlDumped} (rowIdx=${rowIdx}):`, rm[0]);
+        console.log(`[_locateRowByRef] références de cellules trouvées ligne #${xmlDumped}:`, cellRefs);
+      }
       const opens = [...rm[0].matchAll(/<row\b[^>]*?\br="(\d+)"/g)];
       const rowNum = opens.length ? +opens[opens.length - 1][1] : (rowIdx + 1);
       const cr = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g; let cm; let val = '';
