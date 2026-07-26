@@ -2169,14 +2169,18 @@ class Component {
   // (ligne « operations » + ligne chéquier correspondante si mode chèque). Réutilise l'infra
   // existante (_locateRowByRef, patchXlsxFile multi-feuilles, _backupBeforeWrite via confirmAppendWrite).
   async requestAchatPaiementPreview() {
-    const pd = this.state.paiementDraft; if (!pd || !pd.ref) { this.setState({ msg: { kind: 'error', text: 'Sélectionnez d’abord une facture pêcheur à payer.' } }); return; }
+    const pd = this.state.paiementDraft;
+    console.log('requestAchatPaiementPreview appelé', pd);
+    if (!pd || !pd.ref) { this.setState({ msg: { kind: 'error', text: 'Sélectionnez d’abord une facture pêcheur à payer.' } }); return; }
     const cfg = this.writeMapFor('operations');
+    console.log('cfg:', cfg);
     if (!cfg || !cfg.enabled || !cfg.cols) { this.setState({ msg: { kind: 'error', text: `Écriture non réglée pour « ${this.writeSourceLabel('operations')} » — réglez-la dans Paramètres.` } }); return; }
     const colsMap = cfg.cols; const sheetName = cfg.sheetName; const firstDataIdx = cfg.firstDataIdx || 0;
     const refCol = colsMap.ref, amtCol = colsMap.amt, paidCol = colsMap.paid, paidDateCol = colsMap.paidDate, soldeCol = colsMap.solde, chequeCol = colsMap.cheque;
     if (refCol == null || refCol < 0) { this.setState({ msg: { kind: 'error', text: 'Colonne « N° de facture » non réglée — impossible de retrouver la ligne.' } }); return; }
     if (paidCol == null || paidCol < 0) { this.setState({ msg: { kind: 'error', text: 'Colonne « Total payé » non réglée dans Paramètres → Régler l’écriture.' } }); return; }
     const hi = this._writableHandleFor('operations');
+    console.log('handle:', hi);
     if (!hi || !hi.handle) { this.setState({ msg: { kind: 'error', text: `Fichier « ${cfg.fileName || this.writeSourceLabel('operations')} » non connecté.` } }); return; }
     const mode = pd.mode || 'comptant';
     if (mode === 'cheque' && (!pd.chequier || !pd.chequeNum)) { this.setState({ msg: { kind: 'error', text: 'Choisissez un chéquier et un numéro de chèque.' } }); return; }
@@ -2186,6 +2190,7 @@ class Component {
       const file = await hi.handle.getFile();
       const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
       const buf = await file.arrayBuffer();
+      console.log('avant locate');
       const loc = await this._locateRowByRef(buf, sheetName, refCol, pd.ref, firstDataIdx);
       if (!loc) { this.setState({ msg: { kind: 'error', text: `Ligne « ${pd.ref} » introuvable dans « ${sheetName} » — actualisez puis réessayez.` } }); return; }
       const wb = await this.readWorkbook(buf.slice(0));
