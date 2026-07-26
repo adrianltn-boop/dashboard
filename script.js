@@ -2014,13 +2014,13 @@ class Component {
         const refM = cm[1].match(/\br="([A-Z]+)\d+"/); if (!refM) continue;
         if (coln(refM[1]) === refColIdx + 1) { const body = cm[2] || ''; const vm = body.match(/<v>([\s\S]*?)<\/v>/); const im = body.match(/<t[^>]*>([\s\S]*?)<\/t>/); val = (im ? im[1] : (vm ? vm[1] : '')).trim(); break; }
       }
-      if (previewVals.length < 5) {
+      if (previewVals.length < 10) {
         previewVals.push(val);
-        if (previewVals.length === 5) console.log('[_locateRowByRef] 5 premières valeurs colonne refCol :', previewVals);
+        if (previewVals.length === 10) console.log('[_locateRowByRef] 10 premières valeurs colonne refCol :', previewVals);
       }
       if (val && this.nrm(val) === want) return { previewIdx: rowIdx, excelRow: rowNum };
     }
-    if (previewVals.length < 5) console.log('[_locateRowByRef] 5 premières valeurs colonne refCol :', previewVals);
+    if (previewVals.length < 10) console.log('[_locateRowByRef] 10 premières valeurs colonne refCol :', previewVals);
     return null;
   }
   // Annulation visible (ou rétablissement) d'une ligne déjà enregistrée : on n'efface rien,
@@ -2176,8 +2176,10 @@ class Component {
     console.log('cfg:', cfg);
     if (!cfg || !cfg.enabled || !cfg.cols) { this.setState({ msg: { kind: 'error', text: `Écriture non réglée pour « ${this.writeSourceLabel('operations')} » — réglez-la dans Paramètres.` } }); return; }
     console.log('toutes les cols:', cfg.cols);
+    console.log('cols complets:', JSON.stringify(cfg.cols));
     const colsMap = cfg.cols; const sheetName = cfg.sheetName; const firstDataIdx = cfg.firstDataIdx || 0;
     const refCol = colsMap.ref, amtCol = colsMap.amt, paidCol = colsMap.paid, paidDateCol = colsMap.paidDate, soldeCol = colsMap.solde, chequeCol = colsMap.cheque;
+    console.log('refCol:', refCol, 'valeur attendue: index de la colonne B');
     if (refCol == null || refCol < 0) { this.setState({ msg: { kind: 'error', text: 'Colonne « N° de facture » non réglée — impossible de retrouver la ligne.' } }); return; }
     if (paidCol == null || paidCol < 0) { this.setState({ msg: { kind: 'error', text: 'Colonne « Total payé » non réglée dans Paramètres → Régler l’écriture.' } }); return; }
     const hi = this._writableHandleFor('operations');
