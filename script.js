@@ -3656,7 +3656,7 @@ class Component {
     };
     if (kind === 'operations') return {
       title: 'Achat pêche',
-      headers: ['Date', 'Type', 'Partenaire', 'Montant', 'Statut', 'Reference', 'Paye', 'Solde'],
+      headers: ['Date', 'Type', 'Partenaire', 'Montant', 'Statut', 'Reference', 'Paye', 'Solde', 'Cheque'],
       sheetHints: /facturation|suivi|achat/, combineable: false,
       fields: [
         { key: 'date', label: 'Date', kw: ['date'], req: true },
@@ -3666,8 +3666,9 @@ class Component {
         { key: 'paid', label: 'Total payé', kw: ['total paye', 'montant paye', 'regle', 'paye', 'cheque'] },
         { key: 'solde', label: 'Solde (restant à payer)', kw: ['solde', 'restant', 'reste', 'du'] },
         { key: 'status', label: 'Statut', kw: ['etat', 'statut', 'reglement'] },
+        { key: 'chq', label: 'N° de chèque / observation', kw: ['cheque'] },
       ],
-      emit: (r, f) => { const d = this.frDate(r[f.date]); const amt = P(r[f.amt]); if (!d || amt == null) return null; return [d, 'Achat', r[f.partner] || '', Math.abs(amt), r[f.status] || '', r[f.ref] || '', f.paid >= 0 ? (P(r[f.paid]) ?? '') : '', f.solde >= 0 ? (P(r[f.solde]) ?? '') : '']; },
+      emit: (r, f) => { const d = this.frDate(r[f.date]); const amt = P(r[f.amt]); if (!d || amt == null) return null; return [d, 'Achat', r[f.partner] || '', Math.abs(amt), r[f.status] || '', r[f.ref] || '', f.paid >= 0 ? (P(r[f.paid]) ?? '') : '', f.solde >= 0 ? (P(r[f.solde]) ?? '') : '', f.chq >= 0 ? (r[f.chq] || '') : '']; },
     };
     if (kind === 'factures') return {
       title: 'Factures à payer (fournisseurs)',
