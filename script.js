@@ -2001,6 +2001,8 @@ class Component {
     const target = targetByName[sheetName];
     if (!target || !files[target]) throw new Error(`feuille « ${sheetName} » introuvable dans le fichier`);
     const xml = dec.decode(files[target]);
+    const xmlPreview = xml.substring(0, 2000);
+    console.log('[XML brut début feuille]:', xmlPreview);
     const coln = r => { const mm = r.match(/^([A-Z]+)/); let v = 0; for (const c of mm[1]) v = v * 26 + (c.charCodeAt(0) - 64); return v; };
     const want = this.nrm(refValue);
     console.log('[_locateRowByRef] sheetName ciblé :', sheetName);
