@@ -2016,11 +2016,11 @@ class Component {
       }
       if (previewVals.length < 10) {
         previewVals.push(val);
-        if (previewVals.length === 10) console.log('[_locateRowByRef] 10 premières valeurs colonne refCol :', previewVals);
+        if (previewVals.length === 10) console.log('[_locateRowByRef] colonne lue:', String.fromCharCode(64 + refColIdx + 1), '— 10 premières valeurs:', previewVals);
       }
       if (val && this.nrm(val) === want) return { previewIdx: rowIdx, excelRow: rowNum };
     }
-    if (previewVals.length < 10) console.log('[_locateRowByRef] 10 premières valeurs colonne refCol :', previewVals);
+    if (previewVals.length < 10) console.log('[_locateRowByRef] colonne lue:', String.fromCharCode(64 + refColIdx + 1), '— 10 premières valeurs:', previewVals);
     return null;
   }
   // Annulation visible (ou rétablissement) d'une ligne déjà enregistrée : on n'efface rien,
