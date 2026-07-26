@@ -2006,23 +2006,12 @@ class Component {
     const sharedStrings = [];
     const ssx = dec.decode(files['xl/sharedStrings.xml'] || new Uint8Array());
     if (ssx) { const siRe = /<si>([\s\S]*?)<\/si>/g; let sm; while (sm = siRe.exec(ssx)) { const t = [...sm[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(x => x[1]).join(''); sharedStrings.push(this.unxml(t)); } }
-    const xmlPreview = xml.substring(0, 2000);
-    console.log('[XML brut début feuille]:', xmlPreview);
     const coln = r => { const mm = r.match(/^([A-Z]+)/); let v = 0; for (const c of mm[1]) v = v * 26 + (c.charCodeAt(0) - 64); return v; };
     const want = this.nrm(refValue).replace(/^0+(?=\d)/, '');
-    console.log('[_locateRowByRef] sheetName ciblé :', sheetName);
-    console.log('[_locateRowByRef] refValue cherché :', refValue);
     const rowsRe = /<row[^>]*>[\s\S]*?<\/row>/g; let rm; let rowIdx = -1;
-    const previewVals = []; let xmlDumped = 0;
     while (rm = rowsRe.exec(xml)) {
       rowIdx++;
       if (rowIdx < firstDataIdx) continue;
-      if (xmlDumped < 3) {
-        xmlDumped++;
-        const cellRefs = [...rm[0].matchAll(/\br="([A-Z]+\d+)"/g)].map(m => m[1]);
-        console.log(`[_locateRowByRef] XML brut ligne de données #${xmlDumped} (rowIdx=${rowIdx}):`, rm[0]);
-        console.log(`[_locateRowByRef] références de cellules trouvées ligne #${xmlDumped}:`, cellRefs);
-      }
       const opens = [...rm[0].matchAll(/<row\b[^>]*?\br="(\d+)"/g)];
       const rowNum = opens.length ? +opens[opens.length - 1][1] : (rowIdx + 1);
       const cr = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g; let cm; let val = '';
@@ -2037,14 +2026,9 @@ class Component {
           break;
         }
       }
-      if (previewVals.length < 10) {
-        previewVals.push(val);
-        if (previewVals.length === 10) console.log('[_locateRowByRef] colonne lue:', String.fromCharCode(64 + refColIdx + 1), '— 10 premières valeurs:', previewVals);
-      }
       const valNorm = this.nrm(val).replace(/^0+(?=\d)/, '');
       if (valNorm && valNorm === want) return { previewIdx: rowIdx, excelRow: rowNum };
     }
-    if (previewVals.length < 10) console.log('[_locateRowByRef] colonne lue:', String.fromCharCode(64 + refColIdx + 1), '— 10 premières valeurs:', previewVals);
     return null;
   }
   // Annulation visible (ou rétablissement) d'une ligne déjà enregistrée : on n'efface rien,
@@ -2222,20 +2206,14 @@ class Component {
   // existante (_locateRowByRef, patchXlsxFile multi-feuilles, _backupBeforeWrite via confirmAppendWrite).
   async requestAchatPaiementPreview() {
     const pd = this.state.paiementDraft;
-    console.log('requestAchatPaiementPreview appelé', pd);
     if (!pd || !pd.ref) { this.setState({ msg: { kind: 'error', text: 'Sélectionnez d’abord une facture pêcheur à payer.' } }); return; }
     const cfg = this.writeMapFor('operations');
-    console.log('cfg:', cfg);
     if (!cfg || !cfg.enabled || !cfg.cols) { this.setState({ msg: { kind: 'error', text: `Écriture non réglée pour « ${this.writeSourceLabel('operations')} » — réglez-la dans Paramètres.` } }); return; }
-    console.log('toutes les cols:', cfg.cols);
-    console.log('cols complets:', JSON.stringify(cfg.cols));
     const colsMap = cfg.cols; const sheetName = cfg.sheetName; const firstDataIdx = cfg.firstDataIdx || 0;
     const refCol = colsMap.ref, amtCol = colsMap.amt, paidCol = colsMap.paid, paidDateCol = colsMap.paidDate, soldeCol = colsMap.solde, chequeCol = colsMap.cheque;
-    console.log('refCol:', refCol, 'valeur attendue: index de la colonne B');
     if (refCol == null || refCol < 0) { this.setState({ msg: { kind: 'error', text: 'Colonne « N° de facture » non réglée — impossible de retrouver la ligne.' } }); return; }
     if (paidCol == null || paidCol < 0) { this.setState({ msg: { kind: 'error', text: 'Colonne « Total payé » non réglée dans Paramètres → Régler l’écriture.' } }); return; }
     const hi = this._writableHandleFor('operations');
-    console.log('handle:', hi);
     if (!hi || !hi.handle) { this.setState({ msg: { kind: 'error', text: `Fichier « ${cfg.fileName || this.writeSourceLabel('operations')} » non connecté.` } }); return; }
     const mode = pd.mode || 'virement';
     if (mode === 'cheque' && (!pd.chequier || !pd.chequeNum)) { this.setState({ msg: { kind: 'error', text: 'Choisissez un chéquier et un numéro de chèque.' } }); return; }
@@ -2246,7 +2224,6 @@ class Component {
       const file = await hi.handle.getFile();
       const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
       const buf = await file.arrayBuffer();
-      console.log('avant locate');
       const loc = await this._locateRowByRef(buf, sheetName, refCol, pd.ref, firstDataIdx);
       if (!loc) { this.setState({ msg: { kind: 'error', text: `Ligne « ${pd.ref} » introuvable dans « ${sheetName} » — actualisez puis réessayez.` } }); return; }
       const wb = await this.readWorkbook(buf.slice(0));
