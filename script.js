@@ -2001,6 +2001,11 @@ class Component {
     const target = targetByName[sheetName];
     if (!target || !files[target]) throw new Error(`feuille « ${sheetName} » introuvable dans le fichier`);
     const xml = dec.decode(files[target]);
+    // Résolution des chaînes partagées (t="s") — <v>N</v> est alors un INDEX dans
+    // xl/sharedStrings.xml, pas la valeur. Même mécanique que xlsxToText/readWorkbook.
+    const sharedStrings = [];
+    const ssx = dec.decode(files['xl/sharedStrings.xml'] || new Uint8Array());
+    if (ssx) { const siRe = /<si>([\s\S]*?)<\/si>/g; let sm; while (sm = siRe.exec(ssx)) { const t = [...sm[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(x => x[1]).join(''); sharedStrings.push(this.unxml(t)); } }
     const xmlPreview = xml.substring(0, 2000);
     console.log('[XML brut début feuille]:', xmlPreview);
     const coln = r => { const mm = r.match(/^([A-Z]+)/); let v = 0; for (const c of mm[1]) v = v * 26 + (c.charCodeAt(0) - 64); return v; };
@@ -2023,7 +2028,14 @@ class Component {
       const cr = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g; let cm; let val = '';
       while (cm = cr.exec(rm[0])) {
         const refM = cm[1].match(/\br="([A-Z]+)\d+"/); if (!refM) continue;
-        if (coln(refM[1]) === refColIdx + 1) { const body = cm[2] || ''; const vm = body.match(/<v>([\s\S]*?)<\/v>/); const im = body.match(/<t[^>]*>([\s\S]*?)<\/t>/); val = (im ? im[1] : (vm ? vm[1] : '')).trim(); break; }
+        if (coln(refM[1]) === refColIdx + 1) {
+          const body = cm[2] || '';
+          const typeM = cm[1].match(/\bt="([^"]+)"/); const typ = typeM ? typeM[1] : '';
+          const vm = body.match(/<v>([\s\S]*?)<\/v>/); const im = body.match(/<t[^>]*>([\s\S]*?)<\/t>/);
+          val = im ? im[1] : (vm ? (typ === 's' ? (sharedStrings[+vm[1]] || '') : vm[1]) : '');
+          val = String(val).trim();
+          break;
+        }
       }
       if (previewVals.length < 10) {
         previewVals.push(val);
