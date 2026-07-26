@@ -815,9 +815,8 @@ class Component {
       const hi = this._writableHandleFor('operations'); if (!hi || !hi.handle) return;
       const f = await hi.handle.getFile(); const buf = await f.arrayBuffer();
       const wb = await this.readWorkbook(buf.slice(0)); const sh = wb.find(s => s.name === cfg.sheetName); if (!sh) return;
-      const hdrIdx = cfg.headerRowIdx != null ? cfg.headerRowIdx : 1; const hdr = sh.rows[hdrIdx] || [];
-      let invCol = -1; for (let c = 0; c < hdr.length; c++) { const h = this._norm(hdr[c]); if (h.indexOf('facture') >= 0 || h.indexOf('numero') >= 0) { invCol = c; break; } }
-      if (invCol < 0) return;
+      const hdrIdx = cfg.headerRowIdx != null ? cfg.headerRowIdx : 1;
+      const invCol = cfg.cols.ref; if (invCol == null || invCol < 0) return; // colonne déjà réglée dans Paramètres
       const anchorKeys = this._anchorFieldsFor('operations');
       const af = this.writeFieldsFor('operations').filter(x => cfg.cols[x.key] != null && anchorKeys.indexOf(x.key) >= 0);
       const idxs = af.length ? af.map(x => cfg.cols[x.key]) : Object.keys(cfg.cols).map(k => cfg.cols[k]);
@@ -839,9 +838,8 @@ class Component {
       const hi = this._writableHandleFor('ventes'); if (!hi || !hi.handle) return;
       const f = await hi.handle.getFile(); const buf = await f.arrayBuffer();
       const wb = await this.readWorkbook(buf.slice(0)); const sh = wb.find(s => s.name === cfg.sheetName); if (!sh) return;
-      const hdrIdx = cfg.headerRowIdx != null ? cfg.headerRowIdx : 0; const hdr = sh.rows[hdrIdx] || [];
-      let invCol = -1; for (let c = 0; c < hdr.length; c++) { const h = this._norm(hdr[c]); if (h.indexOf('facture') >= 0 || h.indexOf('numero') >= 0) { invCol = c; break; } }
-      if (invCol < 0) return;
+      const hdrIdx = cfg.headerRowIdx != null ? cfg.headerRowIdx : 0;
+      const invCol = cfg.cols.ref; if (invCol == null || invCol < 0) return; // colonne déjà réglée dans Paramètres
       const fields = this.writeFieldsFor('ventes').filter(x => cfg.cols[x.key] != null && cfg.cols[x.key] >= 0);
       const venteAnchorKeys = this._anchorFieldsFor('ventes');
       const venteDateKey = Object.keys(this._dateFieldsFor('ventes')).find(k => venteAnchorKeys.indexOf(k) >= 0 && cfg.cols[k] != null && cfg.cols[k] >= 0);
@@ -905,6 +903,7 @@ class Component {
     if (grenke) cards.push({ l: '🏦 Grenke', v: `Financé ${this.fmt(grenke.montant)} · restant dû ${this.fmt(grenke.rest)}` });
     this._appendNextBlankRow('ventes'); // CORRECTION 2 — best-effort, ne bloque jamais la saisie
     this.setState({ venteDraft: this.venteDefault(), compFan: { mode: 'vente', title: `Vente de ${lignes.length} espèce${lignes.length > 1 ? 's' : ''} à ${client}`, cards } });
+    this.refreshVenteInvoiceNumber(); // BUG 2 — met à jour le prochain n° après écriture, sans refresh manuel
   }
   // ---------- Enregistrement des paiements Grenke (manuel, structure feuille « Grenke ») ----------
   _grkNextId() { const ids = [...this.grenkeManRows().map(r => +r.id || 0), ...this.venteSaisieRows().map(r => +r.id || 0), ...this.payTrackRows().map(r => +r.id || 0)]; return (ids.length ? Math.max(...ids) : 141) + 1; }
@@ -1062,6 +1061,7 @@ class Component {
     // pour ne jamais lire/écrire le fichier « operations » en même temps que ces étapes). Best-effort.
     if (s.pecheur === 'ok') this._appendNextBlankRow('operations');
     this.setState({ compFan: { mode: 'achat', title: anyFail ? `Achat de ${rec.pecheur || ''} — ⚠ une étape a échoué (voir ci-dessous)` : `Achat de ${rec.pecheur || ''} — enregistré, toutes les étapes OK ✓`, cards } });
+    if (s.pecheur === 'ok') this.refreshAchatInvoiceNumber(); // BUG 2 — met à jour le prochain n° après écriture, sans refresh manuel
   }
   // Appelé UNIQUEMENT après une écriture Excel confirmée et vérifiée.
   async _achatAfterWrite(rec, cqIndex, cqNum) {
