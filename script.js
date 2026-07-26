@@ -1620,7 +1620,7 @@ class Component {
     } catch (e) { return null; }
   }
   async patchXlsxFile(origBuf, editsBySheetName, opts) {
-    const _refuseFormula = !!(opts && opts.refuseFormula); const _formulaHit = [];
+    const _refuseFormula = !!(opts && opts.refuseFormula); const _formulaHit = []; const _skipped = {}; // { sheetName: Set(colIdx) }
     const files = await this.unzipAll(origBuf);
     const dec = new TextDecoder(); const enc = new TextEncoder();
     const _mark = (opts && opts.markStyle) ? this._buildMarkStyler(dec.decode(files['xl/styles.xml'] || new Uint8Array())) : null;
@@ -1669,7 +1669,11 @@ class Component {
           const exist = out.match(cellRe);
           if (exist) {
             const styleM = exist[0].match(/\ss="(\d+)"/);
-            if (/<f[\s>/]/.test(exist[0])) { if (_refuseFormula) { _formulaHit.push(ref); continue; } formulaOverwritten = true; }
+            if (/<f[\s>/]/.test(exist[0])) {
+              // Colonne cible en formule : on la SAUTE (silencieux), on continue avec les autres colonnes.
+              if (_refuseFormula) { _formulaHit.push(ref); (_skipped[sheetName] = _skipped[sheetName] || new Set()).add(Number(cStr)); continue; }
+              formulaOverwritten = true;
+            }
             out = out.replace(cellRe, cellXmlFor(ref, styleAttrFor(styleM ? Number(styleM[1]) : null), rowEdits[cStr]));
           } else {
             // cellule absente (vide à l'origine) : insertion avant la première cellule de colonne
@@ -1688,7 +1692,6 @@ class Component {
       if (unmatched.length) throw new Error(`ligne introuvable dans « ${sheetName} » (le fichier a peut-être changé entre-temps) — sauvegarde annulée`);
       files[target] = enc.encode(xml);
     }
-    if (_formulaHit.length) throw new Error(`écriture refusée : ${_formulaHit.join(', ')} contient une formule — rien n'a été écrit`);
     if (_mark) { const ns = _mark.finalize(); if (ns) files['xl/styles.xml'] = enc.encode(ns); } // police bleue Andale sur les cellules écrites
     if (formulaOverwritten && files['xl/calcChain.xml']) {
       delete files['xl/calcChain.xml'];
@@ -1699,7 +1702,9 @@ class Component {
       }
     }
     const entries = Object.keys(files).map(name => ({ name, bytes: files[name] }));
-    return this.zipBuild(entries, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    const blob = await this.zipBuild(entries, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    blob._skippedFormulaCols = _skipped; blob._skippedFormulaRefs = _formulaHit; // annotation légère (colonnes ignorées, pour la vérification et le message)
+    return blob;
   }
 
   // ================= Écriture dans les vrais fichiers Excel (mode paramétrage) =================
@@ -2653,12 +2658,14 @@ class Component {
       // 4) RELECTURE DE CONTRÔLE (avant même d'écrire le disque : on vérifie le blob produit)
       const wbChk = await this.readWorkbook(patchedBuf.slice(0));
       const mismatches = [];
+      const skippedCols = patched._skippedFormulaCols || {}; // colonnes ignorées (formule) : exclues de la vérification
       if (pw.editsBySheet) {
-        (pw.verifyTargets || []).forEach(t => { const sh = wbChk.find(s => s.name === t.sheetName); const got = (sh && sh.rows[t.rowIdx]) ? sh.rows[t.rowIdx][t.col] : ''; const exp = String(t.val); const g = String(got == null ? '' : got); if (exp !== g && !(this._vNum(exp) === this._vNum(g) && exp !== '' && g !== '')) mismatches.push(`${t.sheetName}!${this._colLetter(t.col + 1)}${t.rowIdx + 1} attendu ${exp} ≠ lu ${g}`); });
+        (pw.verifyTargets || []).forEach(t => { if (skippedCols[t.sheetName] && skippedCols[t.sheetName].has(t.col)) return; const sh = wbChk.find(s => s.name === t.sheetName); const got = (sh && sh.rows[t.rowIdx]) ? sh.rows[t.rowIdx][t.col] : ''; const exp = String(t.val); const g = String(got == null ? '' : got); if (exp !== g && !(this._vNum(exp) === this._vNum(g) && exp !== '' && g !== '')) mismatches.push(`${t.sheetName}!${this._colLetter(t.col + 1)}${t.rowIdx + 1} attendu ${exp} ≠ lu ${g}`); });
       } else {
         const shChk = wbChk.find(s => s.name === pw.sheetName);
         const rowChk = shChk ? (shChk.rows[pw.previewIdx] || []) : [];
-        Object.keys(pw.colVals).forEach(ci => { const exp = String(pw.colVals[ci]); const got = String(rowChk[+ci] == null ? '' : rowChk[+ci]); if (exp !== got && !(this._vNum(exp) === this._vNum(got) && exp !== '' && got !== '')) mismatches.push(this._colLetter(+ci + 1) + ' attendu ' + exp + ' ≠ lu ' + got); });
+        const skippedHere = skippedCols[pw.sheetName];
+        Object.keys(pw.colVals).forEach(ci => { if (skippedHere && skippedHere.has(+ci)) return; const exp = String(pw.colVals[ci]); const got = String(rowChk[+ci] == null ? '' : rowChk[+ci]); if (exp !== got && !(this._vNum(exp) === this._vNum(got) && exp !== '' && got !== '')) mismatches.push(this._colLetter(+ci + 1) + ' attendu ' + exp + ' ≠ lu ' + got); });
       }
       if (mismatches.length) throw new Error('vérification échouée (' + mismatches.slice(0, 4).join(' ; ') + ')');
       // 5) ÉCRITURE DISQUE — RÈGLE 11 : si le fichier est ouvert/verrouillé dans Excel, on le signale
