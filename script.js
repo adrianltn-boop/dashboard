@@ -886,7 +886,7 @@ class Component {
   _venteWriteReady() { const cfg = this.writeMapFor('ventes'); if (!cfg || !cfg.enabled || !cfg.cols) return false; const hi = this._writableHandleFor('ventes'); return !!(hi && hi.handle); }
   // Appelé UNIQUEMENT après une écriture Excel confirmée et vérifiée : met à jour les vues
   // opérationnelles internes (suivi de paiement, Grenke) et affiche le récapitulatif.
-  _venteAfterWrite(rec) {
+  async _venteAfterWrite(rec) {
     const id = rec.id, client = rec.client, ttc = rec.ttc, datePrev = rec.datePrev, delai = rec.delai, ht = rec.ht, grenke = rec.grenke, lignes = rec.lignes;
     const arr = this.venteSaisieRows().slice(); const i = arr.findIndex(x => String(x.id) === String(id));
     if (i >= 0) arr[i] = rec; else arr.unshift(rec);
@@ -901,9 +901,9 @@ class Component {
     const espLbl = lignes.map(l => `${l.espece} ${l.calibre} −${l.poids} kg`).join(' · ');
     const cards = [{ l: '📦 Stock', v: espLbl }, { l: '🏷️ Facture client', v: `${rec.num} — ${client} · TTC ${this.fmt(ttc)} · ${delai === 0 ? 'comptant' : 'délai ' + delai + ' j'} · prévue ${this.dd((datePrev.split('-')[2] || 0))}/${this.dd((datePrev.split('-')[1] || 0))}` }, { l: '💳 Suivi de paiement', v: `Solde à encaisser ${this.fmt(ttc)}` }, { l: '📊 Analytique', v: `Chiffre d'affaires (HT) ${this.fmt(ht)}` }];
     if (grenke) cards.push({ l: '🏦 Grenke', v: `Financé ${this.fmt(grenke.montant)} · restant dû ${this.fmt(grenke.rest)}` });
-    this._appendNextBlankRow('ventes'); // CORRECTION 2 — best-effort, ne bloque jamais la saisie
+    await this._appendNextBlankRow('ventes'); // CORRECTION 2 — best-effort, ne bloque jamais la saisie ; awaited pour que le refresh ci-dessous lise le fichier à jour
     this.setState({ venteDraft: this.venteDefault(), compFan: { mode: 'vente', title: `Vente de ${lignes.length} espèce${lignes.length > 1 ? 's' : ''} à ${client}`, cards } });
-    this.refreshVenteInvoiceNumber(); // BUG 2 — met à jour le prochain n° après écriture, sans refresh manuel
+    await this.refreshVenteInvoiceNumber(); // BUG 2 — après la ligne vierge ET après la réinitialisation du draft
   }
   // ---------- Enregistrement des paiements Grenke (manuel, structure feuille « Grenke ») ----------
   _grkNextId() { const ids = [...this.grenkeManRows().map(r => +r.id || 0), ...this.venteSaisieRows().map(r => +r.id || 0), ...this.payTrackRows().map(r => +r.id || 0)]; return (ids.length ? Math.max(...ids) : 141) + 1; }
@@ -1045,7 +1045,7 @@ class Component {
     this.requestAppendPreview('operations', this.achatWriteValues(rec), { refuseFormula: true, step: 'pecheur', after: () => this._achatAfterWrite(rec, cqIndex, cqNum) });
   }
   // Bilan consolidé de l'achat : ne s'affiche que lorsque TOUTES les étapes sont résolues (ok/échec/annulé/sans objet).
-  _maybeFinalizeAchat() {
+  async _maybeFinalizeAchat() {
     const s = this._achatSteps; if (!s) return;
     if (s.pecheur === 'attente' || s.cheque === 'attente' || s.stock === 'attente') return; // encore en cours
     this._achatSteps = null;
@@ -1059,9 +1059,9 @@ class Component {
     ];
     // CORRECTION 2 — seulement si l'écriture pêcheur a réussi (et une fois chèque/stock résolus,
     // pour ne jamais lire/écrire le fichier « operations » en même temps que ces étapes). Best-effort.
-    if (s.pecheur === 'ok') this._appendNextBlankRow('operations');
+    if (s.pecheur === 'ok') await this._appendNextBlankRow('operations'); // awaited pour que le refresh lise le fichier à jour
     this.setState({ compFan: { mode: 'achat', title: anyFail ? `Achat de ${rec.pecheur || ''} — ⚠ une étape a échoué (voir ci-dessous)` : `Achat de ${rec.pecheur || ''} — enregistré, toutes les étapes OK ✓`, cards } });
-    if (s.pecheur === 'ok') this.refreshAchatInvoiceNumber(); // BUG 2 — met à jour le prochain n° après écriture, sans refresh manuel
+    if (s.pecheur === 'ok') await this.refreshAchatInvoiceNumber(); // BUG 2 — après la ligne vierge ET après la réinitialisation du draft (achatDraft déjà remis à défaut plus tôt dans _achatAfterWrite)
   }
   // Appelé UNIQUEMENT après une écriture Excel confirmée et vérifiée.
   async _achatAfterWrite(rec, cqIndex, cqNum) {
