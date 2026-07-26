@@ -442,7 +442,7 @@ class Component {
   // Saisie comptable — espèces & calibres (repris de la maquette), palette et moyens de paiement
   static ESP = { 'Homard': ['4/6', '6/8', '8/10', '10/13', '13/16', '16+'], 'Langouste royale': ['6/8', '8/10', '10/13', '13/16', '16+'], 'Langouste rose': ['3/4', '4/6', '6/8'], 'Tourteau': ['4/6', '6/8', '8/10', '10/13', 'Pinces'], 'Langoustine': ['T1', 'T2', 'T3'], 'Araignée': ['Standard'], 'Velvet-crab': ['8/10'], 'Bouquet': ['Standard'], 'Bigorneau': ['Standard'], 'Crabe vert': ['Standard'] };
   static ESP_PAL = { 'Homard': '#1a56db', 'Langouste royale': '#be185d', 'Langouste rose': '#db2777', 'Tourteau': '#b45309', 'Langoustine': '#0f766e', 'Araignée': '#7c3aed', 'Velvet-crab': '#0e7490', 'Bouquet': '#4d7c0f', 'Bigorneau': '#9a3412', 'Crabe vert': '#15803d' };
-  static PAYMODES = { virement: { lbl: 'Virement', ic: '🏦', col: '#1a56db' }, cheque: { lbl: 'Chèque', ic: '🧾', col: '#0f766e' }, liquide: { lbl: 'Liquide', ic: '💶', col: '#7c3aed' } };
+  static PAYMODES = { virement: { lbl: 'Virement', ic: '🏦', col: '#1a56db' }, cheque: { lbl: 'Chèque', ic: '🧾', col: '#0f766e' }, liquide: { lbl: 'Liquide', ic: '💶', col: '#7c3aed' }, autre: { lbl: 'Autre', ic: '❓', col: '#64748b' } };
 
   // Relevé bancaire (démo) : {d ISO, label, amt signé}
   static BANQUE = [
@@ -1014,7 +1014,7 @@ class Component {
   chequierRows() { return Array.isArray(this.state.chequiers) ? this.state.chequiers : []; }
   saveChequiers(arr) { this.setState({ chequiers: arr }); this.saveJSON(Component.CHEQ_KEY, arr); }
   _achatNextId() { const fromFile = (this.state.ops || []).map(r => +String(r.ref || '').replace(/\D/g, '') || 0); const ids = [...fromFile, ...this.achatSaisieRows().map(r => +r.id || 0)]; return (ids.length ? Math.max(...ids) : 0) + 1; }
-  achatDefault() { return { id: this._achatNextId(), num: '', pecheur: '', date: this._payTodayIso(), lignes: [this.compEmptyLigne()], paiement: 'virement', chequier: '', chequeNum: '', editing: false }; }
+  achatDefault() { return { id: this._achatNextId(), num: '', pecheur: '', date: this._payTodayIso(), lignes: [this.compEmptyLigne()], paiement: 'virement', chequier: '', chequeNum: '', observation: '', editing: false }; }
   setAchatField(k, v) { const d = this.state.achatDraft || this.achatDefault(); const patch = { ...d, [k]: v }; if (k === 'paiement' && v === 'cheque') { const first = this.chequierRows()[0]; if (first && !patch.chequier) { patch.chequier = first.nom; patch.chequeNum = String(first.next || ''); } } if (k === 'chequier') { const cq = this.chequierRows().find(c => c.nom === v); if (cq) patch.chequeNum = String(cq.next || ''); } this.setState({ achatDraft: patch }); }
   setAchatLigne(i, k, v) { const d = this.state.achatDraft || this.achatDefault(); const lignes = (d.lignes || []).map((l, j) => { if (j !== i) return l; const nl = { ...l, [k]: v }; if (k === 'espece') nl.calibre = (Component.ESP[v] || ['Standard'])[0]; return nl; }); this.setState({ achatDraft: { ...d, lignes } }); }
   addAchatLigne() { const d = this.state.achatDraft || this.achatDefault(); this.setState({ achatDraft: { ...d, lignes: [...(d.lignes || []), this.compEmptyLigne()] } }); }
@@ -1035,11 +1035,13 @@ class Component {
     if (i >= 0) { this.setState({ msg: { kind: 'error', text: 'La modification d’un achat déjà enregistré n’est pas encore disponible : corrigez-le directement dans votre fichier Excel.' } }); return; }
     if (!this._achatWriteReady()) { this.setState({ msg: { kind: 'error', text: 'Avant d’enregistrer un achat, réglez l’écriture de votre fichier : Paramètres → « Achat pêcheur » → « Régler l’écriture », puis connectez le fichier. Rien n’est enregistré tant que le fichier ne peut pas être écrit.' } }); return; }
     const paiement = d.paiement || 'virement';
+    const observation = (d.observation || '').trim();
+    if (paiement === 'autre' && !observation) { this.setState({ msg: { kind: 'error', text: 'Indiquez une observation (ex. BB, accord verbal…) pour le moyen de paiement « Autre ».' } }); return; }
     // Le n° de chèque est PRÉ-CALCULÉ (sans incrémenter le chéquier) ; l'incrément n'a lieu qu'après succès.
     let chequier = '', chequeNum = '', cqIndex = -1, cqNum = 0;
     if (paiement === 'cheque') { const arrCq = this.chequierRows(); let ci = arrCq.findIndex(c => c.nom === d.chequier); if (ci < 0) ci = 0; const cq = arrCq[ci];
       if (cq) { chequier = cq.nom; cqNum = this._vNum(d.chequeNum) || cq.next || 0; chequeNum = String(cqNum); cqIndex = ci; } }
-    const rec = { id, num: (d.num || '').trim(), pecheur, date: d.date || '', lignes, total, paiement, chequier, chequeNum };
+    const rec = { id, num: (d.num || '').trim(), pecheur, date: d.date || '', lignes, total, paiement, chequier, chequeNum, observation };
     // RÈGLE 8/13 : suivi de l'état de chaque étape de la transaction (aucune annonce « enregistré » tant que tout n'est pas résolu).
     this._achatSteps = { rec, pecheur: 'attente', cheque: paiement === 'cheque' ? 'attente' : 'na', stock: this._stockDir ? 'attente' : 'na' };
     this.requestAppendPreview('operations', this.achatWriteValues(rec), { refuseFormula: true, step: 'pecheur', after: () => this._achatAfterWrite(rec, cqIndex, cqNum) });
@@ -1722,6 +1724,7 @@ class Component {
       { key: 'partner', label: 'Nom du pêcheur / client' }, { key: 'amt', label: 'Montant' },
       { key: 'cheque', label: 'N° de chèque' }, { key: 'paid', label: 'Total payé' },
       { key: 'paidDate', label: 'Date de paiement' }, { key: 'solde', label: 'Solde' },
+      { key: 'etat', label: 'État (chèque encaissé)' },
       { key: 'annule', label: 'Annulé' },
     ];
     if (kind === 'ventes') return [
@@ -1748,7 +1751,7 @@ class Component {
   // RÈGLE 3 : colonnes MÉTIER PRINCIPALES pour repérer la dernière vraie écriture (jamais le n° de facture pré-imprimé).
   _anchorFieldsFor(kind) { return kind === 'ventes' ? ['date', 'ht', 'partner'] : kind === 'operations' ? ['date', 'amt', 'partner'] : kind === 'factures' ? ['date', 'ttc', 'partner'] : []; }
   // Valeurs d'une saisie, par clé de champ (toutes les clés candidates ; l'ajout n'écrit QUE les colonnes réellement mappées).
-  achatWriteValues(rec) { return { ref: rec.num || '', annee: String(rec.date || '').slice(0, 4), date: rec.date || '', partner: rec.pecheur || '', amt: rec.total, cheque: rec.paiement === 'cheque' ? (rec.chequeNum || '') : '', paid: '', paidDate: '', solde: rec.total }; }
+  achatWriteValues(rec) { return { ref: rec.num || '', annee: String(rec.date || '').slice(0, 4), date: rec.date || '', partner: rec.pecheur || '', amt: rec.total, cheque: rec.paiement === 'cheque' ? (rec.chequeNum || '') : (rec.paiement === 'autre' ? (rec.observation || '') : ''), paid: '', paidDate: '', solde: rec.total }; }
   venteWriteValues(rec) { const delai = Math.max(0, Math.min(30, Math.round(this._vNum(rec.delai)))); return { ref: rec.num || '', partner: rec.client || '', date: rec.date || '', ht: rec.ht, tvaIr: rec.tvaIrl, tvaFr: rec.tvaFr, grenke: rec.grenke ? rec.grenke.montant : '', ttc: rec.ttc, delai: delai ? (delai + ' jrs') : '', datePrev: rec.datePrev || '', status: '' }; }
 
   // Handle inscriptible d'une source connectée (fichier surveillé prioritaire, sinon cache d'import).
@@ -2071,6 +2074,34 @@ class Component {
     this.setState({ annule: m });
     this.saveJSON(Component.ANNULE_KEY, m);
   }
+  // Module Paiement pêcheur — bascule « Passé » / « Non passé » d'un chèque déjà émis : écrit
+  // littéralement « PAYER » (ou vide, pour revenir en arrière) dans la colonne « État » réglée
+  // dans Paramètres. Même mécanique d'aperçu/sauvegarde/relecture que requestCancelPreview.
+  async requestChequeEtatPreview(ref, restore) {
+    const cfg = this.writeMapFor('operations');
+    if (!cfg || !cfg.enabled || !cfg.cols) { this.setState({ msg: { kind: 'error', text: `Écriture non réglée pour « ${this.writeSourceLabel('operations')} » — réglez-la dans Paramètres.` } }); return; }
+    const colsMap = cfg.cols, sheetName = cfg.sheetName, firstDataIdx = cfg.firstDataIdx || 0;
+    const etatCol = colsMap.etat;
+    if (etatCol == null || etatCol < 0) { this.setState({ msg: { kind: 'error', text: `Aucune colonne « État » réglée pour « ${this.writeSourceLabel('operations')} » — ajoutez-la dans Paramètres → Régler l'écriture.` } }); return; }
+    const refCol = colsMap.ref;
+    if (refCol == null || refCol < 0) { this.setState({ msg: { kind: 'error', text: 'Colonne « N° de facture » non réglée — impossible de retrouver la ligne.' } }); return; }
+    const hi = this._writableHandleFor('operations');
+    if (!hi || !hi.handle) { this.setState({ msg: { kind: 'error', text: `Fichier « ${cfg.fileName || this.writeSourceLabel('operations')} » non connecté. Reconnectez-le dans Paramètres.` } }); return; }
+    try {
+      const okPerm = await this._ensureWritePermission(hi.handle);
+      if (!okPerm) { this.setState({ msg: { kind: 'error', text: `Autorisation d'écriture refusée sur « ${hi.name} ». Rien n'a été modifié.` } }); return; }
+      const file = await hi.handle.getFile();
+      const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
+      const buf = await file.arrayBuffer();
+      const loc = await this._locateRowByRef(buf, sheetName, refCol, ref, firstDataIdx);
+      if (!loc) { this.setState({ msg: { kind: 'error', text: `Ligne « ${ref} » introuvable dans « ${sheetName} » — actualisez puis réessayez.` } }); return; }
+      const colVals = { [etatCol]: restore ? '' : 'PAYER' };
+      this._pendingWrite = { kind: 'operations', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: 'patch', colVals, refuseFormula: true, after: () => this.setState({ msg: { kind: 'ok', text: `Statut du chèque de la facture ${ref} mis à jour.` } }) };
+      this.setState({ writePreview: { kind: 'etat', fileName: hi.name, sheetName, excelRow: loc.excelRow, rows: [{ label: 'État', col: this._colLetter(etatCol + 1), value: restore ? '(case vidée)' : 'PAYER' }], status: null, restore: !!restore, refLabel: ref } });
+    } catch (e) {
+      this.setState({ msg: { kind: 'error', text: `Préparation impossible : ${(e && e.message) || 'erreur'}. Rien n'a été modifié.` } });
+    }
+  }
   cancelAppendWrite() { const st = this._pendingWrite && this._pendingWrite.step; this._pendingWrite = null; this.setState({ writePreview: null }); if (st && this._achatSteps) { this._achatSteps[st] = 'annulé'; this._maybeFinalizeAchat(); } this._runNextWrite(); }
   // « Noter plus tard » (modale Fichier ouvert) : mémorise la saisie en attente (métadonnées seulement —
   // buf/handle non sérialisables ne sont pas stockés) puis abandonne comme un Annuler classique.
@@ -2157,7 +2188,7 @@ class Component {
     }
   }
 
-  paiementDefault() { return { ref: '', pecheur: '', mode: 'comptant', montant: '', chequier: '', chequeNum: '' }; }
+  paiementDefault() { return { ref: '', pecheur: '', mode: 'virement', montant: '', chequier: '', chequeNum: '', observation: '' }; }
   setPaiementField(k, v) {
     const d = this.state.paiementDraft || this.paiementDefault(); const patch = { ...d, [k]: v };
     if (k === 'mode' && v === 'cheque') { const first = this.chequierRows()[0]; if (first && !patch.chequier) { patch.chequier = first.nom; patch.chequeNum = String(first.next || ''); } }
@@ -2185,8 +2216,9 @@ class Component {
     const hi = this._writableHandleFor('operations');
     console.log('handle:', hi);
     if (!hi || !hi.handle) { this.setState({ msg: { kind: 'error', text: `Fichier « ${cfg.fileName || this.writeSourceLabel('operations')} » non connecté.` } }); return; }
-    const mode = pd.mode || 'comptant';
+    const mode = pd.mode || 'virement';
     if (mode === 'cheque' && (!pd.chequier || !pd.chequeNum)) { this.setState({ msg: { kind: 'error', text: 'Choisissez un chéquier et un numéro de chèque.' } }); return; }
+    if (mode === 'autre' && !(pd.observation || '').trim()) { this.setState({ msg: { kind: 'error', text: 'Indiquez une observation (ex. BB, accord verbal…) pour le moyen de paiement « Autre ».' } }); return; }
     try {
       const okPerm = await this._ensureWritePermission(hi.handle);
       if (!okPerm) { this.setState({ msg: { kind: 'error', text: `Autorisation d'écriture refusée sur « ${hi.name} ». Rien n'a été modifié.` } }); return; }
@@ -2228,6 +2260,12 @@ class Component {
         editsBySheet[sheetName][loc.previewIdx + ':' + soldeCol] = nouveauSolde;
         verifyTargets.push({ sheetName, rowIdx: loc.previewIdx, col: soldeCol, val: nouveauSolde });
         preview.push({ label: 'Solde', col: colName(soldeCol), value: this.fmt(nouveauSolde) });
+      }
+      if (mode === 'autre' && chequeCol != null && chequeCol >= 0) {
+        const observation = (pd.observation || '').trim();
+        editsBySheet[sheetName][loc.previewIdx + ':' + chequeCol] = observation;
+        verifyTargets.push({ sheetName, rowIdx: loc.previewIdx, col: chequeCol, val: observation });
+        preview.push({ label: 'Chèque (observation)', col: colName(chequeCol), value: observation });
       }
       let chequeSheetName = null;
       if (mode === 'cheque') {
@@ -2625,7 +2663,7 @@ class Component {
       out.onFlCancel = () => this.cancelAppendWrite();
     }
     if (wp) {
-      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
+      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'etat' ? (wp.restore ? `Remettre à zéro le statut du chèque « ${wp.refLabel} » ?` : `Marquer le chèque « ${wp.refLabel} » comme passé ?`) : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
       out.wpSubText = wp.kind === 'stock'
         ? `${wp.title || ''} — je remplis le poids et le prix par espèce/calibre. Le prix moyen se recalcule tout seul (formule non touchée). Sauvegarde datée avant l'écriture.`
         : wp.kind === 'cheque'
@@ -2634,6 +2672,10 @@ class Component {
         ? (wp.restore
           ? `La colonne « Annulé » de la feuille « ${wp.sheetName} » sera vidée pour cette ligne — elle redevient active et recompte dans vos totaux. Une copie de sauvegarde datée est faite avant l'écriture.`
           : `« Annulé » sera écrit dans la colonne dédiée de la feuille « ${wp.sheetName} », uniquement pour cette ligne. La ligne n'est PAS supprimée : elle reste dans votre fichier, marquée annulée, exclue de vos totaux tant qu'elle n'est pas rétablie. Une copie de sauvegarde datée est faite avant l'écriture.`)
+        : wp.kind === 'etat'
+        ? (wp.restore
+          ? `La colonne « État » de la feuille « ${wp.sheetName} » sera vidée pour cette ligne. Une copie de sauvegarde datée est faite avant l'écriture.`
+          : `« PAYER » sera écrit dans la colonne « État » de la feuille « ${wp.sheetName} », uniquement pour cette ligne. Une copie de sauvegarde datée est faite avant l'écriture.`)
         : wp.kind === 'paiement'
         ? `Feuille(s) « ${wp.sheetName} » — met à jour Total payé / Date de paiement / Solde de l'achat, et complète la ligne du chéquier si un chèque est utilisé. Une copie de sauvegarde datée est faite avant l'écriture.`
         : wp.update
@@ -2642,7 +2684,7 @@ class Component {
       out.wpFileName = wp.fileName; out.wpSheetName = wp.sheetName; out.wpExcelRow = wp.excelRow;
       out.wpRows = (wp.rows || []).map(r => ({ label: r.label, col: r.col, value: r.value }));
       out.wpStatus = wp.status || ''; out.wpError = wp.error || ''; out.wpBusy = wp.status === 'writing';
-      out.wpBtnLabel = wp.status === 'writing' ? 'Écriture…' : (wpLocked ? '↻ Réessayer' : wp.kind === 'annule' ? (wp.restore ? 'Confirmer le rétablissement' : "Confirmer l'annulation") : wp.kind === 'paiement' ? 'Confirmer le paiement' : 'Confirmer et écrire');
+      out.wpBtnLabel = wp.status === 'writing' ? 'Écriture…' : (wpLocked ? '↻ Réessayer' : wp.kind === 'annule' ? (wp.restore ? 'Confirmer le rétablissement' : "Confirmer l'annulation") : wp.kind === 'etat' ? (wp.restore ? 'Confirmer la remise à zéro' : 'Confirmer « Passé »') : wp.kind === 'paiement' ? 'Confirmer le paiement' : 'Confirmer et écrire');
       out.wpConfirmStyle = wp.status === 'writing'
         ? "padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#8ab89a;border:none;font-family:inherit;cursor:wait"
         : "padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#15803d;border:none;cursor:pointer;font-family:inherit";
@@ -3247,7 +3289,7 @@ class Component {
 
   mapOperations(text) {
     const { rows, find } = this.parseTable(text);
-    const ci = { date: find('date'), ref: find('ref', 'piece', 'numero', 'n°'), type: find('type', 'sens', 'nature'), partner: find('partenaire', 'tiers', 'client', 'fournisseur', 'libelle', 'nom'), cat: find('categorie', 'famille', 'rubrique'), amt: find('montant', 'total', 'somme', 'valeur', 'amount', 'prix'), paid: find('paye', 'regle', 'cheque'), solde: find('solde', 'restant', 'reste'), status: find('statut', 'status', 'etat', 'reglement') };
+    const ci = { date: find('date'), ref: find('ref', 'piece', 'numero', 'n°'), type: find('type', 'sens', 'nature'), partner: find('partenaire', 'tiers', 'client', 'fournisseur', 'libelle', 'nom'), cat: find('categorie', 'famille', 'rubrique'), amt: find('montant', 'total', 'somme', 'valeur', 'amount', 'prix'), paid: find('paye', 'regle', 'cheque'), solde: find('solde', 'restant', 'reste'), status: find('statut', 'status', 'etat', 'reglement'), chq: find('cheque') };
     if (ci.date < 0 || ci.amt < 0) return { list: [], error: 'colonnes « Date » et « Montant » introuvables' };
     const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     const list = []; let skipped = 0;
@@ -3263,9 +3305,19 @@ class Component {
       if (solde != null) paid = Math.max(0, Math.round((gross - reste) * 100) / 100);
       let status = reste > 0.005 ? 'Non payé' : 'Payé';
       if (ci.status >= 0) { const st = norm(f[ci.status]); if (st.includes('retard') || st.includes('impay')) status = 'Retard'; }
-      list.push({ y: dt.y, m: dt.m, d: dt.d, ref: (ci.ref >= 0 && f[ci.ref]) || 'OP-' + (i + 1), type, partner: (ci.partner >= 0 && f[ci.partner]) || '—', cat: (ci.cat >= 0 && f[ci.cat]) || 'Autre', amt: type === 'Achat' ? -gross : gross, paid, reste, status }); });
+      const chq = ci.chq >= 0 ? String(f[ci.chq] == null ? '' : f[ci.chq]).trim() : '';
+      list.push({ y: dt.y, m: dt.m, d: dt.d, ref: (ci.ref >= 0 && f[ci.ref]) || 'OP-' + (i + 1), type, partner: (ci.partner >= 0 && f[ci.partner]) || '—', cat: (ci.cat >= 0 && f[ci.cat]) || 'Autre', amt: type === 'Achat' ? -gross : gross, paid, reste, status, chq }); });
     list.sort((a, b) => (b.y * 12 + b.m) - (a.y * 12 + a.m) || b.d - a.d);
     return { list, skipped };
+  }
+  // Détecte ce que contient la colonne « Chèque » d'une facture pêcheur : numéro pur, code
+  // virement (« BB »), observation libre, ou vide. Sert à adapter l'affichage/action du module Paiement.
+  _chequeKind(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return 'vide';
+    if (/^\d+$/.test(s)) return 'cheque_num';
+    if (/bb/i.test(s)) return 'virement_bb';
+    return 'texte';
   }
   mapFactures(text) {
     const { header, rows, find } = this.parseTable(text);
@@ -5320,17 +5372,23 @@ class Component {
     const impayesAchats = ops.filter(r => r.type === 'Achat' && (r.reste != null ? r.reste : Math.abs(r.amt)) > 0.005).map(r => {
       const reste = r.reste != null ? r.reste : Math.abs(r.amt);
       const selected = pmd.ref === r.ref;
-      return { ref: r.ref || '—', partner: r.partner || '—', montant: this.fmt(Math.abs(r.amt)), reste: this.fmt(reste), selected,
-        rowStyle: `display:grid;grid-template-columns:100px 1fr 110px 110px;gap:8px;align-items:center;padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;${selected ? `background:${soft};border:1px solid ${this.hexToRgba(accent, 0.35)}` : 'border:1px solid transparent'}`,
-        onSelect: () => this.selectPaiementAchat({ ref: r.ref, partner: r.partner }) };
+      const chequeKind = this._chequeKind(r.chq);
+      const chequeLabel = chequeKind === 'cheque_num' ? `🧾 Chèque n°${r.chq}` : chequeKind === 'virement_bb' ? '🏦 Virement émis' : chequeKind === 'texte' ? `📝 ${r.chq}` : '— à régler —';
+      const showEtatActions = chequeKind === 'cheque_num';
+      return { ref: r.ref || '—', partner: r.partner || '—', montant: this.fmt(Math.abs(r.amt)), reste: this.fmt(reste), selected, chequeLabel, showEtatActions,
+        rowStyle: `display:grid;grid-template-columns:90px 1fr 95px 95px 230px;gap:8px;align-items:center;padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;${selected ? `background:${soft};border:1px solid ${this.hexToRgba(accent, 0.35)}` : 'border:1px solid transparent'}`,
+        onSelect: () => this.selectPaiementAchat({ ref: r.ref, partner: r.partner }),
+        onPasse: e => { e.stopPropagation(); this.requestChequeEtatPreview(r.ref, false); },
+        onNonPasse: e => { e.stopPropagation(); this.requestChequeEtatPreview(r.ref, true); } };
     });
     const paiementEmpty = impayesAchats.length === 0;
-    const paiementModeOpts = [{ k: 'comptant', lbl: 'Comptant' }, { k: 'partiel', lbl: 'Partiel' }, { k: 'virement', lbl: 'Virement' }, { k: 'cheque', lbl: 'Chèque' }].map(m => ({ name: m.lbl, onClick: () => this.setPaiementField('mode', m.k), style: pmd.mode === m.k ? `flex:1;min-width:100px;padding:10px 14px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#0f766e;border:none;cursor:pointer;font-family:inherit` : `flex:1;min-width:100px;padding:10px 14px;border-radius:9px;font-size:13px;font-weight:600;color:#5b6b7f;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit` }));
-    const paiementIsPartiel = pmd.mode === 'partiel'; const paiementIsCheque = pmd.mode === 'cheque';
+    const paiementModeOpts = [{ k: 'virement', lbl: 'Virement' }, { k: 'cheque', lbl: 'Chèque' }, { k: 'liquide', lbl: 'Espèces' }, { k: 'autre', lbl: 'Autre' }, { k: 'partiel', lbl: 'Partiel' }].map(m => ({ name: m.lbl, onClick: () => this.setPaiementField('mode', m.k), style: pmd.mode === m.k ? `flex:1;min-width:100px;padding:10px 14px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#0f766e;border:none;cursor:pointer;font-family:inherit` : `flex:1;min-width:100px;padding:10px 14px;border-radius:9px;font-size:13px;font-weight:600;color:#5b6b7f;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit` }));
+    const paiementIsPartiel = pmd.mode === 'partiel'; const paiementIsCheque = pmd.mode === 'cheque'; const paiementIsAutre = pmd.mode === 'autre';
     const paiementSelectedLabel = pmd.ref ? `${pmd.ref} — ${pmd.pecheur}` : 'Aucune facture sélectionnée';
     const onPaiementMontant = e => this.setPaiementField('montant', e.target.value);
     const onPaiementChequier = e => this.setPaiementField('chequier', e.target.value);
     const onPaiementChequeNum = e => this.setPaiementField('chequeNum', e.target.value);
+    const onPaiementObservation = e => this.setPaiementField('observation', e.target.value);
     const onPaiementCommit = () => this.requestAchatPaiementPreview();
     const onPaiementReset = () => this.setState({ paiementDraft: null });
     // confirmation « écrit dans… »
@@ -5388,7 +5446,7 @@ class Component {
       onEspece: e => this.setAchatLigne(i, 'espece', e.target.value), onCalibre: e => this.setAchatLigne(i, 'calibre', e.target.value),
       onPoids: e => this.setAchatLigne(i, 'poids', e.target.value), onPrix: e => this.setAchatLigne(i, 'prixKg', e.target.value), onRemove: () => this.removeAchatLigne(i) }; });
     const achatDraftTotal = this.fmt(Math.round(adLignes.reduce((s, l) => s + this._vNum(l.poids) * this._vNum(l.prixKg), 0) * 100) / 100);
-    const achatDraft = { id: ad.id, num: ad.num || '', pecheur: ad.pecheur || '', date: ad.date || '', chequeNum: ad.chequeNum || '', chequier: ad.chequier || '' };
+    const achatDraft = { id: ad.id, num: ad.num || '', pecheur: ad.pecheur || '', date: ad.date || '', chequeNum: ad.chequeNum || '', chequier: ad.chequier || '', observation: ad.observation || '' };
     const achatNumHint = (ad.numFromFile && ad.num) ? `✓ prochaine facture du fichier${ad.numRow ? ' · ligne ' + ad.numRow : ''}` : '';
     const achatEditing = !!(this.state.achatDraft && this.state.achatDraft.editing);
     const onAchatNum = e => this.setAchatField('num', e.target.value);
@@ -5398,8 +5456,10 @@ class Component {
     const onAchatCommit = () => this.commitAchatSaisie();
     const onAchatReset = () => this.resetAchatDraft();
     const achatSaveLabel = achatEditing ? "Enregistrer les modifications" : "Enregistrer l'achat";
-    const compPayModes = ['virement', 'cheque', 'liquide'].map(k => { const PM = Component.PAYMODES[k]; const on = (ad.paiement || 'virement') === k; return { name: `${PM.ic} ${PM.lbl}`, onClick: () => this.setAchatField('paiement', k), style: on ? `padding:9px 16px;border-radius:9px;font-size:12.5px;font-weight:600;color:#fff;background:#b45309;border:1px solid #b45309;cursor:pointer;font-family:inherit` : `padding:9px 16px;border-radius:9px;font-size:12.5px;font-weight:500;color:#5b6b7f;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit` }; });
+    const compPayModes = ['virement', 'cheque', 'liquide', 'autre'].map(k => { const PM = Component.PAYMODES[k]; const on = (ad.paiement || 'virement') === k; return { name: `${PM.ic} ${PM.lbl}`, onClick: () => this.setAchatField('paiement', k), style: on ? `padding:9px 16px;border-radius:9px;font-size:12.5px;font-weight:600;color:#fff;background:#b45309;border:1px solid #b45309;cursor:pointer;font-family:inherit` : `padding:9px 16px;border-radius:9px;font-size:12.5px;font-weight:500;color:#5b6b7f;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit` }; });
     const achatIsCheque = (ad.paiement || 'virement') === 'cheque';
+    const achatIsAutre = (ad.paiement || 'virement') === 'autre';
+    const onAchatObservation = e => this.setAchatField('observation', e.target.value);
     const onAchatChequier = e => this.setAchatField('chequier', e.target.value);
     const onAchatChequeNum = e => this.setAchatField('chequeNum', e.target.value);
     const chequierOptions = this.chequierRows().length ? this.chequierRows().map(c => ({ value: c.nom, label: `${c.nom} — reste ${(c.total || 50) - (c.used || 0)}` })) : [{ value: '', label: '— aucun chéquier —' }];
@@ -7201,14 +7261,14 @@ class Component {
       payDelOpen, payDelName, onPayDelConfirm, onPayDelCancel,
       onHealthOpen: () => this.openHealthCheck(),
       isSaisieCompta, compTab, compIsAchat, compIsVente, compIsFourn, compIsPaiement,
-      impayesAchats, paiementEmpty, paiementModeOpts, paiementIsPartiel, paiementIsCheque, paiementSelectedLabel,
-      paiementDraft: pmd, onPaiementMontant, onPaiementChequier, onPaiementChequeNum, onPaiementCommit, onPaiementReset, chequierOptions,
+      impayesAchats, paiementEmpty, paiementModeOpts, paiementIsPartiel, paiementIsCheque, paiementIsAutre, paiementSelectedLabel,
+      paiementDraft: pmd, onPaiementMontant, onPaiementChequier, onPaiementChequeNum, onPaiementObservation, onPaiementCommit, onPaiementReset, chequierOptions,
       fournDraft, fournTypeTabs, fournSaveLabel, onFournFourn, onFournNum, onFournDate, onFournMontant, onFournCommit, onFournReset,
       compModeTabs, compFanShow, compFanStyle, compFanTitle, compFanCards, onCompFanClose: () => this.setState({ compFan: null }),
       compKpis, compStockGroups, compStockEmpty, compJournal, compJournalEmpty, compJcount, compStatPay, compStatPech, compStatPechEmpty, compChqBody, compChqEmpty,
       pecheurSuggest, clientSuggest,
       achatDraft, achatNumHint, achatDraftLignes, achatDraftTotal, achatEditing, achatSaveLabel, onAchatNum, onAchatPecheur, onAchatDate, onAchatAddLigne, onAchatCommit, onAchatReset,
-      compPayModes, achatIsCheque, onAchatChequier, onAchatChequeNum, chequierOptions, achatChqHint,
+      compPayModes, achatIsCheque, achatIsAutre, onAchatObservation, onAchatChequier, onAchatChequeNum, chequierOptions, achatChqHint,
       chequierDraftNom, chequierDraftStart, chequierDraftTotal, onChqNom, onChqStart, onChqTotal, onChqAdd,
       venteDraft, venteDraftLignes, venteDraftHt, venteDraftTtc, venteDelaiOptions, venteEditing, vsSaveLabel,
       onVSNum, onVSClient, onVSDate, onVSDelai, onVSTvaIrl, onVSTvaFr, onVSCommit, onVSReset, onVenteAddLigne, venteNumHint, venteNumHintStyle,
