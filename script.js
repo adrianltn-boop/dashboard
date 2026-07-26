@@ -2000,7 +2000,10 @@ class Component {
     const xml = dec.decode(files[target]);
     const coln = r => { const mm = r.match(/^([A-Z]+)/); let v = 0; for (const c of mm[1]) v = v * 26 + (c.charCodeAt(0) - 64); return v; };
     const want = this.nrm(refValue);
+    console.log('[_locateRowByRef] sheetName ciblé :', sheetName);
+    console.log('[_locateRowByRef] refValue cherché :', refValue);
     const rowsRe = /<row[^>]*>[\s\S]*?<\/row>/g; let rm; let rowIdx = -1;
+    const previewVals = [];
     while (rm = rowsRe.exec(xml)) {
       rowIdx++;
       if (rowIdx < firstDataIdx) continue;
@@ -2011,8 +2014,13 @@ class Component {
         const refM = cm[1].match(/\br="([A-Z]+)\d+"/); if (!refM) continue;
         if (coln(refM[1]) === refColIdx + 1) { const body = cm[2] || ''; const vm = body.match(/<v>([\s\S]*?)<\/v>/); const im = body.match(/<t[^>]*>([\s\S]*?)<\/t>/); val = (im ? im[1] : (vm ? vm[1] : '')).trim(); break; }
       }
+      if (previewVals.length < 5) {
+        previewVals.push(val);
+        if (previewVals.length === 5) console.log('[_locateRowByRef] 5 premières valeurs colonne refCol :', previewVals);
+      }
       if (val && this.nrm(val) === want) return { previewIdx: rowIdx, excelRow: rowNum };
     }
+    if (previewVals.length < 5) console.log('[_locateRowByRef] 5 premières valeurs colonne refCol :', previewVals);
     return null;
   }
   // Annulation visible (ou rétablissement) d'une ligne déjà enregistrée : on n'efface rien,
