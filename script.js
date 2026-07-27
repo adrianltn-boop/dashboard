@@ -2873,16 +2873,22 @@ class Component {
       console.log('[suivi] locate result:', loc);
       if (!loc) { console.log('[suivi] onglet non trouvé'); return failed(`Suivi des paiements non rempli : onglet « Suivi des paiements » introuvable dans « ${hi.name} ».`); }
       const sh = wb.find(s => s.name === loc.sheetName); const rows = sh.rows;
-      const anchorCol = loc.cols.numero;
-      console.log('[suivi] anchorCol (Numéro facture):', anchorCol);
-      if (anchorCol < 0) return failed(`Suivi des paiements non rempli : colonne « Numéro facture » introuvable dans « ${loc.sheetName} ».`);
+      // Numéro facture peut être PRÉ-IMPRIMÉ sur toutes les lignes (ex. INV-5691, INV-5692…) —
+      // ce n'est donc pas cette colonne qui indique une ligne libre. On se base sur Nom client
+      // (repli sur Montant TTC), forcément vides tant que la ligne n'est pas vraiment utilisée.
+      const anchorCol = loc.cols.client >= 0 ? loc.cols.client : loc.cols.ttc;
+      console.log('[suivi] anchorCol (Nom client / Montant TTC):', anchorCol);
+      if (anchorCol < 0) return failed(`Suivi des paiements non rempli : colonnes « Nom client » et « Montant TTC » introuvables dans « ${loc.sheetName} ».`);
       let rowIdx = -1; for (let r = loc.dataStart; r < Math.min(rows.length, loc.dataStart + 1000); r++) { const v = (rows[r] || [])[anchorCol]; if (v == null || String(v).trim() === '') { rowIdx = r; break; } }
       console.log('[suivi] rowIdx (1re ligne libre):', rowIdx);
       if (rowIdx < 0) return failed(`Suivi des paiements non rempli : pas de ligne libre dans « ${loc.sheetName} ».`);
       const edits = {}; const preview = []; const verifyTargets = [];
       const put = (colKey, label, val) => { const ci = loc.cols[colKey]; if (ci == null || ci < 0 || val === '' || val == null) return; edits[rowIdx + ':' + ci] = val; preview.push({ label, col: `${this._colLetter(ci + 1)}${rowIdx + 1}`, value: String(val) }); verifyTargets.push({ sheetName: loc.sheetName, rowIdx, col: ci, val }); };
       const putDate = (colKey, label, iso) => { const ci = loc.cols[colKey]; if (ci == null || ci < 0) return; const serial = this._excelSerial(iso); if (serial == null) return; edits[rowIdx + ':' + ci] = serial; preview.push({ label, col: `${this._colLetter(ci + 1)}${rowIdx + 1}`, value: this._isoToFr(iso) }); verifyTargets.push({ sheetName: loc.sheetName, rowIdx, col: ci, val: serial }); };
-      put('numero', 'Numéro facture', rec.num || '');
+      // Numéro facture pré-imprimé : jamais écrasé, on affiche juste ce qui est déjà là (même
+      // règle que pour les autres onglets pré-imprimés — voir requestAppendPreview, f.key==='ref').
+      const numCol = loc.cols.numero; const existingNum = numCol >= 0 ? String((rows[rowIdx] || [])[numCol] == null ? '' : (rows[rowIdx] || [])[numCol]).trim() : '';
+      if (numCol >= 0) { if (existingNum) preview.push({ label: 'Numéro facture', col: `${this._colLetter(numCol + 1)}${rowIdx + 1}`, value: existingNum + ' (déjà là)' }); else put('numero', 'Numéro facture', rec.num || ''); }
       put('client', 'Nom client', rec.client || '');
       put('ttc', 'Montant TTC', rec.ttc);
       if (rec.avoir) put('avoir', 'Avoir', rec.avoir);
