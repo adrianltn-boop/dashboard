@@ -1849,10 +1849,15 @@ class Component {
           if (!isNaN(numVal) && numVal <= 1) return false; // FILTRE 3 — date nulle Excel (série ≤ 1, ex. 00/01/1900) ou zéro, ignorée
           return !!cells[ci + 1];
         };
+        // FILTRE GLOBAL — si n'importe quelle cellule de la ligne (pas seulement les colonnes
+        // ancres) contient un libellé agrégat, toute la ligne est ignorée comme contenu métier.
+        const rowIsAgg = Object.values(cells).some(v => v && isAgg(normAgg(String(v))));
         // RÈGLE : une ligne pré-imprimée (n° de facture + année seuls) n'est PAS du contenu métier
         // réel. On exige une date ancre valide (> 1 en série Excel) ET au moins une AUTRE colonne
         // ancre renseignée (montant ou partenaire) — pas l'une ou l'autre seule.
-        if (dateColIdx != null && dateColIdx >= 0) {
+        if (rowIsAgg) {
+          hasContent = false;
+        } else if (dateColIdx != null && dateColIdx >= 0) {
           const dateOk = cellOk(dateColIdx);
           const otherOk = colIdxs.some(ci => ci !== dateColIdx && cellOk(ci));
           hasContent = dateOk && otherOk;
