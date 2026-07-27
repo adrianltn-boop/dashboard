@@ -2733,7 +2733,9 @@ class Component {
     for (let r = titleRow - 1; r >= Math.max(0, titleRow - 5); r--) { if ((rows[r] || []).some(c => this._norm(c).indexOf('prix') >= 0)) { hi = r; break; } }
     if (hi < 0) { for (let r = titleRow + 1; r < Math.min(rows.length, titleRow + 4); r++) { if ((rows[r] || []).some(c => this._norm(c).indexOf('prix') >= 0)) { hi = r; break; } } }
     console.log('[stockFind] titleRow:', titleRow, 'hi (en-tête PRIX):', hi);
-    if (hi < 0) return null;
+    // hi peut rester -1 ici (ex. en-tête unique partagé, trop loin de cette section) : on ne
+    // bloque pas — l'appelant (_stockResolve) peut réutiliser le headerIdx d'une autre section
+    // du même en-tête pour cette feuille.
     // Ligne total = contient "total" ET kw1 (ex. "TOTAL ACHAT - ENTREE"), distincte de la ligne titre.
     // Tolère le singulier (ex. "TOTAL COMMANDE SORTIE" alors que le titre de section dit "COMMANDES").
     const kw1Stem = kw1.endsWith('s') ? kw1.slice(0, -1) : kw1;
@@ -2756,8 +2758,15 @@ class Component {
     console.log('[stockResolve] section achat:', sectionAchat);
     const sectionVente = this._stockFindSection(rows, 'commandes', 'sortie');
     console.log('[stockResolve] section vente:', sectionVente);
-    const sec = context === 'vente' ? sectionVente : sectionAchat;
+    let sec = context === 'vente' ? sectionVente : sectionAchat;
     if (!sec) return null;
+    if (sec.headerIdx < 0) {
+      // En-tête (CLIENTS/calibres/PRIX) unique, partagé par les deux sections de la feuille :
+      // si cette section ne l'a pas trouvé à proximité, on réutilise celui de l'autre section.
+      const other = context === 'vente' ? sectionAchat : sectionVente;
+      if (other && other.headerIdx >= 0) sec = { ...sec, headerIdx: other.headerIdx };
+    }
+    if (sec.headerIdx < 0) return null;
     const hdr = rows[sec.headerIdx];
     const want = this._norm(hint.byCol ? hint.byCol : ((calibre && this._norm(calibre) !== 'standard') ? calibre : espece));
     let poidsCol = -1; for (let c = 0; c < hdr.length; c++) { const h = this._norm(hdr[c]); if (h === want || (hint.byCol && h.indexOf(want) >= 0)) { poidsCol = c; break; } }
