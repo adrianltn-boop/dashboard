@@ -16,6 +16,7 @@
 ## Consignes de Travail
 - **Validation :** Demande confirmation avant d'appliquer des modifications majeures ou d'effacer des pans entiers de code.
 - **Explications :** Fournis un résumé synthétique, clair et direct de ce qui a été supprimé ou corrigé à chaque étape.
+- **Compactage :** lancer /compact régulièrement (toutes les 30-40 échanges) pour préserver le contexte et économiser les tokens.
 
 ## Langue
 - Toutes les interactions dans le terminal, les retours de statut, les rapports d'erreurs et les commentaires de code doivent être rédigés exclusivement en **français**.
