@@ -2751,6 +2751,7 @@ class Component {
   // Aperçu de remplissage du stock (fichier de la semaine), déclenché après un achat ou une vente réussi(e).
   // context : 'achat' → section ACHAT-ENTREE, 'vente' → section COMMANDES-SORTIE.
   async requestStockPreview(rec, context) {
+    console.log('[stock] début requestStockPreview', rec.espece || rec.lignes, context);
     const ctx = context === 'vente' ? 'vente' : 'achat';
     // RÈGLE 8/13 : toute sortie en échec marque l'étape « stock » et clôt le bilan (achat uniquement — pour la vente, best-effort, non bloquant).
     const stockFailed = (txt) => { this.setState({ msg: { kind: 'error', text: txt } }); if (this._achatSteps) this._achatSteps.stock = 'fail'; this._runNextWrite(); this._maybeFinalizeAchat(); };
@@ -2763,7 +2764,7 @@ class Component {
       const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
       const buf = await file.arrayBuffer(); const wb = await this.readWorkbook(buf);
       const bySheet = {}; const unresolved = [];
-      (rec.lignes || []).forEach(l => { const t = this._stockResolve(wb, l.espece, l.calibre, ctx); if (!t) { unresolved.push(`${l.espece} ${l.calibre}`); return; }
+      (rec.lignes || []).forEach(l => { const t = this._stockResolve(wb, l.espece, l.calibre, ctx); console.log('[stock] resolve result:', t); if (!t) { unresolved.push(`${l.espece} ${l.calibre}`); return; }
         bySheet[t.sheetName] = bySheet[t.sheetName] || { t, cals: [] }; bySheet[t.sheetName].cals.push({ poidsCol: t.poidsCol, prixCol: t.prixCol, poids: l.poids, prix: l.prixKg, label: `${l.espece} ${l.calibre}` }); });
       const editsBySheet = {}; const preview = []; const verifyTargets = [];
       Object.keys(bySheet).forEach(sn => { const g = bySheet[sn]; const sh = wb.find(s => s.name === sn); const rows = sh.rows; const poidsCols = g.cals.map(c => c.poidsCol);
