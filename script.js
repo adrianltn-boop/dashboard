@@ -2704,18 +2704,20 @@ class Component {
   // Localise une section verticale (ACHAT-ENTREE ou COMMANDES-SORTIE) dans la colonne A : titre,
   // en-tête (ligne « ...PRIX... »), 1re ligne de données, et la ligne TOTAL qui borne la section
   // (jamais franchie — sert aussi de garde-fou si RESUMEE BENEFICES arrive avant un TOTAL trouvé).
+  // Un libellé peut se trouver dans n'importe quelle colonne de la ligne (ex. colonne D), pas
+  // uniquement en colonne A — on teste donc chaque cellule de la ligne, normalisée.
+  _stockRowHas(row, ...kws) { return (row || []).some(c => { const n = this._norm(c); return kws.every(k => n.indexOf(k) >= 0); }); }
   _stockFindSection(rows, kw1, kw2) {
     let titleRow = -1;
-    for (let r = 0; r < rows.length; r++) { const a = this._norm((rows[r] || [])[0]); if (a.indexOf(kw1) >= 0 && a.indexOf(kw2) >= 0) { titleRow = r; break; } }
+    for (let r = 0; r < rows.length; r++) { if (this._stockRowHas(rows[r], kw1, kw2)) { titleRow = r; break; } }
     if (titleRow < 0) return null;
     let hi = -1; for (let r = titleRow + 1; r < Math.min(rows.length, titleRow + 4); r++) { if ((rows[r] || []).some(c => this._norm(c).indexOf('prix') >= 0)) { hi = r; break; } }
     if (hi < 0) return null;
     let cmd = hi; for (let r = hi; r < Math.min(rows.length, hi + 6); r++) { if ((rows[r] || []).some(c => this._norm(c).indexOf('commande') >= 0)) { cmd = r; break; } }
     let totalRow = -1;
     for (let r = hi + 1; r < Math.min(rows.length, hi + 60); r++) {
-      const a = this._norm((rows[r] || [])[0]);
-      if (a.indexOf('total') >= 0) { totalRow = r; break; }
-      if (a.indexOf('resumee') >= 0 && a.indexOf('benefices') >= 0) break; // section suivante atteinte sans TOTAL trouvé → borne ici
+      if (this._stockRowHas(rows[r], 'total')) { totalRow = r; break; }
+      if (this._stockRowHas(rows[r], 'resumee', 'benefices')) break; // section suivante atteinte sans TOTAL trouvé → borne ici
     }
     return { titleRow, headerIdx: hi, dataStart: cmd + 1, totalRow };
   }
