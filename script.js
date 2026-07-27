@@ -901,7 +901,10 @@ class Component {
     const cards = [{ l: '📦 Stock', v: espLbl }, { l: '🏷️ Facture client', v: `${rec.num} — ${client} · TTC ${this.fmt(ttc)} · ${delai === 0 ? 'comptant' : 'délai ' + delai + ' j'} · prévue ${this.dd((datePrev.split('-')[2] || 0))}/${this.dd((datePrev.split('-')[1] || 0))}` }, { l: '💳 Suivi de paiement', v: `Solde à encaisser ${this.fmt(ttc)}` }, { l: '📊 Analytique', v: `Chiffre d'affaires (HT) ${this.fmt(ht)}` }];
     if (grenke) cards.push({ l: '🏦 Grenke', v: `Financé ${this.fmt(grenke.montant)} · restant dû ${this.fmt(grenke.rest)}` });
     await this._appendNextBlankRow('ventes'); // CORRECTION 2 — best-effort, ne bloque jamais la saisie ; awaited pour que le refresh ci-dessous lise le fichier à jour
-    if (this._stockDir) this.requestStockPreview(rec, 'vente'); // best-effort — une vente est déjà enregistrée, le stock ne doit jamais la remettre en cause
+    // Reporté en macro-tâche (comme _runNextWrite pour l'achat) : confirmAppendWrite fait encore
+    // this.setState({ writePreview: null, ... }) juste après la résolution de cette fonction — sans
+    // ce report, l'aperçu stock ouvert ici entrerait en course avec ce nettoyage sur le même state.
+    if (this._stockDir) setTimeout(() => { try { this.requestStockPreview(rec, 'vente'); } catch (e) {} }, 0); // best-effort — une vente est déjà enregistrée, le stock ne doit jamais la remettre en cause
     this.setState({ venteDraft: this.venteDefault(), compFan: { mode: 'vente', title: `Vente de ${lignes.length} espèce${lignes.length > 1 ? 's' : ''} à ${client}`, cards } });
     await this.refreshVenteInvoiceNumber(); // BUG 2 — après la ligne vierge ET après la réinitialisation du draft
   }
