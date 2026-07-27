@@ -2721,11 +2721,16 @@ class Component {
   }
   // Résout (feuille, section, colonnes) pour une espèce/calibre donnés, selon le contexte 'achat' ou 'vente'.
   _stockResolve(wb, espece, calibre, context) {
+    console.log('[stockResolve] feuilles disponibles:', wb.map(s => s.name));
     const hint = this._stockSheetHint(espece); if (!hint) return null;
     const sh = wb.find(s => { const n = this._norm(s.name); return n === hint.sheet || n.startsWith(hint.sheet) || n.indexOf(hint.sheet) >= 0; });
     if (!sh) return null;
     const rows = sh.rows;
-    const sec = context === 'vente' ? this._stockFindSection(rows, 'commandes', 'sortie') : this._stockFindSection(rows, 'achat', 'entree');
+    const sectionAchat = this._stockFindSection(rows, 'achat', 'entree');
+    console.log('[stockResolve] section achat:', sectionAchat);
+    const sectionVente = this._stockFindSection(rows, 'commandes', 'sortie');
+    console.log('[stockResolve] section vente:', sectionVente);
+    const sec = context === 'vente' ? sectionVente : sectionAchat;
     if (!sec) return null;
     const hdr = rows[sec.headerIdx];
     const want = this._norm(hint.byCol ? hint.byCol : ((calibre && this._norm(calibre) !== 'standard') ? calibre : espece));
