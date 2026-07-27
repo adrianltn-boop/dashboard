@@ -2716,7 +2716,7 @@ class Component {
     for (let i = 0; i < Math.min(40, rows.length); i++) {
       const has1 = rows[i].some(c => c && this._norm(String(c)).includes(this._norm(kw1)));
       const has2 = rows[i].some(c => c && this._norm(String(c)).includes(this._norm(kw2)));
-      if (has1 || has2) console.log('[stockFind] ligne', i, 'kw1:', has1, 'kw2:', has2, 'vals:', rows[i].filter(Boolean).slice(0, 5));
+      if (has1 || has2) console.log('[stockFind] ligne', i, 'kw1:', has1, 'kw2:', has2, 'vals COMPLETES:', rows[i].filter(v => v != null && v !== ''));
     }
     let titleRow = -1;
     for (let r = 0; r < rows.length; r++) { if (this._stockRowHas(rows[r], kw1, kw2)) { titleRow = r; break; } }
