@@ -2071,18 +2071,25 @@ class Component {
           for (let r = sloc.dataStart; r < rows2.length; r++) { const v = (rows2[r] || [])[sloc.cols.idFacture]; if (v != null && String(v).trim() === idStr) { rowIdx2 = r; break; } }
           const found = rowIdx2 >= 0;
           if (!found) {
-            // Pas de ligne pour cet ID : on en crée une en fin de tableau (jamais un trou plus
-            // haut), en recopiant les formules des colonnes calculées de la ligne précédente
-            // (B,C,D,F→N), décalées de +1 ligne. Prudence : seules les références relatives
+            // _locateAppendTarget est inadapté ici : il ignore volontairement les cellules en
+            // formule (Filtre 1), or B→N sont TOUTES des formules — il verrait chaque ligne comme
+            // vide. On cherche donc nous-mêmes la dernière ligne ayant du contenu dans N'IMPORTE
+            // QUELLE colonne (valeurs déjà résolues par readWorkbook, résultats de formule inclus),
+            // et on ajoute la nouvelle ligne juste après, en recopiant les formules de la ligne
+            // précédente (B,C,D,F→N) décalées de +1. Prudence : seules les références relatives
             // simples sont décalées (voir _suiviAppendRowWithFormulas).
-            console.log('[suivi] colIdxs:', [sloc.cols.idFacture]);
-            const loc2 = await this._locateAppendTarget(buf, sloc.sheetName, [sloc.cols.idFacture], sloc.dataStart);
-            if (loc2.mode === 'append') {
-              const patched = await this._suiviAppendRowWithFormulas(buf, sloc.sheetName, loc2.excelRow - 1, ['B', 'C', 'D', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']);
+            let lastContentIdx = -1;
+            for (let r = sloc.dataStart; r < rows2.length; r++) { if ((rows2[r] || []).some(c => String(c == null ? '' : c).trim() !== '')) lastContentIdx = r; }
+            const newIdx = lastContentIdx + 1;
+            console.log('[suivi] lastContentIdx (toutes colonnes):', lastContentIdx, '→ nouvelle ligne:', newIdx);
+            const rowNums = await this._suiviRowExcelNumbers(buf, sloc.sheetName);
+            const prevExcelRow = rowNums[newIdx - 1];
+            if (prevExcelRow != null) {
+              const patched = await this._suiviAppendRowWithFormulas(buf, sloc.sheetName, prevExcelRow, ['B', 'C', 'D', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']);
               buf = await patched.arrayBuffer();
               console.log('[suivi] après append, buf size:', buf.byteLength);
             }
-            rowIdx2 = loc2.previewIdx;
+            rowIdx2 = newIdx;
           }
           console.log('[suivi] rowIdx:', rowIdx2, 'mode:', found ? 'trouvé (ID existant)' : 'créée en fin de tableau');
           editsBySheet = { [sheetName]: {} }; verifyTargets = [];
@@ -2918,6 +2925,21 @@ class Component {
       ttc: find('montant', 'ttc'), avoir: find('avoir'), dateFac: find('date', 'facture'), dateEch: find('date', 'echeance'),
     };
     return { sheetName: sh.name, headerIdx: hi, dataStart: hi + 1, cols };
+  }
+  // Traduit chaque index de ligne séquentiel (previewIdx, comme partout ailleurs dans le fichier)
+  // en numéro Excel réel (attribut r=) — sans résoudre le contenu des cellules, juste le
+  // découpage des balises <row>, identique à _locateAppendTarget/patchXlsxFile.
+  async _suiviRowExcelNumbers(buf, sheetName) {
+    const files = await this.unzipAll(buf); const dec = new TextDecoder();
+    const wbXml = dec.decode(files['xl/workbook.xml'] || new Uint8Array());
+    const relsXml = dec.decode(files['xl/_rels/workbook.xml.rels'] || new Uint8Array());
+    const relMap = this._relMapOf(relsXml);
+    const targetByName = {}; [...wbXml.matchAll(/<sheet[^>]*name="([^"]*)"[^>]*r:id="(rId\d+)"/g)].forEach(m => { targetByName[this.unxml(m[1])] = relMap[m[2]]; });
+    const target = targetByName[sheetName]; if (!target || !files[target]) return [];
+    const xml = dec.decode(files[target]);
+    const nums = []; const rowsRe = /<row[^>]*>[\s\S]*?<\/row>/g; let rm;
+    while (rm = rowsRe.exec(xml)) { const opens = [...rm[0].matchAll(/<row\b[^>]*?\br="(\d+)"/g)]; nums.push(opens.length ? +opens[opens.length - 1][1] : nums.length + 1); }
+    return nums;
   }
   // Ajoute une nouvelle ligne en fin de tableau (« Suivi des paiements ») en recopiant les
   // FORMULES des colonnes indiquées depuis la ligne précédente, décalées de +1 ligne. Ne touche
