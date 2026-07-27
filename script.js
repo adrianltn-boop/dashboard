@@ -2879,26 +2879,28 @@ class Component {
   async requestSuiviPaiementPreview(rec) {
     console.log('[suivi] début', rec.num);
     const failed = (txt) => { this.setState({ msg: { kind: 'error', text: txt } }); this._runNextWrite(); };
+    console.log('[suivi] rec.idFacture:', rec.idFacture);
     if (!rec.idFacture) { this._runNextWrite(); return; } // pas d'ID Facture (colonne pas encore réglée) : rien à planter
     const hi = this._writableHandleFor('ventes');
+    console.log('[suivi] handle:', !!hi);
     if (!hi || !hi.handle) { this._runNextWrite(); return; } // fichier ventes non connecté : rien à faire, silencieux
     try {
       const okPerm = await this._ensureWritePermission(hi.handle); if (!okPerm) return failed(`Suivi des paiements non rempli : autorisation d'écriture refusée sur « ${hi.name} ».`);
       const file = await hi.handle.getFile();
       const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
       const buf = await file.arrayBuffer(); const wb = await this.readWorkbook(buf);
+      console.log('[suivi] wb:', wb ? wb.length + ' feuilles' : 'null');
       const loc = this._suiviLocate(wb);
-      console.log('[suivi] locate result:', loc);
+      console.log('[suivi] loc:', JSON.stringify(loc));
       if (!loc) { console.log('[suivi] onglet non trouvé'); return failed(`Suivi des paiements non rempli : onglet « Suivi des paiements » introuvable dans « ${hi.name} ».`); }
       if (loc.cols.idFacture < 0) return failed(`Suivi des paiements non rempli : colonne « ID Facture » introuvable dans « ${loc.sheetName} ».`);
       const sh = wb.find(s => s.name === loc.sheetName); const rows = sh.rows;
       // Ligne libre = Nom client (repli Montant TTC) vide — le Numéro facture peut être
       // pré-imprimé et l'ID Facture, colonne qu'on écrit nous-mêmes, ne peut pas servir de repère.
       const anchorCol = loc.cols.client >= 0 ? loc.cols.client : loc.cols.ttc;
-      console.log('[suivi] anchorCol (Nom client / Montant TTC):', anchorCol);
-      if (anchorCol < 0) return failed(`Suivi des paiements non rempli : colonnes « Nom client » et « Montant TTC » introuvables dans « ${loc.sheetName} ».`);
       let rowIdx = -1; for (let r = loc.dataStart; r < Math.min(rows.length, loc.dataStart + 1000); r++) { const v = (rows[r] || [])[anchorCol]; if (v == null || String(v).trim() === '') { rowIdx = r; break; } }
-      console.log('[suivi] rowIdx (1re ligne libre):', rowIdx);
+      console.log('[suivi] rowIdx:', rowIdx, 'anchorCol:', anchorCol);
+      if (anchorCol < 0) return failed(`Suivi des paiements non rempli : colonnes « Nom client » et « Montant TTC » introuvables dans « ${loc.sheetName} ».`);
       if (rowIdx < 0) return failed(`Suivi des paiements non rempli : pas de ligne libre dans « ${loc.sheetName} ».`);
       const edits = {}; const preview = []; const verifyTargets = [];
       const ci = loc.cols.idFacture;
