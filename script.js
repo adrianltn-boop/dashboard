@@ -2016,7 +2016,7 @@ class Component {
       if (!okPerm) { this.setState({ msg: { kind: 'error', text: `Autorisation d'écriture refusée sur « ${hi.name} ». Rien n'a été modifié.` } }); return; }
       const file = await hi.handle.getFile();
       const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0); // empreinte anti-écrasement
-      const buf = await file.arrayBuffer();
+      let buf = await file.arrayBuffer();
       const dateFields = this._dateFieldsFor(kind);
       const fields = this.writeFieldsFor(kind).filter(f => colsMap[f.key] != null && colsMap[f.key] >= 0);
       const colIdxs = fields.map(f => colsMap[f.key]);
@@ -2059,21 +2059,28 @@ class Component {
       let editsBySheet = null; let verifyTargets = null; let combinedSheetName = sheetName;
       if (kind === 'ventes' && opts.suiviAvoir && opts.suiviAvoir.avoir && opts.suiviAvoir.idFacture) {
         const sloc = this._suiviLocate(wbH);
-        const anchorCol2 = sloc && sloc.cols.avoir >= 0 ? (sloc.cols.client >= 0 ? sloc.cols.client : sloc.cols.ttc) : -1;
-        let rowIdx2 = -1;
-        if (anchorCol2 >= 0) { const rows2 = wbH.find(s => s.name === sloc.sheetName).rows; for (let r = sloc.dataStart; r < Math.min(rows2.length, sloc.dataStart + 1000); r++) { const v = (rows2[r] || [])[anchorCol2]; if (v == null || String(v).trim() === '') { rowIdx2 = r; break; } } }
-        if (rowIdx2 >= 0) {
+        if (sloc && sloc.cols.idFacture >= 0 && sloc.cols.avoir >= 0) {
+          // Ligne libre = colonne A (ID Facture) vide — même détecteur générique que partout
+          // ailleurs (_locateAppendTarget), qui sait aussi créer une nouvelle ligne en fin de
+          // tableau si aucune n'est libre (mode 'append').
+          const loc2 = await this._locateAppendTarget(buf, sloc.sheetName, [sloc.cols.idFacture], sloc.dataStart);
+          if (loc2.mode === 'append') {
+            // Pas de ligne libre : on en crée une, en recopiant les formules des colonnes
+            // calculées de la ligne précédente (B,C,D,F→N), décalées de +1 ligne. Prudence :
+            // seules les références relatives simples sont décalées (voir _suiviAppendRowWithFormulas).
+            const patched = await this._suiviAppendRowWithFormulas(buf, sloc.sheetName, loc2.excelRow - 1, ['B', 'C', 'D', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']);
+            buf = await patched.arrayBuffer();
+          }
+          const rowIdx2 = loc2.previewIdx;
           editsBySheet = { [sheetName]: {} }; verifyTargets = [];
           Object.keys(colVals).forEach(ci => { editsBySheet[sheetName][loc.previewIdx + ':' + ci] = colVals[ci]; verifyTargets.push({ sheetName, rowIdx: loc.previewIdx, col: +ci, val: colVals[ci] }); });
           editsBySheet[sloc.sheetName] = editsBySheet[sloc.sheetName] || {};
+          editsBySheet[sloc.sheetName][rowIdx2 + ':' + sloc.cols.idFacture] = opts.suiviAvoir.idFacture;
+          preview.push({ label: 'ID Facture (Suivi des paiements)', col: `${colName(sloc.cols.idFacture + 1)}${rowIdx2 + 1}`, value: String(opts.suiviAvoir.idFacture) });
+          verifyTargets.push({ sheetName: sloc.sheetName, rowIdx: rowIdx2, col: sloc.cols.idFacture, val: opts.suiviAvoir.idFacture });
           editsBySheet[sloc.sheetName][rowIdx2 + ':' + sloc.cols.avoir] = opts.suiviAvoir.avoir;
           preview.push({ label: 'Avoir (Suivi des paiements)', col: `${colName(sloc.cols.avoir + 1)}${rowIdx2 + 1}`, value: this.fmt(opts.suiviAvoir.avoir) });
           verifyTargets.push({ sheetName: sloc.sheetName, rowIdx: rowIdx2, col: sloc.cols.avoir, val: opts.suiviAvoir.avoir });
-          if (sloc.cols.idFacture >= 0) {
-            editsBySheet[sloc.sheetName][rowIdx2 + ':' + sloc.cols.idFacture] = opts.suiviAvoir.idFacture;
-            preview.push({ label: 'ID Facture (Suivi des paiements)', col: `${colName(sloc.cols.idFacture + 1)}${rowIdx2 + 1}`, value: String(opts.suiviAvoir.idFacture) });
-            verifyTargets.push({ sheetName: sloc.sheetName, rowIdx: rowIdx2, col: sloc.cols.idFacture, val: opts.suiviAvoir.idFacture });
-          }
           combinedSheetName = `${sheetName}, ${sloc.sheetName}`;
         }
       }
@@ -2894,6 +2901,46 @@ class Component {
       ttc: find('montant', 'ttc'), avoir: find('avoir'), dateFac: find('date', 'facture'), dateEch: find('date', 'echeance'),
     };
     return { sheetName: sh.name, headerIdx: hi, dataStart: hi + 1, cols };
+  }
+  // Ajoute une nouvelle ligne en fin de tableau (« Suivi des paiements ») en recopiant les
+  // FORMULES des colonnes indiquées depuis la ligne précédente, décalées de +1 ligne. Ne touche
+  // qu'aux colonnes demandées (les colonnes A/E, ID Facture/Avoir, sont écrites séparément par
+  // l'appelant). Prudence : une formule contenant une référence absolue ($B$5) ou externe
+  // (Feuille!B5) n'est PAS recopiée — mieux vaut une case vide qu'une formule fausse.
+  async _suiviAppendRowWithFormulas(buf, sheetName, prevRowNum, colLetters) {
+    const files = await this.unzipAll(buf); const dec = new TextDecoder(); const enc = new TextEncoder();
+    const wbXml = dec.decode(files['xl/workbook.xml'] || new Uint8Array());
+    const relsXml = dec.decode(files['xl/_rels/workbook.xml.rels'] || new Uint8Array());
+    const relMap = this._relMapOf(relsXml);
+    const targetByName = {}; [...wbXml.matchAll(/<sheet[^>]*name="([^"]*)"[^>]*r:id="(rId\d+)"/g)].forEach(m => { targetByName[this.unxml(m[1])] = relMap[m[2]]; });
+    const target = targetByName[sheetName];
+    if (!target || !files[target]) throw new Error(`feuille « ${sheetName} » introuvable — ajout annulé`);
+    let xml = dec.decode(files[target]);
+    const prevRowRe = new RegExp(`<row\\b[^>]*\\br="${prevRowNum}"[^>]*>[\\s\\S]*?<\\/row>`);
+    const prevRowMatch = xml.match(prevRowRe);
+    if (!prevRowMatch) throw new Error(`ligne ${prevRowNum} introuvable dans « ${sheetName} » — impossible de recopier les formules`);
+    const newRowNum = prevRowNum + 1;
+    const cellRe = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+    let cm; const newCells = [];
+    while (cm = cellRe.exec(prevRowMatch[0])) {
+      const refM = cm[1].match(/\br="([A-Z]+)\d+"/); if (!refM) continue;
+      const colLetter = refM[1]; if (colLetters.indexOf(colLetter) < 0) continue; // colonne non demandée
+      const body = cm[2] || ''; const fM = body.match(/<f\b[^>]*>([\s\S]*?)<\/f>/);
+      if (!fM) continue; // pas de formule sur cette cellule de la ligne précédente : rien à recopier
+      const formula = fM[1];
+      if (/\$|!/.test(formula)) continue; // référence absolue ou externe : trop risqué, on n'y touche pas
+      const shifted = formula.replace(/\b([A-Z]{1,3})(\d+)\b/g, (m2, col, num) => (+num === prevRowNum ? col + newRowNum : m2));
+      const styleM = cm[1].match(/\ss="(\d+)"/); const styleAttr = styleM ? ` s="${styleM[1]}"` : '';
+      newCells.push(`<c r="${colLetter}${newRowNum}"${styleAttr}><f>${shifted}</f></c>`);
+    }
+    const rowXml = `<row r="${newRowNum}">${newCells.join('')}</row>`;
+    if (/<\/sheetData>/.test(xml)) xml = xml.replace('</sheetData>', rowXml + '</sheetData>');
+    else if (/<sheetData\/>/.test(xml)) xml = xml.replace('<sheetData/>', `<sheetData>${rowXml}</sheetData>`);
+    else throw new Error('structure de feuille inattendue — ajout annulé');
+    xml = xml.replace(/(<dimension[^>]*ref=")([A-Z]+)(\d+):([A-Z]+)(\d+)("[^>]*\/>)/, (m, a, c1, r1, c2, r2, z) => a + c1 + r1 + ':' + c2 + Math.max(+r2, newRowNum) + z);
+    files[target] = enc.encode(xml);
+    const entries = Object.keys(files).map(name => ({ name, bytes: files[name] }));
+    return this.zipBuild(entries, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   }
   // ---------- Écran de paramétrage guidé (vous montrez chaque colonne) ----------
   _colLetter(n) { let s = '', m = n; while (m > 0) { const r = (m - 1) % 26; s = String.fromCharCode(65 + r) + s; m = Math.floor((m - 1) / 26); } return s; }
