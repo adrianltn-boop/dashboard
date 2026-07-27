@@ -2874,8 +2874,10 @@ class Component {
       if (!loc) { console.log('[suivi] onglet non trouvé'); return failed(`Suivi des paiements non rempli : onglet « Suivi des paiements » introuvable dans « ${hi.name} ».`); }
       const sh = wb.find(s => s.name === loc.sheetName); const rows = sh.rows;
       const anchorCol = loc.cols.numero;
+      console.log('[suivi] anchorCol (Numéro facture):', anchorCol);
       if (anchorCol < 0) return failed(`Suivi des paiements non rempli : colonne « Numéro facture » introuvable dans « ${loc.sheetName} ».`);
       let rowIdx = -1; for (let r = loc.dataStart; r < Math.min(rows.length, loc.dataStart + 1000); r++) { const v = (rows[r] || [])[anchorCol]; if (v == null || String(v).trim() === '') { rowIdx = r; break; } }
+      console.log('[suivi] rowIdx (1re ligne libre):', rowIdx);
       if (rowIdx < 0) return failed(`Suivi des paiements non rempli : pas de ligne libre dans « ${loc.sheetName} ».`);
       const edits = {}; const preview = []; const verifyTargets = [];
       const put = (colKey, label, val) => { const ci = loc.cols[colKey]; if (ci == null || ci < 0 || val === '' || val == null) return; edits[rowIdx + ':' + ci] = val; preview.push({ label, col: `${this._colLetter(ci + 1)}${rowIdx + 1}`, value: String(val) }); verifyTargets.push({ sheetName: loc.sheetName, rowIdx, col: ci, val }); };
