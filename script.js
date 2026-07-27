@@ -2075,10 +2075,12 @@ class Component {
             // haut), en recopiant les formules des colonnes calculées de la ligne précédente
             // (B,C,D,F→N), décalées de +1 ligne. Prudence : seules les références relatives
             // simples sont décalées (voir _suiviAppendRowWithFormulas).
+            console.log('[suivi] colIdxs:', [sloc.cols.idFacture]);
             const loc2 = await this._locateAppendTarget(buf, sloc.sheetName, [sloc.cols.idFacture], sloc.dataStart);
             if (loc2.mode === 'append') {
               const patched = await this._suiviAppendRowWithFormulas(buf, sloc.sheetName, loc2.excelRow - 1, ['B', 'C', 'D', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']);
               buf = await patched.arrayBuffer();
+              console.log('[suivi] après append, buf size:', buf.byteLength);
             }
             rowIdx2 = loc2.previewIdx;
           }
