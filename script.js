@@ -881,7 +881,15 @@ class Component {
     // les vues opérationnelles (suivi de paiement, Grenke) ne sont alimentées qu'APRÈS le succès.
     if (i >= 0) { this.setState({ msg: { kind: 'error', text: 'La modification d’une vente déjà enregistrée n’est pas encore disponible : corrigez-la directement dans votre fichier Excel. (Bientôt : correction guidée.)' } }); return; }
     if (!this._venteWriteReady()) { this.setState({ msg: { kind: 'error', text: 'Avant d’enregistrer une vente, réglez l’écriture de votre fichier : Paramètres → « Ventes client » → « Régler l’écriture », puis connectez le fichier. Rien n’est enregistré tant que le fichier ne peut pas être écrit.' } }); return; }
-    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, after: () => this._venteAfterWrite(rec), afterClose: () => { if (this._stockDir) this.requestStockPreview(rec, 'vente'); } });
+    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, after: () => this._venteAfterWrite(rec), afterClose: () => {
+      // Enchaînées à la suite (jamais en parallèle) via _writeQueue/_runNextWrite, comme pour
+      // l'achat : chacune ouvre son propre aperçu/confirmation, la suivante n'étant lancée
+      // qu'une fois la précédente terminée — jamais deux modales writePreview en même temps.
+      this._writeQueue = [];
+      if (this._stockDir) this._writeQueue.push(() => this.requestStockPreview(rec, 'vente'));
+      this._writeQueue.push(() => this.requestSuiviPaiementPreview(rec));
+      this._runNextWrite();
+    } });
   }
   _venteWriteReady() { const cfg = this.writeMapFor('ventes'); if (!cfg || !cfg.enabled || !cfg.cols) return false; const hi = this._writableHandleFor('ventes'); return !!(hi && hi.handle); }
   // Appelé UNIQUEMENT après une écriture Excel confirmée et vérifiée : met à jour les vues
@@ -2826,6 +2834,63 @@ class Component {
     } catch (e) { stockFailed(`Stock non rempli (${ctx}) : ${(e && e.message) || 'erreur'}.`); }
   }
 
+  // ---------- Circuit E — onglet dédié « Suivi des paiements » du fichier ventes ----------
+  // Onglet fixe (pas de réglage utilisateur comme pour operations/ventes/factures) : la feuille
+  // et ses en-têtes sont repérés par libellé, comme pour le stock.
+  _suiviLocate(wb) {
+    const sh = wb.find(s => { const n = this._norm(s.name); return n.indexOf('suivi') >= 0 && n.indexOf('paiement') >= 0; });
+    if (!sh) return null;
+    const rows = sh.rows;
+    let hi = -1;
+    for (let r = 0; r < Math.min(rows.length, 10); r++) {
+      const rr = rows[r] || [];
+      if (rr.some(c => this._norm(c).indexOf('id facture') >= 0) || (rr.some(c => this._norm(c).indexOf('numero facture') >= 0) && rr.some(c => this._norm(c).indexOf('client') >= 0))) { hi = r; break; }
+    }
+    if (hi < 0) return null;
+    const hdr = rows[hi];
+    const find = (...kws) => { for (let c = 0; c < hdr.length; c++) { const h = this._norm(hdr[c]); if (kws.every(k => h.indexOf(k) >= 0)) return c; } return -1; };
+    const cols = {
+      numero: find('numero', 'facture'), client: find('nom', 'client') >= 0 ? find('nom', 'client') : find('client'),
+      ttc: find('montant', 'ttc'), avoir: find('avoir'), dateFac: find('date', 'facture'), dateEch: find('date', 'echeance'),
+    };
+    return { sheetName: sh.name, headerIdx: hi, dataStart: hi + 1, cols };
+  }
+  // Aperçu de remplissage du « Suivi des paiements » (même fichier que la vente), déclenché après
+  // une vente réussie. Best-effort : n'écrit QUE les colonnes remplissables à la saisie (Numéro
+  // facture, Nom client, Montant TTC, Avoir, Date de facture, Date échéance) — jamais les colonnes
+  // calculées (Solde restant, Etat, Nombre de relance…), qui portent des formules Excel.
+  async requestSuiviPaiementPreview(rec) {
+    const failed = (txt) => { this.setState({ msg: { kind: 'error', text: txt } }); this._runNextWrite(); };
+    const hi = this._writableHandleFor('ventes');
+    if (!hi || !hi.handle) { this._runNextWrite(); return; } // fichier ventes non connecté : rien à faire, silencieux
+    try {
+      const okPerm = await this._ensureWritePermission(hi.handle); if (!okPerm) return failed(`Suivi des paiements non rempli : autorisation d'écriture refusée sur « ${hi.name} ».`);
+      const file = await hi.handle.getFile();
+      const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
+      const buf = await file.arrayBuffer(); const wb = await this.readWorkbook(buf);
+      const loc = this._suiviLocate(wb);
+      if (!loc) return failed(`Suivi des paiements non rempli : onglet « Suivi des paiements » introuvable dans « ${hi.name} ».`);
+      const sh = wb.find(s => s.name === loc.sheetName); const rows = sh.rows;
+      const anchorCol = loc.cols.numero;
+      if (anchorCol < 0) return failed(`Suivi des paiements non rempli : colonne « Numéro facture » introuvable dans « ${loc.sheetName} ».`);
+      let rowIdx = -1; for (let r = loc.dataStart; r < Math.min(rows.length, loc.dataStart + 1000); r++) { const v = (rows[r] || [])[anchorCol]; if (v == null || String(v).trim() === '') { rowIdx = r; break; } }
+      if (rowIdx < 0) return failed(`Suivi des paiements non rempli : pas de ligne libre dans « ${loc.sheetName} ».`);
+      const edits = {}; const preview = []; const verifyTargets = [];
+      const put = (colKey, label, val) => { const ci = loc.cols[colKey]; if (ci == null || ci < 0 || val === '' || val == null) return; edits[rowIdx + ':' + ci] = val; preview.push({ label, col: `${this._colLetter(ci + 1)}${rowIdx + 1}`, value: String(val) }); verifyTargets.push({ sheetName: loc.sheetName, rowIdx, col: ci, val }); };
+      const putDate = (colKey, label, iso) => { const ci = loc.cols[colKey]; if (ci == null || ci < 0) return; const serial = this._excelSerial(iso); if (serial == null) return; edits[rowIdx + ':' + ci] = serial; preview.push({ label, col: `${this._colLetter(ci + 1)}${rowIdx + 1}`, value: this._isoToFr(iso) }); verifyTargets.push({ sheetName: loc.sheetName, rowIdx, col: ci, val: serial }); };
+      put('numero', 'Numéro facture', rec.num || '');
+      put('client', 'Nom client', rec.client || '');
+      put('ttc', 'Montant TTC', rec.ttc);
+      if (rec.avoir) put('avoir', 'Avoir', rec.avoir);
+      putDate('dateFac', 'Date de facture', rec.date);
+      putDate('dateEch', 'Date échéance', rec.datePrev);
+      if (!Object.keys(edits).length) return failed(`Suivi des paiements non rempli : aucune colonne connue trouvée dans « ${loc.sheetName} ».`);
+      const editsBySheet = { [loc.sheetName]: edits };
+      this._pendingWrite = { kind: 'ventes', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: loc.sheetName, editsBySheet, verifyTargets, refuseFormula: true, after: () => this._runNextWrite() };
+      this.setState({ writePreview: { kind: 'suivi', fileName: hi.name, sheetName: loc.sheetName, excelRow: null, rows: preview, status: null, title: `Suivi des paiements — ligne ${rowIdx + 1}` } });
+    } catch (e) { failed(`Suivi des paiements non rempli : ${(e && e.message) || 'erreur'}.`); }
+  }
+
   // ---------- Écran de paramétrage guidé (vous montrez chaque colonne) ----------
   _colLetter(n) { let s = '', m = n; while (m > 0) { const r = (m - 1) % 26; s = String.fromCharCode(65 + r) + s; m = Math.floor((m - 1) / 26); } return s; }
   _pwSheetView(rows, savedHeaderIdx, rmapHeaderIdx) {
@@ -3124,9 +3189,11 @@ class Component {
       out.onFlCancel = () => this.cancelAppendWrite();
     }
     if (wp) {
-      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
+      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'suivi' ? `Compléter le suivi des paiements dans « ${wp.fileName} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
       out.wpSubText = wp.kind === 'stock'
         ? `${wp.title || ''} — je remplis le poids et le prix par espèce/calibre. Le prix moyen se recalcule tout seul (formule non touchée). Sauvegarde datée avant l'écriture.`
+        : wp.kind === 'suivi'
+        ? `${wp.title || ''} — je remplis uniquement Numéro facture / Nom client / Montant TTC / Avoir / Date de facture / Date échéance. Solde restant, Etat et les autres colonnes calculées ne sont jamais touchés (formules Excel). Sauvegarde datée avant l'écriture.`
         : wp.kind === 'cheque'
         ? `${wp.title || ''} — je remplis seulement les cases vides Date / Description / Montant de cette ligne déjà imprimée. Une copie de sauvegarde datée est faite avant l'écriture.`
         : wp.kind === 'annule'
