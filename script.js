@@ -2722,19 +2722,24 @@ class Component {
     let titleRow = -1;
     for (let r = 0; r < rows.length; r++) { if (this._stockRowHas(rows[r], kw1, kw2) && !this._stockRowHas(rows[r], 'total')) { titleRow = r; break; } }
     if (titleRow < 0) return null;
-    let hi = -1; for (let r = titleRow + 1; r < Math.min(rows.length, titleRow + 4); r++) { if ((rows[r] || []).some(c => this._norm(c).indexOf('prix') >= 0)) { hi = r; break; } }
+    // En-tête PRIX : cherché d'abord AVANT le titre (jusqu'à 5 lignes en remontant — cas réel où
+    // CLIENTS/calibres/PRIX précèdent la ligne "ACHAT - ENTREE"), sinon en repli après (ancien
+    // comportement, pour les fichiers où l'en-tête suit le titre de section).
+    let hi = -1;
+    for (let r = titleRow - 1; r >= Math.max(0, titleRow - 5); r--) { if ((rows[r] || []).some(c => this._norm(c).indexOf('prix') >= 0)) { hi = r; break; } }
+    if (hi < 0) { for (let r = titleRow + 1; r < Math.min(rows.length, titleRow + 4); r++) { if ((rows[r] || []).some(c => this._norm(c).indexOf('prix') >= 0)) { hi = r; break; } } }
     console.log('[stockFind] titleRow:', titleRow, 'hi (en-tête PRIX):', hi);
     if (hi < 0) return null;
-    let cmd = hi; for (let r = hi; r < Math.min(rows.length, hi + 6); r++) { if ((rows[r] || []).some(c => this._norm(c).indexOf('commande') >= 0)) { cmd = r; break; } }
     // Ligne total = contient "total" ET kw1 (ex. "TOTAL ACHAT - ENTREE"), distincte de la ligne titre.
     // Tolère le singulier (ex. "TOTAL COMMANDE SORTIE" alors que le titre de section dit "COMMANDES").
     const kw1Stem = kw1.endsWith('s') ? kw1.slice(0, -1) : kw1;
     let totalRow = -1;
-    for (let r = hi + 1; r < Math.min(rows.length, hi + 60); r++) {
+    for (let r = Math.max(hi, titleRow) + 1; r < Math.min(rows.length, Math.max(hi, titleRow) + 60); r++) {
       if (this._stockRowHas(rows[r], 'total') && (this._stockRowHas(rows[r], kw1) || this._stockRowHas(rows[r], kw1Stem))) { totalRow = r; break; }
       if (this._stockRowHas(rows[r], 'resumee', 'benefices')) break; // section suivante atteinte sans TOTAL trouvé → borne ici
     }
-    return { titleRow, headerIdx: hi, dataStart: cmd + 1, totalRow };
+    // La ligne titre EST la 1re ligne de données (ex. "ACHAT - ENTREE" + valeurs de la 1re saisie).
+    return { titleRow, headerIdx: hi, dataStart: titleRow, totalRow };
   }
   // Résout (feuille, section, colonnes) pour une espèce/calibre donnés, selon le contexte 'achat' ou 'vente'.
   _stockResolve(wb, espece, calibre, context) {
