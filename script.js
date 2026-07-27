@@ -898,14 +898,10 @@ class Component {
     // les vues opérationnelles (suivi de paiement, Grenke) ne sont alimentées qu'APRÈS le succès.
     if (i >= 0) { this.setState({ msg: { kind: 'error', text: 'La modification d’une vente déjà enregistrée n’est pas encore disponible : corrigez-la directement dans votre fichier Excel. (Bientôt : correction guidée.)' } }); return; }
     if (!this._venteWriteReady()) { this.setState({ msg: { kind: 'error', text: 'Avant d’enregistrer une vente, réglez l’écriture de votre fichier : Paramètres → « Ventes client » → « Régler l’écriture », puis connectez le fichier. Rien n’est enregistré tant que le fichier ne peut pas être écrit.' } }); return; }
-    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, after: () => this._venteAfterWrite(rec), afterClose: () => {
-      // Le suivi des paiements se remplit par formules Excel depuis l'onglet Factures — le
-      // dashboard ne plante qu'une ligne vierge avec l'ID Facture, pour que ces formules s'y
-      // accrochent (voir requestSuiviPaiementPreview).
-      this._writeQueue = [];
-      if (this._stockDir) this._writeQueue.push(() => this.requestStockPreview(rec, 'vente'));
-      this._writeQueue.push(() => this.requestSuiviPaiementPreview(rec));
-      this._runNextWrite();
+    // Avoir s'écrit dans « Suivi des paiements » (pas dans Factures), sur la ligne de l'ID Facture
+    // — même transaction editsBySheet que l'écriture Factures (voir requestAppendPreview).
+    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, suiviAvoir: avoir ? { avoir, idFacture: rec.idFacture } : null, after: () => this._venteAfterWrite(rec), afterClose: () => {
+      if (this._stockDir) { this._writeQueue = [() => this.requestStockPreview(rec, 'vente')]; this._runNextWrite(); }
     } });
   }
   _venteWriteReady() { const cfg = this.writeMapFor('ventes'); if (!cfg || !cfg.enabled || !cfg.cols) return false; const hi = this._writableHandleFor('ventes'); return !!(hi && hi.handle); }
@@ -1796,8 +1792,9 @@ class Component {
       { key: 'idFacture', label: 'ID Facture' }, { key: 'ref', label: 'Numéro de facture' }, { key: 'partner', label: 'Client' }, { key: 'date', label: 'Date' },
       { key: 'ht', label: 'Montant HT' }, { key: 'tvaIr', label: 'TVA Irlande' }, { key: 'tvaFr', label: 'TVA France' },
       { key: 'grenke', label: 'GRENKE' }, { key: 'ttc', label: 'TOTAL TTC' }, { key: 'delai', label: 'Délai' },
-      { key: 'datePrev', label: 'Date prévue' }, { key: 'status', label: 'Statut' },
-      { key: 'avoir', label: 'Avoir' }, { key: 'annule', label: 'Annulé' },
+      { key: 'datePrev', label: 'Date prévue' }, { key: 'status', label: 'Statut' }, { key: 'annule', label: 'Annulé' },
+      // Avoir n'est PAS ici : il s'écrit dans l'onglet « Suivi des paiements », pas « Factures »
+      // (voir requestAppendPreview, opts.suiviAvoir).
     ];
     if (kind === 'factures') return [
       { key: 'date', label: 'Date' }, { key: 'partner', label: 'Fournisseur' }, { key: 'ref', label: 'N° de facture' },
@@ -1817,7 +1814,7 @@ class Component {
   _anchorFieldsFor(kind) { return kind === 'ventes' ? ['date', 'ht', 'partner'] : kind === 'operations' ? ['date', 'amt', 'partner'] : kind === 'factures' ? ['date', 'ttc', 'partner'] : []; }
   // Valeurs d'une saisie, par clé de champ (toutes les clés candidates ; l'ajout n'écrit QUE les colonnes réellement mappées).
   achatWriteValues(rec) { const immediat = !!rec.paiementImmediat; return { ref: rec.num || '', annee: String(rec.date || '').slice(0, 4), date: rec.date || '', partner: rec.pecheur || '', amt: rec.total, cheque: rec.paiement === 'cheque' ? (rec.chequeNum || '') : (rec.paiement === 'autre' ? (rec.observation || '') : ''), paid: immediat ? rec.total : '', paidDate: immediat ? this._payTodayIso() : '', solde: immediat ? 0 : rec.total }; }
-  venteWriteValues(rec) { const delai = Math.max(0, Math.min(30, Math.round(this._vNum(rec.delai)))); return { idFacture: rec.idFacture || '', ref: rec.num || '', partner: rec.client || '', date: rec.date || '', ht: rec.ht, tvaIr: rec.tvaIrl, tvaFr: rec.tvaFr, grenke: rec.grenke ? rec.grenke.montant : '', ttc: rec.ttc, delai: delai ? (delai + ' jrs') : '', datePrev: rec.datePrev || '', status: '', avoir: rec.avoir || '' }; }
+  venteWriteValues(rec) { const delai = Math.max(0, Math.min(30, Math.round(this._vNum(rec.delai)))); return { idFacture: rec.idFacture || '', ref: rec.num || '', partner: rec.client || '', date: rec.date || '', ht: rec.ht, tvaIr: rec.tvaIrl, tvaFr: rec.tvaFr, grenke: rec.grenke ? rec.grenke.montant : '', ttc: rec.ttc, delai: delai ? (delai + ' jrs') : '', datePrev: rec.datePrev || '', status: '' }; }
 
   // Handle inscriptible d'une source connectée (fichier surveillé prioritaire, sinon cache d'import).
   _writableHandleFor(kind) {
@@ -2056,8 +2053,34 @@ class Component {
       // recalcule pas sur une écriture directe du XML — on autorise l'écrasement UNIQUEMENT sur
       // cette colonne, jamais sur les autres (protection anti-formule conservée partout ailleurs).
       const allowFormulaCols = (kind === 'operations' && colsMap.solde != null && colsMap.solde >= 0) ? { [sheetName]: new Set([colsMap.solde]) } : null;
-      this._pendingWrite = { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: loc.mode, colVals, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null };
-      this.setState({ writePreview: { kind, fileName: hi.name, sheetName, excelRow: loc.excelRow, rows: preview, status: null } });
+      // Vente avec Avoir : écriture combinée Factures + Suivi des paiements (Avoir uniquement, sur
+      // une ligne libre) dans UNE seule transaction editsBySheet — même mécanisme que l'achat pour
+      // ses écritures multi-feuilles (pêcheur + chéquier), un seul aperçu/confirmation.
+      let editsBySheet = null; let verifyTargets = null; let combinedSheetName = sheetName;
+      if (kind === 'ventes' && opts.suiviAvoir && opts.suiviAvoir.avoir && opts.suiviAvoir.idFacture) {
+        const sloc = this._suiviLocate(wbH);
+        const anchorCol2 = sloc && sloc.cols.avoir >= 0 ? (sloc.cols.client >= 0 ? sloc.cols.client : sloc.cols.ttc) : -1;
+        let rowIdx2 = -1;
+        if (anchorCol2 >= 0) { const rows2 = wbH.find(s => s.name === sloc.sheetName).rows; for (let r = sloc.dataStart; r < Math.min(rows2.length, sloc.dataStart + 1000); r++) { const v = (rows2[r] || [])[anchorCol2]; if (v == null || String(v).trim() === '') { rowIdx2 = r; break; } } }
+        if (rowIdx2 >= 0) {
+          editsBySheet = { [sheetName]: {} }; verifyTargets = [];
+          Object.keys(colVals).forEach(ci => { editsBySheet[sheetName][loc.previewIdx + ':' + ci] = colVals[ci]; verifyTargets.push({ sheetName, rowIdx: loc.previewIdx, col: +ci, val: colVals[ci] }); });
+          editsBySheet[sloc.sheetName] = editsBySheet[sloc.sheetName] || {};
+          editsBySheet[sloc.sheetName][rowIdx2 + ':' + sloc.cols.avoir] = opts.suiviAvoir.avoir;
+          preview.push({ label: 'Avoir (Suivi des paiements)', col: `${colName(sloc.cols.avoir + 1)}${rowIdx2 + 1}`, value: this.fmt(opts.suiviAvoir.avoir) });
+          verifyTargets.push({ sheetName: sloc.sheetName, rowIdx: rowIdx2, col: sloc.cols.avoir, val: opts.suiviAvoir.avoir });
+          if (sloc.cols.idFacture >= 0) {
+            editsBySheet[sloc.sheetName][rowIdx2 + ':' + sloc.cols.idFacture] = opts.suiviAvoir.idFacture;
+            preview.push({ label: 'ID Facture (Suivi des paiements)', col: `${colName(sloc.cols.idFacture + 1)}${rowIdx2 + 1}`, value: String(opts.suiviAvoir.idFacture) });
+            verifyTargets.push({ sheetName: sloc.sheetName, rowIdx: rowIdx2, col: sloc.cols.idFacture, val: opts.suiviAvoir.idFacture });
+          }
+          combinedSheetName = `${sheetName}, ${sloc.sheetName}`;
+        }
+      }
+      this._pendingWrite = editsBySheet
+        ? { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: combinedSheetName, editsBySheet, verifyTargets, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null }
+        : { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: loc.mode, colVals, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null };
+      this.setState({ writePreview: { kind, fileName: hi.name, sheetName: combinedSheetName, excelRow: editsBySheet ? null : loc.excelRow, rows: preview, status: null } });
     } catch (e) {
       const tail = kind === 'ventes' ? " La vente n'a PAS été enregistrée — corrigez le réglage de l'écriture puis recommencez." : ' Votre saisie est enregistrée dans le tableau de bord.';
       this.setState({ msg: { kind: 'error', text: `Préparation de l'écriture impossible : ${(e && e.message) || 'erreur'}.${tail}` } });
@@ -2872,49 +2895,6 @@ class Component {
     };
     return { sheetName: sh.name, headerIdx: hi, dataStart: hi + 1, cols };
   }
-  // Aperçu de plantage d'une ligne vierge dans « Suivi des paiements » (même fichier que la
-  // vente), déclenché après une vente réussie. N'écrit QUE l'ID Facture — jamais les autres
-  // colonnes (Nom client, Montant TTC, Solde restant, Etat…), qui se remplissent par formules
-  // Excel accrochées à cet ID depuis l'onglet Factures.
-  async requestSuiviPaiementPreview(rec) {
-    console.log('[suivi] début', rec.num);
-    const failed = (txt) => { this.setState({ msg: { kind: 'error', text: txt } }); this._runNextWrite(); };
-    console.log('[suivi] rec.idFacture:', rec.idFacture);
-    if (!rec.idFacture) { this._runNextWrite(); return; } // pas d'ID Facture (colonne pas encore réglée) : rien à planter
-    const hi = this._writableHandleFor('ventes');
-    console.log('[suivi] handle:', !!hi);
-    if (!hi || !hi.handle) { this._runNextWrite(); return; } // fichier ventes non connecté : rien à faire, silencieux
-    try {
-      const okPerm = await this._ensureWritePermission(hi.handle); if (!okPerm) return failed(`Suivi des paiements non rempli : autorisation d'écriture refusée sur « ${hi.name} ».`);
-      const file = await hi.handle.getFile();
-      const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
-      const buf = await file.arrayBuffer(); const wb = await this.readWorkbook(buf);
-      console.log('[suivi] wb:', wb ? wb.length + ' feuilles' : 'null');
-      const loc = this._suiviLocate(wb);
-      console.log('[suivi] loc:', JSON.stringify(loc));
-      if (!loc) { console.log('[suivi] onglet non trouvé'); return failed(`Suivi des paiements non rempli : onglet « Suivi des paiements » introuvable dans « ${hi.name} ».`); }
-      if (loc.cols.idFacture < 0) return failed(`Suivi des paiements non rempli : colonne « ID Facture » introuvable dans « ${loc.sheetName} ».`);
-      const sh = wb.find(s => s.name === loc.sheetName); const rows = sh.rows;
-      // Ligne libre = Nom client (repli Montant TTC) vide — le Numéro facture peut être
-      // pré-imprimé et l'ID Facture, colonne qu'on écrit nous-mêmes, ne peut pas servir de repère.
-      const anchorCol = loc.cols.client >= 0 ? loc.cols.client : loc.cols.ttc;
-      let rowIdx = -1; for (let r = loc.dataStart; r < Math.min(rows.length, loc.dataStart + 1000); r++) { const v = (rows[r] || [])[anchorCol]; if (v == null || String(v).trim() === '') { rowIdx = r; break; } }
-      console.log('[suivi] rowIdx:', rowIdx, 'anchorCol:', anchorCol);
-      if (anchorCol < 0) return failed(`Suivi des paiements non rempli : colonnes « Nom client » et « Montant TTC » introuvables dans « ${loc.sheetName} ».`);
-      if (rowIdx < 0) return failed(`Suivi des paiements non rempli : pas de ligne libre dans « ${loc.sheetName} ».`);
-      const edits = {}; const preview = []; const verifyTargets = [];
-      const ci = loc.cols.idFacture;
-      edits[rowIdx + ':' + ci] = rec.idFacture;
-      preview.push({ label: 'ID Facture', col: `${this._colLetter(ci + 1)}${rowIdx + 1}`, value: String(rec.idFacture) });
-      verifyTargets.push({ sheetName: loc.sheetName, rowIdx, col: ci, val: rec.idFacture });
-      if (!Object.keys(edits).length) return failed(`Suivi des paiements non rempli : aucune colonne connue trouvée dans « ${loc.sheetName} ».`);
-      const editsBySheet = { [loc.sheetName]: edits };
-      this._pendingWrite = { kind: 'ventes', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: loc.sheetName, editsBySheet, verifyTargets, refuseFormula: true, after: () => this._runNextWrite() };
-      console.log('[suivi] setState writePreview');
-      this.setState({ writePreview: { kind: 'suivi', fileName: hi.name, sheetName: loc.sheetName, excelRow: null, rows: preview, status: null, title: `Suivi des paiements — ligne vierge ${rowIdx + 1}` } });
-    } catch (e) { failed(`Suivi des paiements non rempli : ${(e && e.message) || 'erreur'}.`); }
-  }
-
   // ---------- Écran de paramétrage guidé (vous montrez chaque colonne) ----------
   _colLetter(n) { let s = '', m = n; while (m > 0) { const r = (m - 1) % 26; s = String.fromCharCode(65 + r) + s; m = Math.floor((m - 1) / 26); } return s; }
   _pwSheetView(rows, savedHeaderIdx, rmapHeaderIdx) {
@@ -3222,11 +3202,9 @@ class Component {
       out.onFlCancel = () => this.cancelAppendWrite();
     }
     if (wp) {
-      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'suivi' ? `Compléter le suivi des paiements dans « ${wp.fileName} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
+      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
       out.wpSubText = wp.kind === 'stock'
         ? `${wp.title || ''} — je remplis le poids et le prix par espèce/calibre. Le prix moyen se recalcule tout seul (formule non touchée). Sauvegarde datée avant l'écriture.`
-        : wp.kind === 'suivi'
-        ? `${wp.title || ''} — je plante uniquement l'ID Facture sur une ligne vierge, pour que les formules Excel de l'onglet (accrochées à cet ID depuis Factures) remplissent le reste. Aucune autre colonne n'est touchée. Sauvegarde datée avant l'écriture.`
         : wp.kind === 'cheque'
         ? `${wp.title || ''} — je remplis seulement les cases vides Date / Description / Montant de cette ligne déjà imprimée. Une copie de sauvegarde datée est faite avant l'écriture.`
         : wp.kind === 'annule'
