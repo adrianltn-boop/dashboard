@@ -2960,6 +2960,10 @@ class Component {
     const saved = this.writeMapFor(kind);
     const rmap = (this.state.mappings || {})[kind];
     let sheetIdx = saved && saved.sheetName ? wb.findIndex(s => s.name === saved.sheetName) : -1;
+    // spec.forceSheetIndex (ex. 'ventes' → toujours feuille 0, « Factures ») prime sur le mapping
+    // de LECTURE (rmap) : celui-ci peut légitimement pointer vers un autre onglet pour l'affichage
+    // (ex. « Suivi des paiements »), ce qui n'a rien à voir avec où l'ÉCRITURE doit avoir lieu.
+    if (sheetIdx < 0 && spec.forceSheetIndex != null && wb[spec.forceSheetIndex]) sheetIdx = spec.forceSheetIndex;
     if (sheetIdx < 0 && rmap && rmap.sheetName) sheetIdx = wb.findIndex(s => s.name === rmap.sheetName);
     if (sheetIdx < 0) sheetIdx = this.guessSheet(spec, wb);
     if (sheetIdx < 0) sheetIdx = 0;
@@ -2972,8 +2976,13 @@ class Component {
   }
   pwSetSheet(idx) {
     const pw = this.state.paramWrite; const wb = this._pwWb; if (!pw || !wb || !wb[idx]) return;
+    // Mémorise la progression de la feuille qu'on quitte, et restaure celle de la feuille de
+    // destination si elle existe déjà — changer de feuille ne doit plus effacer la progression.
+    const drafts = { ...(pw.sheetDrafts || {}), [pw.sheetName]: { cols: pw.cols, firstDataIdx: pw.firstDataIdx, phase: pw.phase, i: pw.i } };
+    const newSheetName = wb[idx].name;
+    const restored = drafts[newSheetName] || { cols: {}, firstDataIdx: null, phase: 'mapping', i: 0 };
     const view = this._pwSheetView(wb[idx].rows, null, null);
-    this.setState({ paramWrite: { ...pw, sheetIdx: idx, sheetName: wb[idx].name, ...view, cols: {}, firstDataIdx: null, phase: 'mapping', i: 0, editKey: null } });
+    this.setState({ paramWrite: { ...pw, sheetIdx: idx, sheetName: newSheetName, ...view, sheetDrafts: drafts, cols: { ...restored.cols }, firstDataIdx: restored.firstDataIdx, phase: restored.phase, i: restored.i, editKey: null } });
   }
   closeParamWrite() { this._pwWb = null; this.setState({ paramWrite: null }); }
   _pwColOfField(pw, key) { const c = pw.cols[key]; return (c == null || c < 0) ? null : c; }
