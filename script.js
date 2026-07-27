@@ -2718,15 +2718,20 @@ class Component {
       const has2 = rows[i].some(c => c && this._norm(String(c)).includes(this._norm(kw2)));
       if (has1 || has2) console.log('[stockFind] ligne', i, 'kw1:', has1, 'kw2:', has2, 'vals COMPLETES:', rows[i].filter(v => v != null && v !== ''));
     }
+    // Ligne titre = contient kw1 ET kw2 mais PAS "total" (sinon confusion avec "TOTAL ACHAT - ENTREE").
     let titleRow = -1;
-    for (let r = 0; r < rows.length; r++) { if (this._stockRowHas(rows[r], kw1, kw2)) { titleRow = r; break; } }
+    for (let r = 0; r < rows.length; r++) { if (this._stockRowHas(rows[r], kw1, kw2) && !this._stockRowHas(rows[r], 'total')) { titleRow = r; break; } }
     if (titleRow < 0) return null;
     let hi = -1; for (let r = titleRow + 1; r < Math.min(rows.length, titleRow + 4); r++) { if ((rows[r] || []).some(c => this._norm(c).indexOf('prix') >= 0)) { hi = r; break; } }
+    console.log('[stockFind] titleRow:', titleRow, 'hi (en-tête PRIX):', hi);
     if (hi < 0) return null;
     let cmd = hi; for (let r = hi; r < Math.min(rows.length, hi + 6); r++) { if ((rows[r] || []).some(c => this._norm(c).indexOf('commande') >= 0)) { cmd = r; break; } }
+    // Ligne total = contient "total" ET kw1 (ex. "TOTAL ACHAT - ENTREE"), distincte de la ligne titre.
+    // Tolère le singulier (ex. "TOTAL COMMANDE SORTIE" alors que le titre de section dit "COMMANDES").
+    const kw1Stem = kw1.endsWith('s') ? kw1.slice(0, -1) : kw1;
     let totalRow = -1;
     for (let r = hi + 1; r < Math.min(rows.length, hi + 60); r++) {
-      if (this._stockRowHas(rows[r], 'total')) { totalRow = r; break; }
+      if (this._stockRowHas(rows[r], 'total') && (this._stockRowHas(rows[r], kw1) || this._stockRowHas(rows[r], kw1Stem))) { totalRow = r; break; }
       if (this._stockRowHas(rows[r], 'resumee', 'benefices')) break; // section suivante atteinte sans TOTAL trouvé → borne ici
     }
     return { titleRow, headerIdx: hi, dataStart: cmd + 1, totalRow };
