@@ -2062,25 +2062,34 @@ class Component {
         const sloc = this._suiviLocate(wbH);
         console.log('[suivi] loc:', sloc ? sloc.sheetName : 'null');
         if (sloc && sloc.cols.idFacture >= 0 && sloc.cols.avoir >= 0) {
-          // Ligne libre = colonne A (ID Facture) vide — même détecteur générique que partout
-          // ailleurs (_locateAppendTarget), qui sait aussi créer une nouvelle ligne en fin de
-          // tableau si aucune n'est libre (mode 'append').
-          const loc2 = await this._locateAppendTarget(buf, sloc.sheetName, [sloc.cols.idFacture], sloc.dataStart);
-          if (loc2.mode === 'append') {
-            // Pas de ligne libre : on en crée une, en recopiant les formules des colonnes
-            // calculées de la ligne précédente (B,C,D,F→N), décalées de +1 ligne. Prudence :
-            // seules les références relatives simples sont décalées (voir _suiviAppendRowWithFormulas).
-            const patched = await this._suiviAppendRowWithFormulas(buf, sloc.sheetName, loc2.excelRow - 1, ['B', 'C', 'D', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']);
-            buf = await patched.arrayBuffer();
+          // Cherche une ligne EXISTANTE dont la colonne A vaut exactement cet ID Facture — pas
+          // la première case vide. Si trouvée, on n'y écrit que l'Avoir (l'ID y est déjà).
+          const idStr = String(opts.suiviAvoir.idFacture).trim();
+          const rows2 = wbH.find(s => s.name === sloc.sheetName).rows;
+          let rowIdx2 = -1;
+          for (let r = sloc.dataStart; r < rows2.length; r++) { const v = (rows2[r] || [])[sloc.cols.idFacture]; if (v != null && String(v).trim() === idStr) { rowIdx2 = r; break; } }
+          const found = rowIdx2 >= 0;
+          if (!found) {
+            // Pas de ligne pour cet ID : on en crée une en fin de tableau (jamais un trou plus
+            // haut), en recopiant les formules des colonnes calculées de la ligne précédente
+            // (B,C,D,F→N), décalées de +1 ligne. Prudence : seules les références relatives
+            // simples sont décalées (voir _suiviAppendRowWithFormulas).
+            const loc2 = await this._locateAppendTarget(buf, sloc.sheetName, [sloc.cols.idFacture], sloc.dataStart);
+            if (loc2.mode === 'append') {
+              const patched = await this._suiviAppendRowWithFormulas(buf, sloc.sheetName, loc2.excelRow - 1, ['B', 'C', 'D', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']);
+              buf = await patched.arrayBuffer();
+            }
+            rowIdx2 = loc2.previewIdx;
           }
-          const rowIdx2 = loc2.previewIdx;
-          console.log('[suivi] rowIdx:', rowIdx2, 'mode:', loc2.mode);
+          console.log('[suivi] rowIdx:', rowIdx2, 'mode:', found ? 'trouvé (ID existant)' : 'créée en fin de tableau');
           editsBySheet = { [sheetName]: {} }; verifyTargets = [];
           Object.keys(colVals).forEach(ci => { editsBySheet[sheetName][loc.previewIdx + ':' + ci] = colVals[ci]; verifyTargets.push({ sheetName, rowIdx: loc.previewIdx, col: +ci, val: colVals[ci] }); });
           editsBySheet[sloc.sheetName] = editsBySheet[sloc.sheetName] || {};
-          editsBySheet[sloc.sheetName][rowIdx2 + ':' + sloc.cols.idFacture] = opts.suiviAvoir.idFacture;
-          preview.push({ label: 'ID Facture (Suivi des paiements)', col: `${colName(sloc.cols.idFacture + 1)}${rowIdx2 + 1}`, value: String(opts.suiviAvoir.idFacture) });
-          verifyTargets.push({ sheetName: sloc.sheetName, rowIdx: rowIdx2, col: sloc.cols.idFacture, val: opts.suiviAvoir.idFacture });
+          if (!found) {
+            editsBySheet[sloc.sheetName][rowIdx2 + ':' + sloc.cols.idFacture] = opts.suiviAvoir.idFacture;
+            preview.push({ label: 'ID Facture (Suivi des paiements)', col: `${colName(sloc.cols.idFacture + 1)}${rowIdx2 + 1}`, value: String(opts.suiviAvoir.idFacture) });
+            verifyTargets.push({ sheetName: sloc.sheetName, rowIdx: rowIdx2, col: sloc.cols.idFacture, val: opts.suiviAvoir.idFacture });
+          }
           editsBySheet[sloc.sheetName][rowIdx2 + ':' + sloc.cols.avoir] = opts.suiviAvoir.avoir;
           preview.push({ label: 'Avoir (Suivi des paiements)', col: `${colName(sloc.cols.avoir + 1)}${rowIdx2 + 1}`, value: this.fmt(opts.suiviAvoir.avoir) });
           verifyTargets.push({ sheetName: sloc.sheetName, rowIdx: rowIdx2, col: sloc.cols.avoir, val: opts.suiviAvoir.avoir });
