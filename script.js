@@ -805,7 +805,7 @@ class Component {
   _addDaysIso(iso, days) { if (!iso) return ''; const p = String(iso).split('-').map(Number); const d = new Date(p[0], (p[1] || 1) - 1, p[2] || 1); d.setDate(d.getDate() + (+days || 0)); return d.getFullYear() + '-' + this.dd(d.getMonth() + 1) + '-' + this.dd(d.getDate()); }
   _venteNextId() { const fromFile = (this.state.ventes || []).map(r => +String(r.ref || '').replace(/\D/g, '') || 0); const ids = [...fromFile, ...this.venteSaisieRows().map(r => +r.id || 0), ...this.payTrackRows().map(r => +r.id || 0)]; return (ids.length ? Math.max(...ids) : 0) + 1; }
   compEmptyLigne() { const e = Object.keys(Component.ESP)[0]; return { espece: e, calibre: (Component.ESP[e] || ['Standard'])[0], poids: '', prixKg: '' }; }
-  openCompForm(mode) { this.setState({ compTab: mode, compFan: null }); if (mode === 'Achat') { this.resetAchatDraft(); this.refreshAchatInvoiceNumber(); this._refreshChequiersLive(); } else if (mode === 'Fournisseur') this.resetFournDraft(); else if (mode === 'Paiement') { this.setState({ paiementDraft: null }); this._refreshChequiersLive(); } else { this.resetVenteDraft(); this.refreshVenteInvoiceNumber(); } }
+  openCompForm(mode) { this.setState({ compTab: mode, compFan: null }); if (mode === 'Achat') { this.resetAchatDraft(); this.refreshAchatInvoiceNumber(); this._refreshChequiersLive(); } else if (mode === 'Fournisseur') this.resetFournDraft(); else if (mode === 'Paiement') { this.setState({ paiementDraft: null }); this._refreshChequiersLive(); } else { this.resetVenteDraft(); this.refreshVenteInvoiceNumber(); this.refreshVenteIdFacture(); } }
   // RÈGLE 5 (achat pêcheur) : lit le n° de facture pré-imprimé de la prochaine ligne à remplir
   // (colonne « N° de facture ») et le propose, modifiable. Non bloquant si non réglé/connecté.
   async refreshAchatInvoiceNumber() {
@@ -849,7 +849,24 @@ class Component {
       if (preNum) { const d = this.state.venteDraft; if (d && !d.editing) this.setState({ venteDraft: { ...d, num: preNum, numFromFile: true, numRow: loc.excelRow } }); }
     } catch (e) { /* non bloquant : on garde le n° courant */ }
   }
-  venteDefault() { const t = this._payTodayIso(); return { id: this._venteNextId(), num: '', client: '', date: t, delai: '30', datePrev: this._addDaysIso(t, 30), lignes: [this.compEmptyLigne()], tvaIrl: '', tvaFr: '', grenke: null, avoirActif: false, avoir: '', editing: false }; }
+  // ID Facture (colonne dédiée, ex. colonne I) : PAS pré-imprimé comme le n° de facture — calculé
+  // comme dernier ID existant + 1, lu directement dans le fichier (même logique que _venteNextId(),
+  // mais sur la vraie colonne Excel plutôt que sur les chiffres du n° de facture).
+  async refreshVenteIdFacture() {
+    try {
+      const cfg = this.writeMapFor('ventes'); if (!cfg || !cfg.enabled || !cfg.cols) return;
+      const idCol = cfg.cols.idFacture; if (idCol == null || idCol < 0) return; // colonne pas encore réglée dans Paramètres
+      const hi = this._writableHandleFor('ventes'); if (!hi || !hi.handle) return;
+      const f = await hi.handle.getFile(); const buf = await f.arrayBuffer();
+      const wb = await this.readWorkbook(buf); const sh = wb.find(s => s.name === cfg.sheetName); if (!sh) return;
+      const hdrIdx = cfg.headerRowIdx != null ? cfg.headerRowIdx : 0;
+      const firstData = cfg.firstDataIdx != null ? cfg.firstDataIdx : (hdrIdx + 1);
+      let max = 0;
+      for (let r = firstData; r < sh.rows.length; r++) { const v = (sh.rows[r] || [])[idCol]; const n = parseInt(String(v == null ? '' : v).trim(), 10); if (!isNaN(n) && n > max) max = n; }
+      const d = this.state.venteDraft; if (d && !d.editing) this.setState({ venteDraft: { ...d, idFacture: String(max + 1) } });
+    } catch (e) { /* non bloquant : on garde l'ID courant */ }
+  }
+  venteDefault() { const t = this._payTodayIso(); return { id: this._venteNextId(), num: '', idFacture: '', client: '', date: t, delai: '30', datePrev: this._addDaysIso(t, 30), lignes: [this.compEmptyLigne()], tvaIrl: '', tvaFr: '', grenke: null, avoirActif: false, avoir: '', editing: false }; }
   setVenteField(k, v) { const d = this.state.venteDraft || this.venteDefault(); const patch = { ...d, [k]: v }; if (k === 'delai') patch.datePrev = this._addDaysIso(d.date, Math.max(0, Math.min(30, Math.round(this._vNum(v))))); if (k === 'date') patch.datePrev = this._addDaysIso(v, Math.max(0, Math.min(30, Math.round(this._vNum(d.delai))))); this.setState({ venteDraft: patch }); }
   setVenteLigne(i, k, v) { const d = this.state.venteDraft || this.venteDefault(); const lignes = (d.lignes || []).map((l, j) => { if (j !== i) return l; const nl = { ...l, [k]: v }; if (k === 'espece') nl.calibre = (Component.ESP[v] || ['Standard'])[0]; return nl; }); this.setState({ venteDraft: { ...d, lignes } }); }
   addVenteLigne() { const d = this.state.venteDraft || this.venteDefault(); this.setState({ venteDraft: { ...d, lignes: [...(d.lignes || []), this.compEmptyLigne()] } }); }
@@ -874,7 +891,7 @@ class Component {
     const id = +d.id || this._venteNextId();
     const grenke = (d.grenke && this._vNum(d.grenke.montant) > 0) ? d.grenke : null;
     const avoir = (d.avoirActif && this._vNum(d.avoir) > 0) ? this._vNum(d.avoir) : 0;
-    const rec = { id, num: (d.num || '').trim(), client, date: d.date || '', lignes, ht, tvaIrl, tvaFr, ttc, delai, datePrev, grenke, avoir };
+    const rec = { id, num: (d.num || '').trim(), idFacture: (d.idFacture || '').trim(), client, date: d.date || '', lignes, ht, tvaIrl, tvaFr, ttc, delai, datePrev, grenke, avoir };
     const arr = this.venteSaisieRows().slice(); const i = arr.findIndex(x => String(x.id) === String(id));
     // Circuit A — le fichier Excel fait foi. Une vente n'est enregistrée QUE si l'écriture
     // Excel réussit (aperçu → confirmation → relecture de contrôle). Aucune compta parallèle :
@@ -882,12 +899,10 @@ class Component {
     if (i >= 0) { this.setState({ msg: { kind: 'error', text: 'La modification d’une vente déjà enregistrée n’est pas encore disponible : corrigez-la directement dans votre fichier Excel. (Bientôt : correction guidée.)' } }); return; }
     if (!this._venteWriteReady()) { this.setState({ msg: { kind: 'error', text: 'Avant d’enregistrer une vente, réglez l’écriture de votre fichier : Paramètres → « Ventes client » → « Régler l’écriture », puis connectez le fichier. Rien n’est enregistré tant que le fichier ne peut pas être écrit.' } }); return; }
     this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, after: () => this._venteAfterWrite(rec), afterClose: () => {
-      // Enchaînées à la suite (jamais en parallèle) via _writeQueue/_runNextWrite, comme pour
-      // l'achat : chacune ouvre son propre aperçu/confirmation, la suivante n'étant lancée
-      // qu'une fois la précédente terminée — jamais deux modales writePreview en même temps.
+      // Le suivi des paiements se remplit par formules Excel depuis l'onglet Factures — le
+      // dashboard n'y écrit plus (voir requestSuiviPaiementPreview, conservée mais non appelée ici).
       this._writeQueue = [];
       if (this._stockDir) this._writeQueue.push(() => this.requestStockPreview(rec, 'vente'));
-      this._writeQueue.push(() => this.requestSuiviPaiementPreview(rec));
       this._runNextWrite();
     } });
   }
@@ -1776,7 +1791,7 @@ class Component {
       { key: 'annule', label: 'Annulé' },
     ];
     if (kind === 'ventes') return [
-      { key: 'ref', label: 'Numéro de facture' }, { key: 'partner', label: 'Client' }, { key: 'date', label: 'Date' },
+      { key: 'idFacture', label: 'ID Facture' }, { key: 'ref', label: 'Numéro de facture' }, { key: 'partner', label: 'Client' }, { key: 'date', label: 'Date' },
       { key: 'ht', label: 'Montant HT' }, { key: 'tvaIr', label: 'TVA Irlande' }, { key: 'tvaFr', label: 'TVA France' },
       { key: 'grenke', label: 'GRENKE' }, { key: 'ttc', label: 'TOTAL TTC' }, { key: 'delai', label: 'Délai' },
       { key: 'datePrev', label: 'Date prévue' }, { key: 'status', label: 'Statut' },
@@ -1800,7 +1815,7 @@ class Component {
   _anchorFieldsFor(kind) { return kind === 'ventes' ? ['date', 'ht', 'partner'] : kind === 'operations' ? ['date', 'amt', 'partner'] : kind === 'factures' ? ['date', 'ttc', 'partner'] : []; }
   // Valeurs d'une saisie, par clé de champ (toutes les clés candidates ; l'ajout n'écrit QUE les colonnes réellement mappées).
   achatWriteValues(rec) { const immediat = !!rec.paiementImmediat; return { ref: rec.num || '', annee: String(rec.date || '').slice(0, 4), date: rec.date || '', partner: rec.pecheur || '', amt: rec.total, cheque: rec.paiement === 'cheque' ? (rec.chequeNum || '') : (rec.paiement === 'autre' ? (rec.observation || '') : ''), paid: immediat ? rec.total : '', paidDate: immediat ? this._payTodayIso() : '', solde: immediat ? 0 : rec.total }; }
-  venteWriteValues(rec) { const delai = Math.max(0, Math.min(30, Math.round(this._vNum(rec.delai)))); return { ref: rec.num || '', partner: rec.client || '', date: rec.date || '', ht: rec.ht, tvaIr: rec.tvaIrl, tvaFr: rec.tvaFr, grenke: rec.grenke ? rec.grenke.montant : '', ttc: rec.ttc, delai: delai ? (delai + ' jrs') : '', datePrev: rec.datePrev || '', status: '', avoir: rec.avoir || '' }; }
+  venteWriteValues(rec) { const delai = Math.max(0, Math.min(30, Math.round(this._vNum(rec.delai)))); return { idFacture: rec.idFacture || '', ref: rec.num || '', partner: rec.client || '', date: rec.date || '', ht: rec.ht, tvaIr: rec.tvaIrl, tvaFr: rec.tvaFr, grenke: rec.grenke ? rec.grenke.montant : '', ttc: rec.ttc, delai: delai ? (delai + ' jrs') : '', datePrev: rec.datePrev || '', status: '', avoir: rec.avoir || '' }; }
 
   // Handle inscriptible d'une source connectée (fichier surveillé prioritaire, sinon cache d'import).
   _writableHandleFor(kind) {
