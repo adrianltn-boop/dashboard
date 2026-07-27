@@ -901,6 +901,7 @@ class Component {
     const cards = [{ l: '📦 Stock', v: espLbl }, { l: '🏷️ Facture client', v: `${rec.num} — ${client} · TTC ${this.fmt(ttc)} · ${delai === 0 ? 'comptant' : 'délai ' + delai + ' j'} · prévue ${this.dd((datePrev.split('-')[2] || 0))}/${this.dd((datePrev.split('-')[1] || 0))}` }, { l: '💳 Suivi de paiement', v: `Solde à encaisser ${this.fmt(ttc)}` }, { l: '📊 Analytique', v: `Chiffre d'affaires (HT) ${this.fmt(ht)}` }];
     if (grenke) cards.push({ l: '🏦 Grenke', v: `Financé ${this.fmt(grenke.montant)} · restant dû ${this.fmt(grenke.rest)}` });
     await this._appendNextBlankRow('ventes'); // CORRECTION 2 — best-effort, ne bloque jamais la saisie ; awaited pour que le refresh ci-dessous lise le fichier à jour
+    if (this._stockDir) this.requestStockPreview(rec, 'vente'); // best-effort — une vente est déjà enregistrée, le stock ne doit jamais la remettre en cause
     this.setState({ venteDraft: this.venteDefault(), compFan: { mode: 'vente', title: `Vente de ${lignes.length} espèce${lignes.length > 1 ? 's' : ''} à ${client}`, cards } });
     await this.refreshVenteInvoiceNumber(); // BUG 2 — après la ligne vierge ET après la réinitialisation du draft
   }
@@ -1110,7 +1111,7 @@ class Component {
     this._writeQueue = [];
     if (rec.paiement === 'cheque' && rec.chequeNum && this._achatWriteReady()) this._writeQueue.push(() => this.requestChequePreview(rec));
     else if (rec.paiement === 'cheque' && this._achatSteps) this._achatSteps.cheque = 'fail'; // chèque prévu mais écriture non prête
-    if (this._stockDir) this._writeQueue.push(() => this.requestStockPreview(rec));
+    if (this._stockDir) this._writeQueue.push(() => this.requestStockPreview(rec, 'achat'));
     this._runNextWrite();
     this._maybeFinalizeAchat(); // si ni chèque ni stock à écrire → bilan immédiat
   }
@@ -2700,22 +2701,41 @@ class Component {
     };
     return M[this._norm(espece)] || null;
   }
-  // Résout (feuille, colonne poids, colonne prix, 1re ligne de données) pour une espèce/calibre donnés.
-  _stockResolve(wb, espece, calibre) {
+  // Localise une section verticale (ACHAT-ENTREE ou COMMANDES-SORTIE) dans la colonne A : titre,
+  // en-tête (ligne « ...PRIX... »), 1re ligne de données, et la ligne TOTAL qui borne la section
+  // (jamais franchie — sert aussi de garde-fou si RESUMEE BENEFICES arrive avant un TOTAL trouvé).
+  _stockFindSection(rows, kw1, kw2) {
+    let titleRow = -1;
+    for (let r = 0; r < rows.length; r++) { const a = this._norm((rows[r] || [])[0]); if (a.indexOf(kw1) >= 0 && a.indexOf(kw2) >= 0) { titleRow = r; break; } }
+    if (titleRow < 0) return null;
+    let hi = -1; for (let r = titleRow + 1; r < Math.min(rows.length, titleRow + 4); r++) { if ((rows[r] || []).some(c => this._norm(c).indexOf('prix') >= 0)) { hi = r; break; } }
+    if (hi < 0) return null;
+    let cmd = hi; for (let r = hi; r < Math.min(rows.length, hi + 6); r++) { if ((rows[r] || []).some(c => this._norm(c).indexOf('commande') >= 0)) { cmd = r; break; } }
+    let totalRow = -1;
+    for (let r = hi + 1; r < Math.min(rows.length, hi + 60); r++) {
+      const a = this._norm((rows[r] || [])[0]);
+      if (a.indexOf('total') >= 0) { totalRow = r; break; }
+      if (a.indexOf('resumee') >= 0 && a.indexOf('benefices') >= 0) break; // section suivante atteinte sans TOTAL trouvé → borne ici
+    }
+    return { titleRow, headerIdx: hi, dataStart: cmd + 1, totalRow };
+  }
+  // Résout (feuille, section, colonnes) pour une espèce/calibre donnés, selon le contexte 'achat' ou 'vente'.
+  _stockResolve(wb, espece, calibre, context) {
     const hint = this._stockSheetHint(espece); if (!hint) return null;
     const sh = wb.find(s => { const n = this._norm(s.name); return n === hint.sheet || n.startsWith(hint.sheet) || n.indexOf(hint.sheet) >= 0; });
     if (!sh) return null;
     const rows = sh.rows;
-    let hi = -1; for (let r = 0; r < Math.min(rows.length, 10); r++) { if ((rows[r] || []).some(c => this._norm(c).indexOf('prix') >= 0)) { hi = r; break; } }
-    if (hi < 0) return null;
-    const hdr = rows[hi];
-    let cmd = hi; for (let r = hi; r < Math.min(rows.length, hi + 6); r++) { if ((rows[r] || []).some(c => this._norm(c).indexOf('commande') >= 0)) { cmd = r; break; } }
+    const sec = context === 'vente' ? this._stockFindSection(rows, 'commandes', 'sortie') : this._stockFindSection(rows, 'achat', 'entree');
+    if (!sec) return null;
+    const hdr = rows[sec.headerIdx];
     const want = this._norm(hint.byCol ? hint.byCol : ((calibre && this._norm(calibre) !== 'standard') ? calibre : espece));
     let poidsCol = -1; for (let c = 0; c < hdr.length; c++) { const h = this._norm(hdr[c]); if (h === want || (hint.byCol && h.indexOf(want) >= 0)) { poidsCol = c; break; } }
     if (poidsCol < 0) return null;
     let prixCol = poidsCol + 1; // motif universel [calibre][PRIX € / Kg]
     if (this._norm(hdr[prixCol]).indexOf('prix') < 0) { for (let c = poidsCol + 1; c < Math.min(hdr.length, poidsCol + 3); c++) { if (this._norm(hdr[c]).indexOf('prix') >= 0) { prixCol = c; break; } } }
-    return { sheetName: sh.name, headerIdx: hi, dataStart: cmd + 1, poidsCol, prixCol, clientCol: 4 };
+    let clientCol = -1; for (let c = 0; c < hdr.length; c++) { if (this._norm(hdr[c]).indexOf('client') >= 0) { clientCol = c; break; } }
+    if (clientCol < 0) clientCol = 4; // repli si l'en-tête « Clients » n'est pas détecté
+    return { sheetName: sh.name, headerIdx: sec.headerIdx, dataStart: sec.dataStart, totalRow: sec.totalRow, poidsCol, prixCol, clientCol };
   }
   // Handle inscriptible du fichier stock de la semaine correspondant à une date.
   async _stockWeeklyHandle(dateIso) {
@@ -2728,34 +2748,37 @@ class Component {
     try { for (const [nm, h] of await this.listFilesDeep(this._stockDir, 3)) { if (/^~\$/.test(nm)) continue; if (/\.(xlsx|xlsm)$/i.test(nm) && this.matchPrefix(nm, pfx) && weekRe.test(nm.replace(/\.[^.]+$/, ''))) { this._stockWeekHandles = this._stockWeekHandles || {}; this._stockWeekHandles[week] = { handle: h, name: nm }; return { handle: h, name: nm }; } } } catch (e) {}
     return null;
   }
-  // Aperçu de remplissage du stock (fichier de la semaine), déclenché après un achat réussi.
-  async requestStockPreview(rec) {
-    // RÈGLE 8/13 : toute sortie en échec marque l'étape « stock » et clôt le bilan.
+  // Aperçu de remplissage du stock (fichier de la semaine), déclenché après un achat ou une vente réussi(e).
+  // context : 'achat' → section ACHAT-ENTREE, 'vente' → section COMMANDES-SORTIE.
+  async requestStockPreview(rec, context) {
+    const ctx = context === 'vente' ? 'vente' : 'achat';
+    // RÈGLE 8/13 : toute sortie en échec marque l'étape « stock » et clôt le bilan (achat uniquement — pour la vente, best-effort, non bloquant).
     const stockFailed = (txt) => { this.setState({ msg: { kind: 'error', text: txt } }); if (this._achatSteps) this._achatSteps.stock = 'fail'; this._runNextWrite(); this._maybeFinalizeAchat(); };
     if (!this._stockDir) { if (this._achatSteps) this._achatSteps.stock = 'na'; this._runNextWrite(); this._maybeFinalizeAchat(); return; }
     try {
       const hi = await this._stockWeeklyHandle(rec.date);
-      if (!hi) return stockFailed(`Stock non rempli : fichier stock de la semaine introuvable (vérifiez le dossier Stock ou le modèle).`);
-      const okPerm = await this._ensureWritePermission(hi.handle); if (!okPerm) return stockFailed(`Stock non rempli : autorisation d'écriture refusée sur le fichier stock.`);
+      if (!hi) return stockFailed(`Stock non rempli (${ctx}) : fichier stock de la semaine introuvable (vérifiez le dossier Stock ou le modèle).`);
+      const okPerm = await this._ensureWritePermission(hi.handle); if (!okPerm) return stockFailed(`Stock non rempli (${ctx}) : autorisation d'écriture refusée sur le fichier stock.`);
       const file = await hi.handle.getFile();
       const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
       const buf = await file.arrayBuffer(); const wb = await this.readWorkbook(buf);
       const bySheet = {}; const unresolved = [];
-      (rec.lignes || []).forEach(l => { const t = this._stockResolve(wb, l.espece, l.calibre); if (!t) { unresolved.push(`${l.espece} ${l.calibre}`); return; }
+      (rec.lignes || []).forEach(l => { const t = this._stockResolve(wb, l.espece, l.calibre, ctx); if (!t) { unresolved.push(`${l.espece} ${l.calibre}`); return; }
         bySheet[t.sheetName] = bySheet[t.sheetName] || { t, cals: [] }; bySheet[t.sheetName].cals.push({ poidsCol: t.poidsCol, prixCol: t.prixCol, poids: l.poids, prix: l.prixKg, label: `${l.espece} ${l.calibre}` }); });
       const editsBySheet = {}; const preview = []; const verifyTargets = [];
       Object.keys(bySheet).forEach(sn => { const g = bySheet[sn]; const sh = wb.find(s => s.name === sn); const rows = sh.rows; const poidsCols = g.cals.map(c => c.poidsCol);
-        let rowIdx = -1; for (let r = g.t.dataStart; r < Math.min(rows.length, g.t.dataStart + 60); r++) { const rr = rows[r] || []; const clientEmpty = (rr[g.t.clientCol] == null || String(rr[g.t.clientCol]).trim() === ''); const cellsEmpty = poidsCols.every(pc => rr[pc] == null || String(rr[pc]).trim() === ''); if (clientEmpty && cellsEmpty) { rowIdx = r; break; } }
+        const maxRow = Math.min(rows.length, g.t.dataStart + 60, g.t.totalRow >= 0 ? g.t.totalRow : Infinity); // jamais franchir la ligne TOTAL
+        let rowIdx = -1; for (let r = g.t.dataStart; r < maxRow; r++) { const rr = rows[r] || []; const clientEmpty = (rr[g.t.clientCol] == null || String(rr[g.t.clientCol]).trim() === ''); const cellsEmpty = poidsCols.every(pc => rr[pc] == null || String(rr[pc]).trim() === ''); if (clientEmpty && cellsEmpty) { rowIdx = r; break; } }
         if (rowIdx < 0) { unresolved.push(`${sn} (pas de ligne libre)`); return; }
-        editsBySheet[sn] = {}; editsBySheet[sn][rowIdx + ':' + g.t.clientCol] = rec.pecheur || '';
+        editsBySheet[sn] = {}; editsBySheet[sn][rowIdx + ':' + g.t.clientCol] = rec.pecheur || rec.client || '';
         g.cals.forEach(c => { editsBySheet[sn][rowIdx + ':' + c.poidsCol] = c.poids; editsBySheet[sn][rowIdx + ':' + c.prixCol] = c.prix;
           preview.push({ label: `${sn} · ${c.label}`, col: `${this._colLetter(c.poidsCol + 1)}${rowIdx + 1}`, value: `${c.poids} kg @ ${this.fmt(c.prix)}/kg` });
           verifyTargets.push({ sheetName: sn, rowIdx, col: c.poidsCol, val: c.poids }, { sheetName: sn, rowIdx, col: c.prixCol, val: c.prix }); }); });
-      if (!Object.keys(editsBySheet).length) return stockFailed(`Stock non rempli${unresolved.length ? ' : ' + unresolved.join(', ') : ''}.`);
+      if (!Object.keys(editsBySheet).length) return stockFailed(`Stock non rempli (${ctx})${unresolved.length ? ' : ' + unresolved.join(', ') : ''}.`);
       const sheetList = Object.keys(editsBySheet);
       this._pendingWrite = { kind: 'operations', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: sheetList.join(', '), editsBySheet, verifyTargets, refuseFormula: true, after: () => this._runNextWrite(), step: 'stock', unresolved };
-      this.setState({ writePreview: { kind: 'stock', fileName: hi.name, sheetName: sheetList.join(', '), excelRow: null, rows: preview, status: null, title: `Stock de la semaine — ${sheetList.length} feuille(s)${unresolved.length ? ' · non placé : ' + unresolved.join(', ') : ''}` } });
-    } catch (e) { stockFailed(`Stock non rempli : ${(e && e.message) || 'erreur'}.`); }
+      this.setState({ writePreview: { kind: 'stock', fileName: hi.name, sheetName: sheetList.join(', '), excelRow: null, rows: preview, status: null, title: `Stock de la semaine (${ctx === 'vente' ? 'sortie' : 'entrée'}) — ${sheetList.length} feuille(s)${unresolved.length ? ' · non placé : ' + unresolved.join(', ') : ''}` } });
+    } catch (e) { stockFailed(`Stock non rempli (${ctx}) : ${(e && e.message) || 'erreur'}.`); }
   }
 
   // ---------- Écran de paramétrage guidé (vous montrez chaque colonne) ----------
