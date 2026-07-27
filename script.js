@@ -898,9 +898,10 @@ class Component {
     // les vues opérationnelles (suivi de paiement, Grenke) ne sont alimentées qu'APRÈS le succès.
     if (i >= 0) { this.setState({ msg: { kind: 'error', text: 'La modification d’une vente déjà enregistrée n’est pas encore disponible : corrigez-la directement dans votre fichier Excel. (Bientôt : correction guidée.)' } }); return; }
     if (!this._venteWriteReady()) { this.setState({ msg: { kind: 'error', text: 'Avant d’enregistrer une vente, réglez l’écriture de votre fichier : Paramètres → « Ventes client » → « Régler l’écriture », puis connectez le fichier. Rien n’est enregistré tant que le fichier ne peut pas être écrit.' } }); return; }
-    // Avoir s'écrit dans « Suivi des paiements » (pas dans Factures), sur la ligne de l'ID Facture
-    // — même transaction editsBySheet que l'écriture Factures (voir requestAppendPreview).
-    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, suiviAvoir: avoir ? { avoir, idFacture: rec.idFacture } : null, after: () => this._venteAfterWrite(rec), afterClose: () => {
+    // ID Facture s'écrit toujours dans « Suivi des paiements » (pour que les formules s'y
+    // accrochent, avoir ou non) ; Avoir n'y est écrit que si > 0 — même transaction editsBySheet
+    // que l'écriture Factures (voir requestAppendPreview).
+    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, suiviAvoir: rec.idFacture ? { avoir, idFacture: rec.idFacture } : null, after: () => this._venteAfterWrite(rec), afterClose: () => {
       if (this._stockDir) { this._writeQueue = [() => this.requestStockPreview(rec, 'vente')]; this._runNextWrite(); }
     } });
   }
@@ -2058,10 +2059,10 @@ class Component {
       // ses écritures multi-feuilles (pêcheur + chéquier), un seul aperçu/confirmation.
       let editsBySheet = null; let verifyTargets = null; let combinedSheetName = sheetName;
       console.log('[suivi] bloc suiviAvoir déclenché', opts.suiviAvoir);
-      if (kind === 'ventes' && opts.suiviAvoir && opts.suiviAvoir.avoir && opts.suiviAvoir.idFacture) {
+      if (kind === 'ventes' && opts.suiviAvoir && opts.suiviAvoir.idFacture) {
         const sloc = this._suiviLocate(wbH);
         console.log('[suivi] loc:', sloc ? sloc.sheetName : 'null');
-        if (sloc && sloc.cols.idFacture >= 0 && sloc.cols.avoir >= 0) {
+        if (sloc && sloc.cols.idFacture >= 0) {
           // Cherche une ligne EXISTANTE dont la colonne A vaut exactement cet ID Facture — pas
           // la première case vide. Si trouvée, on n'y écrit que l'Avoir (l'ID y est déjà).
           const idStr = String(opts.suiviAvoir.idFacture).trim();
@@ -2090,9 +2091,11 @@ class Component {
             preview.push({ label: 'ID Facture (Suivi des paiements)', col: `${colName(sloc.cols.idFacture + 1)}${rowIdx2 + 1}`, value: String(opts.suiviAvoir.idFacture) });
             verifyTargets.push({ sheetName: sloc.sheetName, rowIdx: rowIdx2, col: sloc.cols.idFacture, val: opts.suiviAvoir.idFacture });
           }
-          editsBySheet[sloc.sheetName][rowIdx2 + ':' + sloc.cols.avoir] = opts.suiviAvoir.avoir;
-          preview.push({ label: 'Avoir (Suivi des paiements)', col: `${colName(sloc.cols.avoir + 1)}${rowIdx2 + 1}`, value: this.fmt(opts.suiviAvoir.avoir) });
-          verifyTargets.push({ sheetName: sloc.sheetName, rowIdx: rowIdx2, col: sloc.cols.avoir, val: opts.suiviAvoir.avoir });
+          if (opts.suiviAvoir.avoir && sloc.cols.avoir >= 0) {
+            editsBySheet[sloc.sheetName][rowIdx2 + ':' + sloc.cols.avoir] = opts.suiviAvoir.avoir;
+            preview.push({ label: 'Avoir (Suivi des paiements)', col: `${colName(sloc.cols.avoir + 1)}${rowIdx2 + 1}`, value: this.fmt(opts.suiviAvoir.avoir) });
+            verifyTargets.push({ sheetName: sloc.sheetName, rowIdx: rowIdx2, col: sloc.cols.avoir, val: opts.suiviAvoir.avoir });
+          }
           combinedSheetName = `${sheetName}, ${sloc.sheetName}`;
         }
       }
