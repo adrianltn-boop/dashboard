@@ -536,11 +536,6 @@
                     <div style="flex:2 1 220px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Chéquier</label><select style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" value="{{ achatDraft.chequier }}" onchange="{{ onAchatChequier }}"><sc-for list="{{ chequierOptions }}" as="o" hint-placeholder-count="2"><option value="{{ o.value }}">{{ o.label }}</option></sc-for></select></div>
                     <div style="flex:0 0 160px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">N° de chèque</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:'IBM Plex Mono',monospace;text-align:right" value="{{ achatDraft.chequeNum }}" oninput="{{ onAchatChequeNum }}"></div>
                     <div style="flex-basis:100%;font-size:11.5px;color:#69788c">{{ achatChqHint }}</div>
-                    <div style="flex-basis:100%;border-top:1px dashed #e2e8f1;padding-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-                      <div style="flex:2 1 150px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Nouveau chéquier</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" value="{{ chequierDraftNom }}" oninput="{{ onChqNom }}" placeholder="ex. Chéquier BNP Pro"></div>
-                      <div style="flex:1 1 110px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">1er n°</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:'IBM Plex Mono',monospace;text-align:right" value="{{ chequierDraftStart }}" oninput="{{ onChqStart }}" placeholder="516000"></div>
-                      <button style="border:1px solid #dde3ec;background:#fff;color:#3a4a5e;padding:9px 14px;border-radius:9px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit" onclick="{{ onChqAdd }}">＋ Ajouter</button>
-                    </div>
                   </div>
                 </sc-if>
               </div>
@@ -679,26 +674,34 @@
 
                 <sc-if value="{{ paiementLocked }}" hint-placeholder-val="{{ false }}">
                   <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:8px">Moyen de paiement (colonne Chèque)</div>
-                  <sc-if value="{{ paiementChqEditing }}" hint-placeholder-val="{{ false }}">
-                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
-                      <input style="flex:1 1 260px;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" value="{{ paiementChqEditVal }}" oninput="{{ onChqEditVal }}">
-                      <button style="border:1px solid #dde3ec;background:#fff;color:#3a4a5e;padding:9px 14px;border-radius:9px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit" onclick="{{ onChqEditCancel }}">Annuler</button>
-                      <button style="border:none;color:#fff;padding:9px 16px;border-radius:9px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;background:#0f766e" onclick="{{ onChqEditCommit }}">Enregistrer</button>
+                  <sc-if value="{{ paiementShowEditRaw }}" hint-placeholder-val="{{ false }}">
+                    <sc-if value="{{ paiementChqEditing }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+                        <input style="flex:1 1 260px;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" value="{{ paiementChqEditVal }}" oninput="{{ onChqEditVal }}">
+                        <button style="border:1px solid #dde3ec;background:#fff;color:#3a4a5e;padding:9px 14px;border-radius:9px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit" onclick="{{ onChqEditCancel }}">Annuler</button>
+                        <button style="border:none;color:#fff;padding:9px 16px;border-radius:9px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;background:#0f766e" onclick="{{ onChqEditCommit }}">Enregistrer</button>
+                      </div>
+                    </sc-if>
+                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+                      <div style="flex:0 1 auto;border:1px solid #e9edf4;background:#f4f6f9;color:#3a4a5e;padding:9px 14px;border-radius:9px;font-size:13px;font-family:'IBM Plex Mono',monospace">{{ paiementChequeRaw }}</div>
+                      <button style="flex-shrink:0;border:1px solid #dde3ec;background:#fff;color:#5b6b7f;padding:8px 12px;border-radius:9px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit" onclick="{{ onChqEditOpen }}">✏️ Modifier</button>
                     </div>
                   </sc-if>
-                  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-                    <div style="flex:0 1 auto;border:1px solid #e9edf4;background:#f4f6f9;color:#3a4a5e;padding:9px 14px;border-radius:9px;font-size:13px;font-family:'IBM Plex Mono',monospace">{{ paiementChequeRaw }}</div>
-                    <button style="flex-shrink:0;border:1px solid #dde3ec;background:#fff;color:#5b6b7f;padding:8px 12px;border-radius:9px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit" onclick="{{ onChqEditOpen }}">✏️ Modifier</button>
-                  </div>
                   <sc-if value="{{ paiementShowChqActions }}" hint-placeholder-val="{{ false }}">
-                    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-size:12.5px;color:#5b6b7f">
-                      <span>Montant du chèque : <b style="font-family:'IBM Plex Mono',monospace;color:#0e1b2e">{{ paiementChqAmount }}</b></span>
-                      <span>Statut : <b style="{{ paiementChqStatutStyle }}">{{ paiementChqStatut }}</b></span>
-                    </div>
-                    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
-                      <button style="{{ onChqEncaisseStyle }}" onclick="{{ onChqEncaisse }}">Encaissé</button>
-                      <button style="{{ onChqAnnulerStyle }}" onclick="{{ onChqAnnuler }}">Annuler le chèque</button>
-                    </div>
+                    <sc-if value="{{ paiementChqListLoading }}" hint-placeholder-val="{{ false }}">
+                      <div style="font-size:12.5px;color:#93a1b3;margin-bottom:10px">Vérification…</div>
+                    </sc-if>
+                    <sc-for list="{{ paiementChqList }}" as="c" hint-placeholder-count="2">
+                      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:9px 12px;border:1px solid #eef1f6;border-radius:9px;margin-bottom:8px">
+                        <span style="font-weight:700;color:#0e1b2e">🧾 Chèque n°{{ c.num }}</span>
+                        <span style="font-family:'IBM Plex Mono',monospace;color:#5b6b7f">{{ c.montant }}</span>
+                        <span>Statut : <b style="{{ c.statutStyle }}">{{ c.statut }}</b></span>
+                        <sc-if value="{{ c.showActions }}" hint-placeholder-val="{{ false }}">
+                          <button style="{{ c.encaisseStyle }}" onclick="{{ c.onEncaisse }}">Encaisser</button>
+                          <button style="{{ c.annulerStyle }}" onclick="{{ c.onAnnuler }}">Annuler</button>
+                        </sc-if>
+                      </div>
+                    </sc-for>
                   </sc-if>
                   <sc-if value="{{ paiementShowVirementActions }}" hint-placeholder-val="{{ false }}">
                     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
@@ -862,16 +865,15 @@
             </sc-if>
           </div>
           <div style="flex:1 1 300px;min-width:280px;background:#fff;border:1px solid #e9edf4;border-radius:14px;box-shadow:0 1px 2px rgba(16,32,54,.04);overflow:hidden">
-            <div style="padding:13px 16px;border-bottom:1px solid #eef1f6;font-size:13.5px;font-weight:700;color:#0e1b2e;display:flex;justify-content:space-between;align-items:center">Chéquiers <span style="font-size:11.5px;font-weight:500;color:#69788c">chèques émis</span></div>
+            <div style="padding:13px 16px;border-bottom:1px solid #eef1f6;font-size:13.5px;font-weight:700;color:#0e1b2e;display:flex;justify-content:space-between;align-items:center">Chéquiers <span style="font-size:11.5px;font-weight:500;color:#69788c">détectés dans le fichier</span></div>
             <sc-for list="{{ compChqBody }}" as="c" hint-placeholder-count="2">
               <div style="padding:11px 16px;border-bottom:1px solid #eef1f6">
-                <div style="font-weight:700;font-size:12.5px;display:flex;justify-content:space-between;align-items:baseline;color:#0e1b2e"><span>{{ c.nom }}</span><span style="font-size:11px;color:#69788c;font-weight:500">{{ c.rem }}</span></div>
-                <div style="font-size:11.5px;color:#69788c;margin-top:3px">Prochain chèque : n° <b style="color:#0e1b2e">{{ c.next }}</b> · {{ c.last }} <button style="border:none;background:none;color:#b91c1c;cursor:pointer;font-size:11px;font-family:inherit;float:right" onclick="{{ c.onDelete }}" title="Supprimer">🗑</button></div>
-                <div style="height:6px;background:#f4f7fb;border-radius:99px;margin-top:7px;overflow:hidden"><div style="height:100%;background:#0f766e;border-radius:99px;width:{{ c.pct }}"></div></div>
+                <div style="font-weight:700;font-size:12.5px;color:#0e1b2e">{{ c.nom }}</div>
+                <div style="font-size:11.5px;color:#69788c;margin-top:3px">Prochain chèque : n° <b style="color:#0e1b2e">{{ c.next }}</b></div>
               </div>
             </sc-for>
             <sc-if value="{{ compChqEmpty }}" hint-placeholder-val="{{ false }}">
-              <div style="padding:22px 16px;text-align:center;color:#9aa7b8;font-size:12.5px">Aucun chéquier — créez-en un dans le formulaire d'achat (paiement par chèque).</div>
+              <div style="padding:22px 16px;text-align:center;color:#9aa7b8;font-size:12.5px">Aucun onglet chéquier détecté (nom 100% numérique attendu, ex. « 516000 ») dans le fichier connecté.</div>
             </sc-if>
           </div>
         </div>
@@ -2738,18 +2740,6 @@
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">
           <button style="{{ agBtnGhost }}" onclick="{{ onChqReplaceNo }}">Non</button>
           <button style="padding:9px 16px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#0f766e;border:none;cursor:pointer;font-family:inherit" onclick="{{ onChqReplaceYes }}">Oui</button>
-        </div>
-      </div>
-    </div>
-  </sc-if>
-  <sc-if value="{{ chqModifAskOpen }}" hint-placeholder-val="{{ false }}">
-    <div style="{{ prefixOverlayStyle }}" onclick="{{ onChqModifAbandon }}">
-      <div style="width:460px;max-width:92vw;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px" onclick="{{ ctxStop }}">
-        <div style="font-size:15px;font-weight:700;color:#0e1b2e">{{ chqModifAskText }}</div>
-        <div style="display:flex;flex-direction:column;gap:8px;margin-top:18px">
-          <button style="padding:9px 16px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#b91c1c;border:none;cursor:pointer;font-family:inherit" onclick="{{ onChqModifCancelThenEdit }}">Annuler le chèque et modifier</button>
-          <button style="padding:9px 16px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#0f766e;border:none;cursor:pointer;font-family:inherit" onclick="{{ onChqModifWithoutCancel }}">Modifier sans annuler</button>
-          <button style="{{ agBtnGhost }}" onclick="{{ onChqModifAbandon }}">Abandonner</button>
         </div>
       </div>
     </div>
