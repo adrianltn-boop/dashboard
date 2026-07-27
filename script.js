@@ -1724,6 +1724,9 @@ class Component {
       });
       const unmatched = Object.keys(byRow).filter(r => !handled[r]);
       if (unmatched.length) throw new Error(`ligne introuvable dans « ${sheetName} » (le fichier a peut-être changé entre-temps) — sauvegarde annulée`);
+      // Supprime la valeur en cache (<v>) de toute cellule en formule de la feuille modifiée :
+      // Excel se fie sinon à ce cache et n'affiche pas le résultat recalculé à l'ouverture.
+      xml = xml.replace(/(<f\b[^>]*?(?:\/>|>[\s\S]*?<\/f>))<v>[\s\S]*?<\/v>/g, '$1');
       files[target] = enc.encode(xml);
     }
     if (_mark) { const ns = _mark.finalize(); if (ns) files['xl/styles.xml'] = enc.encode(ns); } // police bleue Andale sur les cellules écrites
