@@ -1663,7 +1663,6 @@ class Component {
     const targetByName = {}; [...wbXml.matchAll(/<sheet[^>]*name="([^"]*)"[^>]*r:id="(rId\d+)"/g)].forEach(m => { targetByName[this.unxml(m[1])] = relMap[m[2]]; });
     const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const colName = n => { let s = '', m = n + 1; while (m > 0) { const r = (m - 1) % 26; s = String.fromCharCode(65 + r) + s; m = Math.floor((m - 1) / 26); } return s; };
-    let formulaOverwritten = false;
     // Style à écrire : si marquage actif, style dérivé (bleu + Andale) du style d'origine ; sinon le style d'origine.
     const styleAttrFor = (origIdxOrNull) => { if (_mark) return ` s="${_mark.mapStyle(origIdxOrNull == null ? 0 : origIdxOrNull)}"`; return origIdxOrNull == null ? '' : ` s="${origIdxOrNull}"`; };
     const cellXmlFor = (ref, styleAttr, val) => {
@@ -1708,7 +1707,6 @@ class Component {
               // recalcule pas sur une écriture directe du XML).
               const allowed = !!(opts && opts.allowFormulaCols && opts.allowFormulaCols[sheetName] && opts.allowFormulaCols[sheetName].has(Number(cStr)));
               if (_refuseFormula && !allowed) { _formulaHit.push(ref); (_skipped[sheetName] = _skipped[sheetName] || new Set()).add(Number(cStr)); continue; }
-              formulaOverwritten = true;
             }
             out = out.replace(cellRe, cellXmlFor(ref, styleAttrFor(styleM ? Number(styleM[1]) : null), rowEdits[cStr]));
           } else {
@@ -1729,7 +1727,10 @@ class Component {
       files[target] = enc.encode(xml);
     }
     if (_mark) { const ns = _mark.finalize(); if (ns) files['xl/styles.xml'] = enc.encode(ns); } // police bleue Andale sur les cellules écrites
-    if (formulaOverwritten && files['xl/calcChain.xml']) {
+    // Toute écriture (même sans écraser une formule) peut laisser des formules dépendantes non
+    // recalculées par Excel au prochain ouverture s'il se fie à calcChain.xml. On le supprime donc
+    // systématiquement dès qu'il existe : Excel reconstruit sa chaîne de calcul et recalcule tout.
+    if (files['xl/calcChain.xml']) {
       delete files['xl/calcChain.xml'];
       const ctName = '[Content_Types].xml';
       if (files[ctName]) {
