@@ -588,6 +588,12 @@
                   <div style="flex:1 1 130px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">GRENKE</label><button style="{{ venteGrenkeBtnStyle }}" onclick="{{ onVenteGrenkeOpen }}">{{ venteGrenkeBtnLabel }}</button></div>
                   <div style="flex:1 1 130px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">TOTAL TTC</label><div style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:14px;padding:9px 11px;background:#e8effc;border:1px solid #cadcfa;border-radius:9px;text-align:right;color:#1a56db">{{ venteDraftTtc }}</div></div>
                 </div>
+                <div style="display:flex;gap:12px;align-items:center;margin-top:10px">
+                  <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#3a4a5e;cursor:pointer;user-select:none"><input type="checkbox" checked="{{ venteAvoirActif }}" onchange="{{ onVSAvoirToggle }}" style="width:15px;height:15px;accent-color:#1a56db;cursor:pointer">Avoir</label>
+                  <sc-if value="{{ venteAvoirActif }}" hint-placeholder-val="{{ false }}">
+                    <div style="flex:0 0 150px"><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:'IBM Plex Mono',monospace;text-align:right" type="text" inputmode="decimal" value="{{ venteDraft.avoir }}" oninput="{{ onVSAvoir }}" placeholder="0"></div>
+                  </sc-if>
+                </div>
               </div>
 
               <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:14px 0 16px;flex-wrap:wrap;margin-top:6px;border-top:1px solid #eef1f6">

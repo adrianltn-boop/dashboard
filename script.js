@@ -849,7 +849,7 @@ class Component {
       if (preNum) { const d = this.state.venteDraft; if (d && !d.editing) this.setState({ venteDraft: { ...d, num: preNum, numFromFile: true, numRow: loc.excelRow } }); }
     } catch (e) { /* non bloquant : on garde le n° courant */ }
   }
-  venteDefault() { const t = this._payTodayIso(); return { id: this._venteNextId(), num: '', client: '', date: t, delai: '30', datePrev: this._addDaysIso(t, 30), lignes: [this.compEmptyLigne()], tvaIrl: '', tvaFr: '', grenke: null, editing: false }; }
+  venteDefault() { const t = this._payTodayIso(); return { id: this._venteNextId(), num: '', client: '', date: t, delai: '30', datePrev: this._addDaysIso(t, 30), lignes: [this.compEmptyLigne()], tvaIrl: '', tvaFr: '', grenke: null, avoirActif: false, avoir: '', editing: false }; }
   setVenteField(k, v) { const d = this.state.venteDraft || this.venteDefault(); const patch = { ...d, [k]: v }; if (k === 'delai') patch.datePrev = this._addDaysIso(d.date, Math.max(0, Math.min(30, Math.round(this._vNum(v))))); if (k === 'date') patch.datePrev = this._addDaysIso(v, Math.max(0, Math.min(30, Math.round(this._vNum(d.delai))))); this.setState({ venteDraft: patch }); }
   setVenteLigne(i, k, v) { const d = this.state.venteDraft || this.venteDefault(); const lignes = (d.lignes || []).map((l, j) => { if (j !== i) return l; const nl = { ...l, [k]: v }; if (k === 'espece') nl.calibre = (Component.ESP[v] || ['Standard'])[0]; return nl; }); this.setState({ venteDraft: { ...d, lignes } }); }
   addVenteLigne() { const d = this.state.venteDraft || this.venteDefault(); this.setState({ venteDraft: { ...d, lignes: [...(d.lignes || []), this.compEmptyLigne()] } }); }
@@ -873,7 +873,8 @@ class Component {
     const datePrev = this._addDaysIso(d.date, delai);
     const id = +d.id || this._venteNextId();
     const grenke = (d.grenke && this._vNum(d.grenke.montant) > 0) ? d.grenke : null;
-    const rec = { id, num: (d.num || '').trim(), client, date: d.date || '', lignes, ht, tvaIrl, tvaFr, ttc, delai, datePrev, grenke };
+    const avoir = (d.avoirActif && this._vNum(d.avoir) > 0) ? this._vNum(d.avoir) : 0;
+    const rec = { id, num: (d.num || '').trim(), client, date: d.date || '', lignes, ht, tvaIrl, tvaFr, ttc, delai, datePrev, grenke, avoir };
     const arr = this.venteSaisieRows().slice(); const i = arr.findIndex(x => String(x.id) === String(id));
     // Circuit A — le fichier Excel fait foi. Une vente n'est enregistrée QUE si l'écriture
     // Excel réussit (aperçu → confirmation → relecture de contrôle). Aucune compta parallèle :
@@ -891,7 +892,7 @@ class Component {
     if (i >= 0) arr[i] = rec; else arr.unshift(rec);
     this.saveVenteSaisie(arr);
     const pt = this.payTrackRows().slice(); const pi = pt.findIndex(x => String(x.id) === String(id));
-    const ptRec = { id, num: rec.num, client, ttc, avoir: pi >= 0 ? this._vNum(pt[pi].avoir) : 0, dateFac: rec.date, dateEch: datePrev, regle: pi >= 0 ? this._vNum(pt[pi].regle) : 0, datePay: (pi >= 0 ? pt[pi].datePay : '') || '', etat: (pi >= 0 ? pt[pi].etat : 'En attente') || 'En attente' };
+    const ptRec = { id, num: rec.num, client, ttc, avoir: pi >= 0 ? this._vNum(pt[pi].avoir) : (rec.avoir || 0), dateFac: rec.date, dateEch: datePrev, regle: pi >= 0 ? this._vNum(pt[pi].regle) : 0, datePay: (pi >= 0 ? pt[pi].datePay : '') || '', etat: (pi >= 0 ? pt[pi].etat : 'En attente') || 'En attente' };
     if (pi >= 0) pt[pi] = ptRec; else pt.unshift(ptRec);
     this.savePayTrack(pt);
     const gm = this.grenkeManRows().slice(); const gi = gm.findIndex(x => String(x.id) === String(id));
@@ -1771,7 +1772,7 @@ class Component {
       { key: 'ht', label: 'Montant HT' }, { key: 'tvaIr', label: 'TVA Irlande' }, { key: 'tvaFr', label: 'TVA France' },
       { key: 'grenke', label: 'GRENKE' }, { key: 'ttc', label: 'TOTAL TTC' }, { key: 'delai', label: 'Délai' },
       { key: 'datePrev', label: 'Date prévue' }, { key: 'status', label: 'Statut' },
-      { key: 'annule', label: 'Annulé' },
+      { key: 'avoir', label: 'Avoir' }, { key: 'annule', label: 'Annulé' },
     ];
     if (kind === 'factures') return [
       { key: 'date', label: 'Date' }, { key: 'partner', label: 'Fournisseur' }, { key: 'ref', label: 'N° de facture' },
@@ -1791,7 +1792,7 @@ class Component {
   _anchorFieldsFor(kind) { return kind === 'ventes' ? ['date', 'ht', 'partner'] : kind === 'operations' ? ['date', 'amt', 'partner'] : kind === 'factures' ? ['date', 'ttc', 'partner'] : []; }
   // Valeurs d'une saisie, par clé de champ (toutes les clés candidates ; l'ajout n'écrit QUE les colonnes réellement mappées).
   achatWriteValues(rec) { const immediat = !!rec.paiementImmediat; return { ref: rec.num || '', annee: String(rec.date || '').slice(0, 4), date: rec.date || '', partner: rec.pecheur || '', amt: rec.total, cheque: rec.paiement === 'cheque' ? (rec.chequeNum || '') : (rec.paiement === 'autre' ? (rec.observation || '') : ''), paid: immediat ? rec.total : '', paidDate: immediat ? this._payTodayIso() : '', solde: immediat ? 0 : rec.total }; }
-  venteWriteValues(rec) { const delai = Math.max(0, Math.min(30, Math.round(this._vNum(rec.delai)))); return { ref: rec.num || '', partner: rec.client || '', date: rec.date || '', ht: rec.ht, tvaIr: rec.tvaIrl, tvaFr: rec.tvaFr, grenke: rec.grenke ? rec.grenke.montant : '', ttc: rec.ttc, delai: delai ? (delai + ' jrs') : '', datePrev: rec.datePrev || '', status: '' }; }
+  venteWriteValues(rec) { const delai = Math.max(0, Math.min(30, Math.round(this._vNum(rec.delai)))); return { ref: rec.num || '', partner: rec.client || '', date: rec.date || '', ht: rec.ht, tvaIr: rec.tvaIrl, tvaFr: rec.tvaFr, grenke: rec.grenke ? rec.grenke.montant : '', ttc: rec.ttc, delai: delai ? (delai + ' jrs') : '', datePrev: rec.datePrev || '', status: '', avoir: rec.avoir || '' }; }
 
   // Handle inscriptible d'une source connectée (fichier surveillé prioritaire, sinon cache d'import).
   _writableHandleFor(kind) {
@@ -6062,7 +6063,8 @@ class Component {
     const vTtc = Math.round((vHt + vTvaIrl + vTvaFr) * 100) / 100;
     const vDelaiN = Math.max(0, Math.min(30, Math.round(this._vNum(vd.delai))));
     const vPrevIso = vd.datePrev || this._addDaysIso(vd.date, vDelaiN);
-    const venteDraft = { id: vd.id, num: vd.num || '', client: vd.client || '', date: vd.date || '', delai: String(vDelaiN), datePrev: vPrevIso ? ptFrDate(vPrevIso) : '—', tvaIrl: vd.tvaIrl === 0 ? '' : (vd.tvaIrl || ''), tvaFr: vd.tvaFr === 0 ? '' : (vd.tvaFr || '') };
+    const venteDraft = { id: vd.id, num: vd.num || '', client: vd.client || '', date: vd.date || '', delai: String(vDelaiN), datePrev: vPrevIso ? ptFrDate(vPrevIso) : '—', tvaIrl: vd.tvaIrl === 0 ? '' : (vd.tvaIrl || ''), tvaFr: vd.tvaFr === 0 ? '' : (vd.tvaFr || ''), avoir: vd.avoir === 0 ? '' : (vd.avoir || '') };
+    const venteAvoirActif = !!vd.avoirActif;
     const venteNumHint = (vd.numFromFile && vd.num) ? `✓ prochaine facture du fichier${vd.numRow ? ' · ligne ' + vd.numRow : ''}` : '';
     const venteNumHintStyle = 'font-size:10.5px;font-weight:600;color:#0e7a46;text-transform:none;letter-spacing:0;margin-left:8px';
     const venteDraftHt = this.fmt(vHt); const venteDraftTtc = this.fmt(vTtc);
@@ -6073,6 +6075,8 @@ class Component {
     const onVSDelai = e => this.setVenteField('delai', e.target.value);
     const onVSTvaIrl = e => this.setVenteField('tvaIrl', e.target.value);
     const onVSTvaFr = e => this.setVenteField('tvaFr', e.target.value);
+    const onVSAvoirToggle = () => this.setVenteField('avoirActif', !venteAvoirActif);
+    const onVSAvoir = e => this.setVenteField('avoir', e.target.value);
     const onVSCommit = () => this.commitVenteSaisie();
     const onVSReset = () => this.resetVenteDraft();
     const onVenteAddLigne = () => this.addVenteLigne();
@@ -7858,6 +7862,7 @@ class Component {
       compPayModes, achatIsCheque, achatIsAutre, onAchatObservation, onAchatChequier, onAchatChequeNum, chequierOptions, achatChqHint,
       venteDraft, venteDraftLignes, venteDraftHt, venteDraftTtc, venteDelaiOptions, venteEditing, vsSaveLabel,
       onVSNum, onVSClient, onVSDate, onVSDelai, onVSTvaIrl, onVSTvaFr, onVSCommit, onVSReset, onVenteAddLigne, venteNumHint, venteNumHintStyle,
+      venteAvoirActif, onVSAvoirToggle, onVSAvoir,
       venteGrenkeBtnLabel, venteGrenkeBtnStyle, onVenteGrenkeOpen,
       venteGrenkeOpen, vgMontant, vgP1, vgP2, vgCharges, vgRest, onVgMontant, onVgP1, onVgP2, onVgCharges, onVgSave, onVgCancel,
       gmList, gmSummary, gmEmpty, grkDraft, grkDraftRem, grkDraftRecv, grkStatutOptions, grkEditing, grkSaveLabel,
