@@ -2057,8 +2057,10 @@ class Component {
       // une ligne libre) dans UNE seule transaction editsBySheet — même mécanisme que l'achat pour
       // ses écritures multi-feuilles (pêcheur + chéquier), un seul aperçu/confirmation.
       let editsBySheet = null; let verifyTargets = null; let combinedSheetName = sheetName;
+      console.log('[suivi] bloc suiviAvoir déclenché', opts.suiviAvoir);
       if (kind === 'ventes' && opts.suiviAvoir && opts.suiviAvoir.avoir && opts.suiviAvoir.idFacture) {
         const sloc = this._suiviLocate(wbH);
+        console.log('[suivi] loc:', sloc ? sloc.sheetName : 'null');
         if (sloc && sloc.cols.idFacture >= 0 && sloc.cols.avoir >= 0) {
           // Ligne libre = colonne A (ID Facture) vide — même détecteur générique que partout
           // ailleurs (_locateAppendTarget), qui sait aussi créer une nouvelle ligne en fin de
@@ -2072,6 +2074,7 @@ class Component {
             buf = await patched.arrayBuffer();
           }
           const rowIdx2 = loc2.previewIdx;
+          console.log('[suivi] rowIdx:', rowIdx2, 'mode:', loc2.mode);
           editsBySheet = { [sheetName]: {} }; verifyTargets = [];
           Object.keys(colVals).forEach(ci => { editsBySheet[sheetName][loc.previewIdx + ':' + ci] = colVals[ci]; verifyTargets.push({ sheetName, rowIdx: loc.previewIdx, col: +ci, val: colVals[ci] }); });
           editsBySheet[sloc.sheetName] = editsBySheet[sloc.sheetName] || {};
