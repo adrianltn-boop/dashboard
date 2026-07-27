@@ -880,7 +880,7 @@ class Component {
     // les vues opérationnelles (suivi de paiement, Grenke) ne sont alimentées qu'APRÈS le succès.
     if (i >= 0) { this.setState({ msg: { kind: 'error', text: 'La modification d’une vente déjà enregistrée n’est pas encore disponible : corrigez-la directement dans votre fichier Excel. (Bientôt : correction guidée.)' } }); return; }
     if (!this._venteWriteReady()) { this.setState({ msg: { kind: 'error', text: 'Avant d’enregistrer une vente, réglez l’écriture de votre fichier : Paramètres → « Ventes client » → « Régler l’écriture », puis connectez le fichier. Rien n’est enregistré tant que le fichier ne peut pas être écrit.' } }); return; }
-    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, after: () => this._venteAfterWrite(rec) });
+    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, after: () => this._venteAfterWrite(rec), afterClose: () => { if (this._stockDir) this.requestStockPreview(rec, 'vente'); } });
   }
   _venteWriteReady() { const cfg = this.writeMapFor('ventes'); if (!cfg || !cfg.enabled || !cfg.cols) return false; const hi = this._writableHandleFor('ventes'); return !!(hi && hi.handle); }
   // Appelé UNIQUEMENT après une écriture Excel confirmée et vérifiée : met à jour les vues
@@ -901,11 +901,9 @@ class Component {
     const cards = [{ l: '📦 Stock', v: espLbl }, { l: '🏷️ Facture client', v: `${rec.num} — ${client} · TTC ${this.fmt(ttc)} · ${delai === 0 ? 'comptant' : 'délai ' + delai + ' j'} · prévue ${this.dd((datePrev.split('-')[2] || 0))}/${this.dd((datePrev.split('-')[1] || 0))}` }, { l: '💳 Suivi de paiement', v: `Solde à encaisser ${this.fmt(ttc)}` }, { l: '📊 Analytique', v: `Chiffre d'affaires (HT) ${this.fmt(ht)}` }];
     if (grenke) cards.push({ l: '🏦 Grenke', v: `Financé ${this.fmt(grenke.montant)} · restant dû ${this.fmt(grenke.rest)}` });
     await this._appendNextBlankRow('ventes'); // CORRECTION 2 — best-effort, ne bloque jamais la saisie ; awaited pour que le refresh ci-dessous lise le fichier à jour
-    // Reporté en macro-tâche (comme _runNextWrite pour l'achat) : confirmAppendWrite fait encore
-    // this.setState({ writePreview: null, ... }) juste après la résolution de cette fonction — sans
-    // ce report, l'aperçu stock ouvert ici entrerait en course avec ce nettoyage sur le même state.
-    console.log('[vente] avant requestStockPreview, writePreview:', this.state.writePreview);
-    if (this._stockDir) setTimeout(() => { try { this.requestStockPreview(rec, 'vente'); } catch (e) {} }, 0); // best-effort — une vente est déjà enregistrée, le stock ne doit jamais la remettre en cause
+    // Le stock (best-effort) n'est plus déclenché ici : requestAppendPreview le programme via
+    // afterClose, exécuté par confirmAppendWrite juste après la fermeture de CETTE modale — ordre
+    // garanti, sans dépendre du temps que met refreshVenteInvoiceNumber (I/O réelle) ci-dessous.
     this.setState({ venteDraft: this.venteDefault(), compFan: { mode: 'vente', title: `Vente de ${lignes.length} espèce${lignes.length > 1 ? 's' : ''} à ${client}`, cards } });
     await this.refreshVenteInvoiceNumber(); // BUG 2 — après la ligne vierge ET après la réinitialisation du draft
   }
@@ -2032,7 +2030,7 @@ class Component {
       // recalcule pas sur une écriture directe du XML — on autorise l'écrasement UNIQUEMENT sur
       // cette colonne, jamais sur les autres (protection anti-formule conservée partout ailleurs).
       const allowFormulaCols = (kind === 'operations' && colsMap.solde != null && colsMap.solde >= 0) ? { [sheetName]: new Set([colsMap.solde]) } : null;
-      this._pendingWrite = { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: loc.mode, colVals, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, step: opts.step || null };
+      this._pendingWrite = { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: loc.mode, colVals, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null };
       this.setState({ writePreview: { kind, fileName: hi.name, sheetName, excelRow: loc.excelRow, rows: preview, status: null } });
     } catch (e) {
       const tail = kind === 'ventes' ? " La vente n'a PAS été enregistrée — corrigez le réglage de l'écriture puis recommencez." : ' Votre saisie est enregistrée dans le tableau de bord.';
@@ -3295,6 +3293,10 @@ class Component {
       const bakMsg = bak && bak.ok ? ` — sauvegarde : ${bak.bakName}` : '';
       const okTxt = pw.excelRow == null ? `✓ « ${pw.name} » mis à jour (feuille « ${pw.sheetName} ») — relu et vérifié${bakMsg}.` : `✓ Écrit dans « ${pw.name} » (feuille « ${pw.sheetName} », ligne ${pw.excelRow}) — relu et vérifié${bakMsg}.`;
       this.setState({ writePreview: null, msg: { kind: 'ok', text: okTxt } });
+      // Déclenché APRÈS la fermeture de cette modale (jamais de course sur writePreview avec un
+      // aperçu ouvert par ce hook, ex. le stock après une vente) : ordre garanti par construction,
+      // contrairement à un délai fixe (setTimeout) dont la durée ne serait jamais certaine.
+      if (pw.afterClose) { try { pw.afterClose(); } catch (e) {} }
       this._maybeFinalizeAchat();
     } catch (e) {
       // RÈGLE 14 : erreur détaillée (fichier, feuille, ligne) ; RÈGLE 11 : garder la saisie prête si verrouillé.
