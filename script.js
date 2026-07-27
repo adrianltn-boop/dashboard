@@ -2897,6 +2897,7 @@ class Component {
       if (!Object.keys(edits).length) return failed(`Suivi des paiements non rempli : aucune colonne connue trouvée dans « ${loc.sheetName} ».`);
       const editsBySheet = { [loc.sheetName]: edits };
       this._pendingWrite = { kind: 'ventes', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: loc.sheetName, editsBySheet, verifyTargets, refuseFormula: true, after: () => this._runNextWrite() };
+      console.log('[suivi] setState writePreview');
       this.setState({ writePreview: { kind: 'suivi', fileName: hi.name, sheetName: loc.sheetName, excelRow: null, rows: preview, status: null, title: `Suivi des paiements — ligne ${rowIdx + 1}` } });
     } catch (e) { failed(`Suivi des paiements non rempli : ${(e && e.message) || 'erreur'}.`); }
   }
@@ -3328,6 +3329,7 @@ class Component {
   }
   async confirmAppendWrite() {
     const pw = this._pendingWrite; if (!pw) { this.setState({ writePreview: null }); return; }
+    console.log('[confirm] kind:', pw.kind, 'step:', pw.step);
     this.setState(s => s.writePreview ? { writePreview: { ...s.writePreview, status: 'writing' } } : {});
     try {
       // 1) CONTRÔLE DE CONCURRENCE : le fichier a-t-il changé depuis l'aperçu ? (travail à plusieurs)
