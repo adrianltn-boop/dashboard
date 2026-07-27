@@ -2860,6 +2860,7 @@ class Component {
   // facture, Nom client, Montant TTC, Avoir, Date de facture, Date échéance) — jamais les colonnes
   // calculées (Solde restant, Etat, Nombre de relance…), qui portent des formules Excel.
   async requestSuiviPaiementPreview(rec) {
+    console.log('[suivi] début', rec.num);
     const failed = (txt) => { this.setState({ msg: { kind: 'error', text: txt } }); this._runNextWrite(); };
     const hi = this._writableHandleFor('ventes');
     if (!hi || !hi.handle) { this._runNextWrite(); return; } // fichier ventes non connecté : rien à faire, silencieux
@@ -2869,7 +2870,8 @@ class Component {
       const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
       const buf = await file.arrayBuffer(); const wb = await this.readWorkbook(buf);
       const loc = this._suiviLocate(wb);
-      if (!loc) return failed(`Suivi des paiements non rempli : onglet « Suivi des paiements » introuvable dans « ${hi.name} ».`);
+      console.log('[suivi] locate result:', loc);
+      if (!loc) { console.log('[suivi] onglet non trouvé'); return failed(`Suivi des paiements non rempli : onglet « Suivi des paiements » introuvable dans « ${hi.name} ».`); }
       const sh = wb.find(s => s.name === loc.sheetName); const rows = sh.rows;
       const anchorCol = loc.cols.numero;
       if (anchorCol < 0) return failed(`Suivi des paiements non rempli : colonne « Numéro facture » introuvable dans « ${loc.sheetName} ».`);
