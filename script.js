@@ -2135,10 +2135,12 @@ class Component {
     let hi = -1; for (let r = 0; r < Math.min(rows.length, 10); r++) { if ((rows[r] || []).some(c => U(c) === 'NUMERO')) { hi = r; break; } }
     if (hi < 0) throw new Error(`en-tête « NUMERO » introuvable dans « ${sheetName} »`);
     const hdr = rows[hi]; const zones = [];
-    for (let c = 0; c < hdr.length; c++) { if (U(hdr[c]) === 'NUMERO') { const z = { num: c, date: -1, desc: -1, mont: -1, paie: -1, etat: -1 }; for (let k = c + 1; k < hdr.length; k++) { const l = U(hdr[k]); if (l === 'NUMERO') break; if (l === 'DATE' && z.date < 0) z.date = k; else if (l === 'DESCRIPTION' && z.desc < 0) z.desc = k; else if (l === 'MONTANT' && z.mont < 0) z.mont = k; else if (l === 'PAIEMENT' && z.paie < 0) z.paie = k; else if (l === 'ETAT' && z.etat < 0) z.etat = k; } zones.push(z); } }
+    for (let c = 0; c < hdr.length; c++) { if (U(hdr[c]) === 'NUMERO') { const z = { num: c, date: -1, desc: -1, mont: -1, paie: -1, etat: -1, obs: -1 }; for (let k = c + 1; k < hdr.length; k++) { const l = U(hdr[k]); if (l === 'NUMERO') break; if (l === 'DATE' && z.date < 0) z.date = k; else if (l === 'DESCRIPTION' && z.desc < 0) z.desc = k; else if (l === 'MONTANT' && z.mont < 0) z.mont = k; else if (l === 'PAIEMENT' && z.paie < 0) z.paie = k; else if (l === 'ETAT' && z.etat < 0) z.etat = k; else if (l === 'OBS' && z.obs < 0) z.obs = k; } zones.push(z); } }
     if (!zones.length) throw new Error(`aucune colonne « NUMERO » dans « ${sheetName} »`);
     const want = this._vNum(chequeNum);
-    for (let r = hi + 1; r < rows.length; r++) { for (const z of zones) { const v = rows[r][z.num]; if (v !== '' && v != null && this._vNum(v) === want) return { previewIdx: r, excelRow: r + 1, dateCol: z.date, descCol: z.desc, montCol: z.mont, paieCol: z.paie, etatCol: z.etat }; } }
+    // Les lignes vierges (numéro pas encore utilisé) sont naturellement ignorées ici (v==='' ne
+    // correspond jamais à `want`) — la recherche continue jusqu'à la fin de la feuille.
+    for (let r = hi + 1; r < rows.length; r++) { for (const z of zones) { const v = rows[r][z.num]; if (v !== '' && v != null && this._vNum(v) === want) return { previewIdx: r, excelRow: r + 1, dateCol: z.date, descCol: z.desc, montCol: z.mont, paieCol: z.paie, etatCol: z.etat, obsCol: z.obs }; } }
     throw new Error(`le numéro de chèque ${chequeNum} n'existe pas (imprimé) dans la feuille « ${sheetName} »`);
   }
   // Prépare l'aperçu de complétion de la ligne du chèque, DANS LE FICHIER PÊCHEUR (source « operations »).
@@ -2159,11 +2161,18 @@ class Component {
       if (!sheetName) return chequeFailed(`Chèque n° ${rec.chequeNum} non complété : aucune feuille ne correspond à la série « ${String(rec.chequeNum).replace(/\D/g, '').slice(0, 3)} » dans ce fichier.`);
       const loc = this._locateChequeRow(wb, sheetName, rec.chequeNum);
       const serial = this._excelSerial(rec.date);
-      const desc = (rec.pecheur || '') + (rec.num ? ' — ' + rec.num : '');
+      const desc = rec.pecheur || '';
+      const obs = this._chequeObsText(1, 1, rec.num || '');
       const colVals = {}; const preview = [];
       if (loc.dateCol >= 0) { colVals[loc.dateCol] = serial != null ? serial : (rec.date || ''); preview.push({ label: 'Date', col: colName(loc.dateCol + 1), value: this._isoToFr(rec.date) }); }
       if (loc.descCol >= 0) { colVals[loc.descCol] = desc; preview.push({ label: 'Description', col: colName(loc.descCol + 1), value: desc }); }
       if (loc.montCol >= 0) { colVals[loc.montCol] = rec.total; preview.push({ label: 'Montant', col: colName(loc.montCol + 1), value: this.fmt(rec.total) }); }
+      if (loc.obsCol >= 0) { colVals[loc.obsCol] = obs; preview.push({ label: 'Obs', col: colName(loc.obsCol + 1), value: obs }); }
+      // Paiement immédiat coché (mode chèque) : le chèque est encaissé dès la saisie de l'achat.
+      if (rec.paiementImmediat) {
+        if (loc.paieCol >= 0) { colVals[loc.paieCol] = rec.total; preview.push({ label: 'Paiement', col: colName(loc.paieCol + 1), value: this.fmt(rec.total) }); }
+        if (loc.etatCol >= 0) { colVals[loc.etatCol] = 'PAYE'; preview.push({ label: 'Etat', col: colName(loc.etatCol + 1), value: 'PAYE' }); }
+      }
       if (!preview.length) return chequeFailed(`Chèque non complété : colonnes Date/Description/Montant introuvables dans « ${sheetName} ».`);
       this._pendingWrite = { kind: 'operations', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: 'patch', colVals, refuseFormula: true, after: () => this._runNextWrite(), step: 'cheque' };
       this.setState({ writePreview: { kind: 'cheque', fileName: hi.name, sheetName, excelRow: loc.excelRow, rows: preview, status: null, title: `Chèque n° ${rec.chequeNum} — feuille « ${sheetName} », ligne ${loc.excelRow}` } });
@@ -2201,9 +2210,11 @@ class Component {
       const cSh = wb.find(x => x.name === chequeSheetName);
       const cRow = (cSh && cSh.rows[cLoc.previewIdx]) || [];
       const montantPaye = cLoc.paieCol >= 0 ? this._vNum(cRow[cLoc.paieCol]) : 0;
+      // Montant du chèque : lu directement dans la colonne MONTANT du chéquier (pas depuis un cache local).
+      const montantChq = cLoc.montCol >= 0 ? this._vNum(cRow[cLoc.montCol]) : null;
       // Toujours re-vérifier que la sélection n'a pas changé pendant la lecture asynchrone.
       if ((this.state.paiementDraft || {}).ref !== ref) return;
-      this.setState({ chqLiveStatus: { ref, checked: true, applicable: true, encaisse: montantPaye > 0.005, montantPaye } });
+      this.setState({ chqLiveStatus: { ref, checked: true, applicable: true, encaisse: montantPaye > 0.005, montantPaye, montantChq } });
     } catch (e) {
       this.setState({ chqLiveStatus: { ref, checked: true, applicable: false } });
     }
@@ -2226,7 +2237,8 @@ class Component {
     if (d.mode === 'cheque') {
       if (!d.chequier || !d.chequeNum) { this.setState({ msg: { kind: 'error', text: 'Choisissez un chéquier et un numéro de chèque.' } }); return; }
       if (!(this._vNum(d.montant) > 0)) { this.setState({ msg: { kind: 'error', text: 'Indiquez le montant du chèque.' } }); return; }
-      this.requestChq2Preview(d.ref, d.chequier, d.chequeNum, this._vNum(d.montant));
+      const pd = this.state.paiementDraft;
+      this.requestChq2Preview(d.ref, d.chequier, d.chequeNum, this._vNum(d.montant), pd ? pd.pecheur : '');
       return;
     }
     const montant = this._vNum(d.montant);
@@ -2376,13 +2388,15 @@ class Component {
         let cLoc;
         try { cLoc = this._locateChequeRow(wb, chequeSheetName, pd.chequeNum); }
         catch (e) { this.setState({ msg: { kind: 'error', text: e.message } }); return; }
-        const desc = `${(pd.pecheur || '').toUpperCase()} — ${pd.ref}`;
+        const desc = pd.pecheur || '';
+        const obs = this._chequeObsText(1, 1, pd.ref || '');
         editsBySheet[chequeSheetName] = editsBySheet[chequeSheetName] || {};
         if (cLoc.dateCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.dateCol] = serial; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.dateCol, val: serial }); preview.push({ label: 'Chéquier — Date', col: colName(cLoc.dateCol), value: this._isoToFr(this._payTodayIso()) }); }
         if (cLoc.descCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.descCol] = desc; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.descCol, val: desc }); preview.push({ label: 'Chéquier — Description', col: colName(cLoc.descCol), value: desc }); }
         if (cLoc.montCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.montCol] = montantPaye; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.montCol, val: montantPaye }); preview.push({ label: 'Chéquier — Montant', col: colName(cLoc.montCol), value: this.fmt(montantPaye) }); }
         if (cLoc.paieCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.paieCol] = montantPaye; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.paieCol, val: montantPaye }); preview.push({ label: 'Chéquier — Paiement', col: colName(cLoc.paieCol), value: this.fmt(montantPaye) }); }
         if (cLoc.etatCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.etatCol] = 'PAYE'; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.etatCol, val: 'PAYE' }); preview.push({ label: 'Chéquier — Etat', col: colName(cLoc.etatCol), value: 'PAYE' }); }
+        if (cLoc.obsCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.obsCol] = obs; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.obsCol, val: obs }); preview.push({ label: 'Chéquier — Obs', col: colName(cLoc.obsCol), value: obs }); }
       }
       const allowFormulaCols = soldeCol != null && soldeCol >= 0 ? { [sheetName]: new Set([soldeCol]) } : null;
       this._pendingWrite = { kind: 'operations', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: chequeSheetName ? `${sheetName}, ${chequeSheetName}` : sheetName, editsBySheet, verifyTargets, refuseFormula: true, allowFormulaCols, after: () => this._paiementAfterWrite(pd.ref) };
@@ -2539,7 +2553,7 @@ class Component {
   // Second chèque pour la même facture : complète la ligne déjà imprimée du chéquier
   // (Date/Description/Montant — Paiement/État restent vides, comme à la saisie d'achat), et
   // ajoute le n° à la colonne Chèque du fichier achat (« n°1 / n°2 ») sans toucher Total payé/Solde.
-  async requestChq2Preview(ref, chequier, chequeNum, montant) {
+  async requestChq2Preview(ref, chequier, chequeNum, montant, pecheur) {
     const s = this._paiementOpsSetup(); if (!s) return;
     try {
       const okPerm = await this._ensureWritePermission(s.hi.handle);
@@ -2553,12 +2567,16 @@ class Component {
       const sh = wb.find(x => x.name === s.sheetName);
       const row = (sh && sh.rows[loc.previewIdx]) || [];
       const chequeRaw = String(row[s.chequeCol] == null ? '' : row[s.chequeCol]).trim();
+      // Seuls les jetons numériques (vrais numéros de chèque) de la colonne Chèque comptent pour
+      // la numérotation « Chèque X/Y » — un « BB » ou une observation libre n'a pas de ligne chéquier.
+      const existingNums = chequeRaw ? chequeRaw.split('/').map(x => x.trim()).filter(x => /^\d+$/.test(x)) : [];
+      const newTotal = existingNums.length + 1;
       const chequeSheetName = this._chequeSheetForNumber(chequeNum, wb, chequier);
       if (!chequeSheetName) { this.setState({ msg: { kind: 'error', text: `Aucune feuille ne correspond au chéquier « ${chequier} » pour le n° ${chequeNum}.` } }); return; }
       let cLoc; try { cLoc = this._locateChequeRow(wb, chequeSheetName, chequeNum); }
       catch (e) { this.setState({ msg: { kind: 'error', text: e.message } }); return; }
       const serial = this._excelSerial(this._payTodayIso());
-      const desc = `${ref}`;
+      const desc = pecheur || '';
       const editsBySheet = {}; const verifyTargets = []; const preview = [];
       const colName = n => this._colLetter(n + 1);
       const newChq = chequeRaw ? `${chequeRaw} / ${chequeNum}` : String(chequeNum);
@@ -2566,10 +2584,28 @@ class Component {
       editsBySheet[s.sheetName][loc.previewIdx + ':' + s.chequeCol] = newChq;
       verifyTargets.push({ sheetName: s.sheetName, rowIdx: loc.previewIdx, col: s.chequeCol, val: newChq });
       preview.push({ label: 'Chèque', col: colName(s.chequeCol), value: newChq });
+      // Renumérote l'OBS des chèques déjà présents (« Chèque 1/1 » devient « Chèque 1/2 », etc.).
+      for (let i = 0; i < existingNums.length; i++) {
+        const num = existingNums[i];
+        try {
+          const exSheetName = this._chequeSheetForNumber(num, wb, chequier);
+          if (!exSheetName) continue;
+          const exLoc = this._locateChequeRow(wb, exSheetName, num);
+          if (exLoc.obsCol >= 0) {
+            const exObs = this._chequeObsText(i + 1, newTotal, ref);
+            editsBySheet[exSheetName] = editsBySheet[exSheetName] || {};
+            editsBySheet[exSheetName][exLoc.previewIdx + ':' + exLoc.obsCol] = exObs;
+            verifyTargets.push({ sheetName: exSheetName, rowIdx: exLoc.previewIdx, col: exLoc.obsCol, val: exObs });
+            preview.push({ label: `Chéquier ${num} — Obs`, col: colName(exLoc.obsCol), value: exObs });
+          }
+        } catch (e) { /* chèque existant introuvable — on ignore, la renumérotation n'est qu'un confort */ }
+      }
+      const newObs = this._chequeObsText(newTotal, newTotal, ref);
       editsBySheet[chequeSheetName] = editsBySheet[chequeSheetName] || {};
       if (cLoc.dateCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.dateCol] = serial; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.dateCol, val: serial }); preview.push({ label: 'Chéquier — Date', col: colName(cLoc.dateCol), value: this._isoToFr(this._payTodayIso()) }); }
       if (cLoc.descCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.descCol] = desc; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.descCol, val: desc }); preview.push({ label: 'Chéquier — Description', col: colName(cLoc.descCol), value: desc }); }
       if (cLoc.montCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.montCol] = montant; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.montCol, val: montant }); preview.push({ label: 'Chéquier — Montant', col: colName(cLoc.montCol), value: this.fmt(montant) }); }
+      if (cLoc.obsCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.obsCol] = newObs; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.obsCol, val: newObs }); preview.push({ label: 'Chéquier — Obs', col: colName(cLoc.obsCol), value: newObs }); }
       this._pendingWrite = { kind: 'operations', buf, handle: s.hi.handle, name: s.hi.name, fingerprint, sheetName: `${s.sheetName}, ${chequeSheetName}`, editsBySheet, verifyTargets, refuseFormula: true, after: () => { this._chq2AfterWrite(chequier, chequeNum); this.setState({ chqAddDraft: null, msg: { kind: 'ok', text: `Chèque n°${chequeNum} ajouté à la facture ${ref}.` } }); this._refreshChqLiveStatus(ref); } };
       this.setState({ writePreview: { kind: 'chqmodif', fileName: s.hi.name, sheetName: `${s.sheetName} + ${chequeSheetName}`, rows: preview, status: null, refLabel: ref } });
     } catch (e) {
@@ -3616,6 +3652,8 @@ class Component {
     const s = this._norm(raw);
     return s.includes('annule') || s.includes('cancelled');
   }
+  // Texte de la colonne OBS du chéquier : « Chèque X/Y — Facture N°REF ».
+  _chequeObsText(idx, total, ref) { return `Chèque ${idx}/${total} — Facture N°${ref}`; }
   mapFactures(text) {
     const { header, rows, find } = this.parseTable(text);
     const clientCol = find('nom du client', 'nom client', 'clients', 'client'), fournCol = find('fournisseur');
@@ -5729,13 +5767,12 @@ class Component {
     const paiementSelMontantTotal = this.fmt(selOp ? Math.abs(selOp.amt) : 0);
     const paiementSelPaye = this.fmt(selOp ? (selOp.paid || 0) : 0);
     const paiementSelSolde = this.fmt(selReste);
-    // ─ Fiche détail : moyen de paiement (chèque : montant si retrouvé dans le chéquier local, statut heuristique) ─
-    const chqAmountKnown = (() => { if (selChequeKind !== 'cheque_num') return null; for (const cq of this.chequierRows()) { const hit = (cq.cheques || []).find(c => String(c.num) === String(selOp.chq)); if (hit) return hit.amount; } return null; })();
-    const paiementChqAmount = chqAmountKnown != null ? this.fmt(chqAmountKnown) : '—';
-    // Statut réellement lu dans la colonne PAIEMENT de la feuille chéquier (pas déduit du solde
-    // de la facture) — un chèque encaissé partiellement laisse le solde > 0.
+    // ─ Fiche détail : moyen de paiement — montant et statut lus RÉELLEMENT dans le chéquier
+    // (colonnes MONTANT et PAIEMENT de la ligne du chèque), pas déduits d'un cache local ni du
+    // solde de la facture (un chèque encaissé partiellement laisse le solde > 0).
     const chqLiveStatus = this.state.chqLiveStatus;
     const chqLive = (chqLiveStatus && chqLiveStatus.ref === pmd.ref) ? chqLiveStatus : null;
+    const paiementChqAmount = (chqLive && chqLive.applicable && chqLive.montantChq != null) ? this.fmt(chqLive.montantChq) : (chqLive ? '—' : 'Vérification…');
     const chqIsEncaisse = !!(chqLive && chqLive.applicable && chqLive.encaisse);
     const paiementChqStatut = !chqLive ? 'Vérification…' : !chqLive.applicable ? '—' : (chqIsEncaisse ? 'Encaissé' : 'Non encaissé');
     const paiementChqStatutStyle = chqIsEncaisse ? `color:${green};font-weight:700` : (chqLive && chqLive.applicable) ? 'color:#b45309;font-weight:700' : 'color:#93a1b3;font-weight:700';
