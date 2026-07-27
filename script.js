@@ -904,6 +904,7 @@ class Component {
     // Reporté en macro-tâche (comme _runNextWrite pour l'achat) : confirmAppendWrite fait encore
     // this.setState({ writePreview: null, ... }) juste après la résolution de cette fonction — sans
     // ce report, l'aperçu stock ouvert ici entrerait en course avec ce nettoyage sur le même state.
+    console.log('[vente] avant requestStockPreview, writePreview:', this.state.writePreview);
     if (this._stockDir) setTimeout(() => { try { this.requestStockPreview(rec, 'vente'); } catch (e) {} }, 0); // best-effort — une vente est déjà enregistrée, le stock ne doit jamais la remettre en cause
     this.setState({ venteDraft: this.venteDefault(), compFan: { mode: 'vente', title: `Vente de ${lignes.length} espèce${lignes.length > 1 ? 's' : ''} à ${client}`, cards } });
     await this.refreshVenteInvoiceNumber(); // BUG 2 — après la ligne vierge ET après la réinitialisation du draft
@@ -2821,6 +2822,7 @@ class Component {
       if (!Object.keys(editsBySheet).length) return stockFailed(`Stock non rempli (${ctx})${unresolved.length ? ' : ' + unresolved.join(', ') : ''}.`);
       const sheetList = Object.keys(editsBySheet);
       this._pendingWrite = { kind: 'operations', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: sheetList.join(', '), editsBySheet, verifyTargets, refuseFormula: true, after: () => this._runNextWrite(), step: 'stock', unresolved };
+      console.log('[stock] setState writePreview:', JSON.stringify(preview).substring(0, 100));
       this.setState({ writePreview: { kind: 'stock', fileName: hi.name, sheetName: sheetList.join(', '), excelRow: null, rows: preview, status: null, title: `Stock de la semaine (${ctx === 'vente' ? 'sortie' : 'entrée'}) — ${sheetList.length} feuille(s)${unresolved.length ? ' · non placé : ' + unresolved.join(', ') : ''}` } });
     } catch (e) { stockFailed(`Stock non rempli (${ctx}) : ${(e && e.message) || 'erreur'}.`); }
   }
