@@ -249,6 +249,7 @@ class Component {
   static EMPDOCS_KEY = 'avEmpDocs';
   static AGENDA_KEY = 'avAgenda';
   static PAYTRACK_KEY = 'avPayTrack';
+  static GRENKE_STATUT = 'En attente paiement Grenke'; // statut écrit dans Factures (ETAT) et dans l'onglet Grenke
   static VSAISIE_KEY = 'avVentesSaisie';
   static GRKMAN_KEY = 'avGrenkeManuel';
   static ACHSAISIE_KEY = 'avAchatsSaisie';
@@ -898,10 +899,10 @@ class Component {
     // les vues opérationnelles (suivi de paiement, Grenke) ne sont alimentées qu'APRÈS le succès.
     if (i >= 0) { this.setState({ msg: { kind: 'error', text: 'La modification d’une vente déjà enregistrée n’est pas encore disponible : corrigez-la directement dans votre fichier Excel. (Bientôt : correction guidée.)' } }); return; }
     if (!this._venteWriteReady()) { this.setState({ msg: { kind: 'error', text: 'Avant d’enregistrer une vente, réglez l’écriture de votre fichier : Paramètres → « Ventes client » → « Régler l’écriture », puis connectez le fichier. Rien n’est enregistré tant que le fichier ne peut pas être écrit.' } }); return; }
-    // ID Facture s'écrit toujours dans « Suivi des paiements » (pour que les formules s'y
-    // accrochent, avoir ou non) ; Avoir n'y est écrit que si > 0 — même transaction editsBySheet
-    // que l'écriture Factures (voir requestAppendPreview).
-    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, suiviAvoir: rec.idFacture ? { avoir, idFacture: rec.idFacture } : null, after: () => this._venteAfterWrite(rec), afterClose: () => {
+    // Écritures annexes embarquées dans la MÊME transaction que Factures (voir requestAppendPreview) :
+    //  · « Suivi des paiements » : ID Facture toujours (pour que les formules s'y accrochent), Avoir si > 0 ;
+    //  · « Grenke » : une ligne de suivi si la vente est financée (le statut ETAT part de venteWriteValues).
+    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, suiviAvoir: rec.idFacture ? { avoir, idFacture: rec.idFacture } : null, grenkeRow: grenke ? { num: this._numSansPrefixe(rec.num), client, ttc } : null, after: () => this._venteAfterWrite(rec), afterClose: () => {
       if (this._stockDir) { this._writeQueue = [() => this.requestStockPreview(rec, 'vente')]; this._runNextWrite(); }
     } });
   }
@@ -1815,7 +1816,11 @@ class Component {
   _anchorFieldsFor(kind) { return kind === 'ventes' ? ['date', 'ht', 'partner'] : kind === 'operations' ? ['date', 'amt', 'partner'] : kind === 'factures' ? ['date', 'ttc', 'partner'] : []; }
   // Valeurs d'une saisie, par clé de champ (toutes les clés candidates ; l'ajout n'écrit QUE les colonnes réellement mappées).
   achatWriteValues(rec) { const immediat = !!rec.paiementImmediat; return { ref: rec.num || '', annee: String(rec.date || '').slice(0, 4), date: rec.date || '', partner: rec.pecheur || '', amt: rec.total, cheque: rec.paiement === 'cheque' ? (rec.chequeNum || '') : (rec.paiement === 'autre' ? (rec.observation || '') : ''), paid: immediat ? rec.total : '', paidDate: immediat ? this._payTodayIso() : '', solde: immediat ? 0 : rec.total }; }
-  venteWriteValues(rec) { const delai = Math.max(0, Math.min(30, Math.round(this._vNum(rec.delai)))); return { idFacture: rec.idFacture || '', ref: rec.num || '', partner: rec.client || '', date: rec.date || '', ht: rec.ht, tvaIr: rec.tvaIrl, tvaFr: rec.tvaFr, grenke: rec.grenke ? rec.grenke.montant : '', ttc: rec.ttc, delai: delai ? (delai + ' jrs') : '', datePrev: rec.datePrev || '', status: '' }; }
+  // Le statut (colonne ETAT) part de la même clé « status » déjà mappée dans Paramètres → aucune
+  // colonne codée en dur : une vente financée par Grenke est marquée « En attente paiement Grenke ».
+  venteWriteValues(rec) { const delai = Math.max(0, Math.min(30, Math.round(this._vNum(rec.delai)))); return { idFacture: rec.idFacture || '', ref: rec.num || '', partner: rec.client || '', date: rec.date || '', ht: rec.ht, tvaIr: rec.tvaIrl, tvaFr: rec.tvaFr, grenke: rec.grenke ? rec.grenke.montant : '', ttc: rec.ttc, delai: delai ? (delai + ' jrs') : '', datePrev: rec.datePrev || '', status: rec.grenke ? Component.GRENKE_STATUT : '' }; }
+  // N° de facture sans son préfixe (« INV-5720 » → « 5720 ») — format attendu par l'onglet Grenke.
+  _numSansPrefixe(num) { return String(num == null ? '' : num).trim().replace(/^[^0-9]+/, ''); }
 
   // Handle inscriptible d'une source connectée (fichier surveillé prioritaire, sinon cache d'import).
   _writableHandleFor(kind) {
@@ -2058,58 +2063,70 @@ class Component {
       // une ligne libre) dans UNE seule transaction editsBySheet — même mécanisme que l'achat pour
       // ses écritures multi-feuilles (pêcheur + chéquier), un seul aperçu/confirmation.
       let editsBySheet = null; let verifyTargets = null; let combinedSheetName = sheetName;
-      console.log('[suivi] bloc suiviAvoir déclenché', opts.suiviAvoir);
+      const rowAppends = []; const extraSheets = [];
+      // Les écritures secondaires ci-dessous rejoignent l'écriture Factures dans UNE seule
+      // transaction editsBySheet (un seul aperçu, une seule confirmation, une seule sauvegarde).
+      const startCombined = () => {
+        if (editsBySheet) return;
+        editsBySheet = { [sheetName]: {} }; verifyTargets = [];
+        Object.keys(colVals).forEach(ci => { editsBySheet[sheetName][loc.previewIdx + ':' + ci] = colVals[ci]; verifyTargets.push({ sheetName, rowIdx: loc.previewIdx, col: +ci, val: colVals[ci] }); });
+      };
+      const putCell = (shName, rowIdx, colIdx, val, label, display) => {
+        editsBySheet[shName] = editsBySheet[shName] || {};
+        editsBySheet[shName][rowIdx + ':' + colIdx] = val;
+        preview.push({ label, col: `${colName(colIdx + 1)}${rowIdx + 1}`, value: display != null ? display : String(val) });
+        verifyTargets.push({ sheetName: shName, rowIdx, col: colIdx, val });
+      };
+      // Repère la ligne où écrire dans une feuille annexe : d'abord une ligne EXISTANTE dont la
+      // colonne clé vaut déjà la valeur cherchée, sinon la première ligne dont la colonne clé est
+      // vide, sinon une nouvelle ligne créée après la dernière ligne ayant du contenu (dans
+      // n'importe quelle colonne — _locateAppendTarget est inadapté ici car il ignore les cellules
+      // en formule, or ces feuilles n'ont quasiment que des formules).
+      const placeRow = async (shLoc, keyCol, keyVal) => {
+        const rowsX = (wbH.find(s => s.name === shLoc.sheetName) || { rows: [] }).rows;
+        const want = String(keyVal == null ? '' : keyVal).trim();
+        for (let r = shLoc.dataStart; r < rowsX.length; r++) { const v = (rowsX[r] || [])[keyCol]; if (v != null && String(v).trim() !== '' && String(v).trim() === want) return { rowIdx: r, exists: true }; }
+        for (let r = shLoc.dataStart; r < rowsX.length; r++) { const v = (rowsX[r] || [])[keyCol]; if (v == null || String(v).trim() === '') return { rowIdx: r, exists: false }; }
+        let lastContentIdx = -1;
+        for (let r = shLoc.dataStart; r < rowsX.length; r++) { if ((rowsX[r] || []).some(c => String(c == null ? '' : c).trim() !== '')) lastContentIdx = r; }
+        if (lastContentIdx < 0) return null;
+        const rowNums = await this._sheetRowExcelNumbers(buf, shLoc.sheetName);
+        const prevExcelRow = rowNums[lastContentIdx];
+        if (prevExcelRow == null) return null;
+        rowAppends.push({ sheetName: shLoc.sheetName, prevExcelRow, colLetters: shLoc.formulaCols });
+        return { rowIdx: lastContentIdx + 1, exists: false };
+      };
       if (kind === 'ventes' && opts.suiviAvoir && opts.suiviAvoir.idFacture) {
         const sloc = this._suiviLocate(wbH);
-        console.log('[suivi] loc:', sloc ? sloc.sheetName : 'null');
         if (sloc && sloc.cols.idFacture >= 0) {
-          // Cherche une ligne EXISTANTE dont la colonne A vaut exactement cet ID Facture — pas
-          // la première case vide. Si trouvée, on n'y écrit que l'Avoir (l'ID y est déjà).
-          const idStr = String(opts.suiviAvoir.idFacture).trim();
-          const rows2 = wbH.find(s => s.name === sloc.sheetName).rows;
-          let rowIdx2 = -1;
-          for (let r = sloc.dataStart; r < rows2.length; r++) { const v = (rows2[r] || [])[sloc.cols.idFacture]; if (v != null && String(v).trim() === idStr) { rowIdx2 = r; break; } }
-          const found = rowIdx2 >= 0;
-          if (!found) {
-            // _locateAppendTarget est inadapté ici : il ignore volontairement les cellules en
-            // formule (Filtre 1), or B→N sont TOUTES des formules — il verrait chaque ligne comme
-            // vide. On cherche donc nous-mêmes la dernière ligne ayant du contenu dans N'IMPORTE
-            // QUELLE colonne (valeurs déjà résolues par readWorkbook, résultats de formule inclus),
-            // et on ajoute la nouvelle ligne juste après, en recopiant les formules de la ligne
-            // précédente (B,C,D,F→N) décalées de +1. Prudence : seules les références relatives
-            // simples sont décalées (voir _suiviAppendRowWithFormulas).
-            let lastContentIdx = -1;
-            for (let r = sloc.dataStart; r < rows2.length; r++) { if ((rows2[r] || []).some(c => String(c == null ? '' : c).trim() !== '')) lastContentIdx = r; }
-            const newIdx = lastContentIdx + 1;
-            console.log('[suivi] lastContentIdx (toutes colonnes):', lastContentIdx, '→ nouvelle ligne:', newIdx);
-            const rowNums = await this._suiviRowExcelNumbers(buf, sloc.sheetName);
-            const prevExcelRow = rowNums[newIdx - 1];
-            if (prevExcelRow != null) {
-              const patched = await this._suiviAppendRowWithFormulas(buf, sloc.sheetName, prevExcelRow, ['B', 'C', 'D', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']);
-              buf = await patched.arrayBuffer();
-              console.log('[suivi] après append, buf size:', buf.byteLength);
-            }
-            rowIdx2 = newIdx;
+          sloc.formulaCols = ['B', 'C', 'D', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'];
+          const place = await placeRow(sloc, sloc.cols.idFacture, opts.suiviAvoir.idFacture);
+          if (place) {
+            startCombined();
+            if (!place.exists) putCell(sloc.sheetName, place.rowIdx, sloc.cols.idFacture, opts.suiviAvoir.idFacture, 'ID Facture (Suivi des paiements)');
+            if (opts.suiviAvoir.avoir && sloc.cols.avoir >= 0) putCell(sloc.sheetName, place.rowIdx, sloc.cols.avoir, opts.suiviAvoir.avoir, 'Avoir (Suivi des paiements)', this.fmt(opts.suiviAvoir.avoir));
+            extraSheets.push(sloc.sheetName);
           }
-          console.log('[suivi] rowIdx:', rowIdx2, 'mode:', found ? 'trouvé (ID existant)' : 'créée en fin de tableau');
-          editsBySheet = { [sheetName]: {} }; verifyTargets = [];
-          Object.keys(colVals).forEach(ci => { editsBySheet[sheetName][loc.previewIdx + ':' + ci] = colVals[ci]; verifyTargets.push({ sheetName, rowIdx: loc.previewIdx, col: +ci, val: colVals[ci] }); });
-          editsBySheet[sloc.sheetName] = editsBySheet[sloc.sheetName] || {};
-          if (!found) {
-            editsBySheet[sloc.sheetName][rowIdx2 + ':' + sloc.cols.idFacture] = opts.suiviAvoir.idFacture;
-            preview.push({ label: 'ID Facture (Suivi des paiements)', col: `${colName(sloc.cols.idFacture + 1)}${rowIdx2 + 1}`, value: String(opts.suiviAvoir.idFacture) });
-            verifyTargets.push({ sheetName: sloc.sheetName, rowIdx: rowIdx2, col: sloc.cols.idFacture, val: opts.suiviAvoir.idFacture });
-          }
-          if (opts.suiviAvoir.avoir && sloc.cols.avoir >= 0) {
-            editsBySheet[sloc.sheetName][rowIdx2 + ':' + sloc.cols.avoir] = opts.suiviAvoir.avoir;
-            preview.push({ label: 'Avoir (Suivi des paiements)', col: `${colName(sloc.cols.avoir + 1)}${rowIdx2 + 1}`, value: this.fmt(opts.suiviAvoir.avoir) });
-            verifyTargets.push({ sheetName: sloc.sheetName, rowIdx: rowIdx2, col: sloc.cols.avoir, val: opts.suiviAvoir.avoir });
-          }
-          combinedSheetName = `${sheetName}, ${sloc.sheetName}`;
         }
       }
+      // Vente financée par Grenke : une ligne de suivi dans l'onglet « Grenke » du même fichier.
+      if (kind === 'ventes' && opts.grenkeRow && opts.grenkeRow.num) {
+        const gloc = this._grenkeLocate(wbH);
+        if (gloc) {
+          const place = await placeRow(gloc, gloc.cols.invoice, opts.grenkeRow.num);
+          if (place) {
+            startCombined();
+            putCell(gloc.sheetName, place.rowIdx, gloc.cols.invoice, opts.grenkeRow.num, 'N° facture (Grenke)');
+            putCell(gloc.sheetName, place.rowIdx, gloc.cols.customer, opts.grenkeRow.client, 'Client (Grenke)');
+            putCell(gloc.sheetName, place.rowIdx, gloc.cols.ttc, opts.grenkeRow.ttc, 'Total TTC (Grenke)', this.fmt(opts.grenkeRow.ttc));
+            putCell(gloc.sheetName, place.rowIdx, gloc.cols.statut, Component.GRENKE_STATUT, 'Statut (Grenke)');
+            extraSheets.push(gloc.sheetName);
+          }
+        }
+      }
+      if (extraSheets.length) combinedSheetName = [sheetName, ...extraSheets].join(', ');
       this._pendingWrite = editsBySheet
-        ? { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: combinedSheetName, editsBySheet, verifyTargets, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null }
+        ? { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: combinedSheetName, editsBySheet, verifyTargets, rowAppends, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null }
         : { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: loc.mode, colVals, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null };
       this.setState({ writePreview: { kind, fileName: hi.name, sheetName: combinedSheetName, excelRow: editsBySheet ? null : loc.excelRow, rows: preview, status: null } });
     } catch (e) {
@@ -2799,11 +2816,6 @@ class Component {
   // uniquement en colonne A — on teste donc chaque cellule de la ligne, normalisée.
   _stockRowHas(row, ...kws) { return (row || []).some(c => { const n = this._norm(c); return kws.every(k => n.indexOf(k) >= 0); }); }
   _stockFindSection(rows, kw1, kw2) {
-    for (let i = 0; i < Math.min(40, rows.length); i++) {
-      const has1 = rows[i].some(c => c && this._norm(String(c)).includes(this._norm(kw1)));
-      const has2 = rows[i].some(c => c && this._norm(String(c)).includes(this._norm(kw2)));
-      if (has1 || has2) console.log('[stockFind] ligne', i, 'kw1:', has1, 'kw2:', has2, 'vals COMPLETES:', rows[i].filter(v => v != null && v !== ''));
-    }
     // Ligne titre = contient kw1 ET kw2 mais PAS "total" (sinon confusion avec "TOTAL ACHAT - ENTREE").
     let titleRow = -1;
     for (let r = 0; r < rows.length; r++) { if (this._stockRowHas(rows[r], kw1, kw2) && !this._stockRowHas(rows[r], 'total')) { titleRow = r; break; } }
@@ -2814,7 +2826,6 @@ class Component {
     let hi = -1;
     for (let r = titleRow - 1; r >= Math.max(0, titleRow - 5); r--) { if ((rows[r] || []).some(c => this._norm(c).indexOf('prix') >= 0)) { hi = r; break; } }
     if (hi < 0) { for (let r = titleRow + 1; r < Math.min(rows.length, titleRow + 4); r++) { if ((rows[r] || []).some(c => this._norm(c).indexOf('prix') >= 0)) { hi = r; break; } } }
-    console.log('[stockFind] titleRow:', titleRow, 'hi (en-tête PRIX):', hi);
     // hi peut rester -1 ici (ex. en-tête unique partagé, trop loin de cette section) : on ne
     // bloque pas — l'appelant (_stockResolve) peut réutiliser le headerIdx d'une autre section
     // du même en-tête pour cette feuille.
@@ -2831,15 +2842,12 @@ class Component {
   }
   // Résout (feuille, section, colonnes) pour une espèce/calibre donnés, selon le contexte 'achat' ou 'vente'.
   _stockResolve(wb, espece, calibre, context) {
-    console.log('[stockResolve] feuilles disponibles:', wb.map(s => s.name));
     const hint = this._stockSheetHint(espece); if (!hint) return null;
     const sh = wb.find(s => { const n = this._norm(s.name); return n === hint.sheet || n.startsWith(hint.sheet) || n.indexOf(hint.sheet) >= 0; });
     if (!sh) return null;
     const rows = sh.rows;
     const sectionAchat = this._stockFindSection(rows, 'achat', 'entree');
-    console.log('[stockResolve] section achat:', sectionAchat);
     const sectionVente = this._stockFindSection(rows, 'commandes', 'sortie');
-    console.log('[stockResolve] section vente:', sectionVente);
     let sec = context === 'vente' ? sectionVente : sectionAchat;
     if (!sec) return null;
     if (sec.headerIdx < 0) {
@@ -2873,7 +2881,6 @@ class Component {
   // Aperçu de remplissage du stock (fichier de la semaine), déclenché après un achat ou une vente réussi(e).
   // context : 'achat' → section ACHAT-ENTREE, 'vente' → section COMMANDES-SORTIE.
   async requestStockPreview(rec, context) {
-    console.log('[stock] début requestStockPreview', rec.espece || rec.lignes, context);
     const ctx = context === 'vente' ? 'vente' : 'achat';
     // RÈGLE 8/13 : toute sortie en échec marque l'étape « stock » et clôt le bilan (achat uniquement — pour la vente, best-effort, non bloquant).
     const stockFailed = (txt) => { this.setState({ msg: { kind: 'error', text: txt } }); if (this._achatSteps) this._achatSteps.stock = 'fail'; this._runNextWrite(); this._maybeFinalizeAchat(); };
@@ -2886,7 +2893,7 @@ class Component {
       const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
       const buf = await file.arrayBuffer(); const wb = await this.readWorkbook(buf);
       const bySheet = {}; const unresolved = [];
-      (rec.lignes || []).forEach(l => { const t = this._stockResolve(wb, l.espece, l.calibre, ctx); console.log('[stock] resolve result:', t); if (!t) { unresolved.push(`${l.espece} ${l.calibre}`); return; }
+      (rec.lignes || []).forEach(l => { const t = this._stockResolve(wb, l.espece, l.calibre, ctx); if (!t) { unresolved.push(`${l.espece} ${l.calibre}`); return; }
         bySheet[t.sheetName] = bySheet[t.sheetName] || { t, cals: [] }; bySheet[t.sheetName].cals.push({ poidsCol: t.poidsCol, prixCol: t.prixCol, poids: l.poids, prix: l.prixKg, label: `${l.espece} ${l.calibre}` }); });
       const editsBySheet = {}; const preview = []; const verifyTargets = [];
       Object.keys(bySheet).forEach(sn => { const g = bySheet[sn]; const sh = wb.find(s => s.name === sn); const rows = sh.rows; const poidsCols = g.cals.map(c => c.poidsCol);
@@ -2900,7 +2907,6 @@ class Component {
       if (!Object.keys(editsBySheet).length) return stockFailed(`Stock non rempli (${ctx})${unresolved.length ? ' : ' + unresolved.join(', ') : ''}.`);
       const sheetList = Object.keys(editsBySheet);
       this._pendingWrite = { kind: 'operations', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: sheetList.join(', '), editsBySheet, verifyTargets, refuseFormula: true, after: () => this._runNextWrite(), step: 'stock', unresolved };
-      console.log('[stock] setState writePreview:', JSON.stringify(preview).substring(0, 100));
       this.setState({ writePreview: { kind: 'stock', fileName: hi.name, sheetName: sheetList.join(', '), excelRow: null, rows: preview, status: null, title: `Stock de la semaine (${ctx === 'vente' ? 'sortie' : 'entrée'}) — ${sheetList.length} feuille(s)${unresolved.length ? ' · non placé : ' + unresolved.join(', ') : ''}` } });
     } catch (e) { stockFailed(`Stock non rempli (${ctx}) : ${(e && e.message) || 'erreur'}.`); }
   }
@@ -2926,10 +2932,26 @@ class Component {
     };
     return { sheetName: sh.name, headerIdx: hi, dataStart: hi + 1, cols };
   }
+  // ---------- Circuit F — onglet dédié « Grenke » du fichier ventes ----------
+  // Onglet fixe repéré par son nom ; colonnes à position fixe (A→J), telles que définies dans le
+  // classeur. La colonne A (1 ou 2) sert uniquement à la mise en forme : le dashboard n'y écrit pas.
+  _grenkeLocate(wb) {
+    const sh = wb.find(s => this._norm(s.name).indexOf('grenke') >= 0);
+    if (!sh) return null;
+    const rows = sh.rows;
+    let hi = -1;
+    for (let r = 0; r < Math.min(rows.length, 10); r++) { const rr = rows[r] || []; if (rr.some(c => this._norm(c).indexOf('invoice') >= 0) || rr.some(c => this._norm(c).indexOf('customer') >= 0)) { hi = r; break; } }
+    if (hi < 0) return null;
+    return {
+      sheetName: sh.name, headerIdx: hi, dataStart: hi + 1,
+      cols: { invoice: 1, customer: 2, ttc: 3, p1: 4, p2: 5, remains: 6, charges: 7, received: 8, statut: 9 },
+      formulaCols: ['G', 'I'], // Remains et Total received sont calculés ; le reste est saisi
+    };
+  }
   // Traduit chaque index de ligne séquentiel (previewIdx, comme partout ailleurs dans le fichier)
   // en numéro Excel réel (attribut r=) — sans résoudre le contenu des cellules, juste le
   // découpage des balises <row>, identique à _locateAppendTarget/patchXlsxFile.
-  async _suiviRowExcelNumbers(buf, sheetName) {
+  async _sheetRowExcelNumbers(buf, sheetName) {
     const files = await this.unzipAll(buf); const dec = new TextDecoder();
     const wbXml = dec.decode(files['xl/workbook.xml'] || new Uint8Array());
     const relsXml = dec.decode(files['xl/_rels/workbook.xml.rels'] || new Uint8Array());
@@ -2941,12 +2963,15 @@ class Component {
     while (rm = rowsRe.exec(xml)) { const opens = [...rm[0].matchAll(/<row\b[^>]*?\br="(\d+)"/g)]; nums.push(opens.length ? +opens[opens.length - 1][1] : nums.length + 1); }
     return nums;
   }
-  // Ajoute une nouvelle ligne en fin de tableau (« Suivi des paiements ») en recopiant les
-  // FORMULES des colonnes indiquées depuis la ligne précédente, décalées de +1 ligne. Ne touche
-  // qu'aux colonnes demandées (les colonnes A/E, ID Facture/Avoir, sont écrites séparément par
-  // l'appelant). Prudence : une formule contenant une référence absolue ($B$5) ou externe
-  // (Feuille!B5) n'est PAS recopiée — mieux vaut une case vide qu'une formule fausse.
-  async _suiviAppendRowWithFormulas(buf, sheetName, prevRowNum, colLetters) {
+  // Ajoute la ligne SUIVANTE (prevRowNum + 1) dans une feuille, en recopiant les FORMULES des
+  // colonnes indiquées depuis la ligne précédente, décalées de +1 ligne. Ne touche qu'aux colonnes
+  // demandées (les colonnes de saisie sont écrites séparément par patchXlsxFile).
+  // Prudence : une formule contenant une référence absolue ($B$5) ou externe (Feuille!B5) n'est PAS
+  // recopiée — mieux vaut une case vide qu'une formule fausse.
+  // La nouvelle <row> est insérée JUSTE APRÈS la précédente (Excel exige des lignes en ordre
+  // croissant dans <sheetData>) ; si cette ligne existe déjà (ligne vide préformatée), on y injecte
+  // seulement les cellules manquantes au lieu de créer un doublon de numéro de ligne.
+  async _appendRowCopyingFormulas(buf, sheetName, prevRowNum, colLetters) {
     const files = await this.unzipAll(buf); const dec = new TextDecoder(); const enc = new TextEncoder();
     const wbXml = dec.decode(files['xl/workbook.xml'] || new Uint8Array());
     const relsXml = dec.decode(files['xl/_rels/workbook.xml.rels'] || new Uint8Array());
@@ -2955,7 +2980,7 @@ class Component {
     const target = targetByName[sheetName];
     if (!target || !files[target]) throw new Error(`feuille « ${sheetName} » introuvable — ajout annulé`);
     let xml = dec.decode(files[target]);
-    const prevRowRe = new RegExp(`<row\\b[^>]*\\br="${prevRowNum}"[^>]*>[\\s\\S]*?<\\/row>`);
+    const prevRowRe = new RegExp(`<row\\b[^>]*?\\br="${prevRowNum}"[^>]*>[\\s\\S]*?<\\/row>`);
     const prevRowMatch = xml.match(prevRowRe);
     if (!prevRowMatch) throw new Error(`ligne ${prevRowNum} introuvable dans « ${sheetName} » — impossible de recopier les formules`);
     const newRowNum = prevRowNum + 1;
@@ -2970,12 +2995,29 @@ class Component {
       if (/\$|!/.test(formula)) continue; // référence absolue ou externe : trop risqué, on n'y touche pas
       const shifted = formula.replace(/\b([A-Z]{1,3})(\d+)\b/g, (m2, col, num) => (+num === prevRowNum ? col + newRowNum : m2));
       const styleM = cm[1].match(/\ss="(\d+)"/); const styleAttr = styleM ? ` s="${styleM[1]}"` : '';
-      newCells.push(`<c r="${colLetter}${newRowNum}"${styleAttr}><f>${shifted}</f></c>`);
+      newCells.push({ letter: colLetter, xml: `<c r="${colLetter}${newRowNum}"${styleAttr}><f>${shifted}</f></c>` });
     }
-    const rowXml = `<row r="${newRowNum}">${newCells.join('')}</row>`;
-    if (/<\/sheetData>/.test(xml)) xml = xml.replace('</sheetData>', rowXml + '</sheetData>');
-    else if (/<sheetData\/>/.test(xml)) xml = xml.replace('<sheetData/>', `<sheetData>${rowXml}</sheetData>`);
-    else throw new Error('structure de feuille inattendue — ajout annulé');
+    const selfCloseRe = new RegExp(`<row\\b[^>]*?\\br="${newRowNum}"[^>]*\\/>`);
+    const existRe = new RegExp(`<row\\b[^>]*?\\br="${newRowNum}"[^>]*>[\\s\\S]*?<\\/row>`);
+    const existing = xml.match(existRe);
+    if (existing) {
+      // Ligne déjà présente (préformatée/vide) : on n'insère que les cellules absentes, en gardant
+      // l'ordre croissant des colonnes, plutôt que de dupliquer le numéro de ligne.
+      let rowXml = existing[0];
+      const colOf = l => { let v = 0; for (const ch of l) v = v * 26 + (ch.charCodeAt(0) - 64); return v; };
+      newCells.forEach(nc => {
+        if (new RegExp(`<c\\s[^>]*?r="${nc.letter}${newRowNum}"`).test(rowXml)) return; // cellule déjà là : on n'écrase rien
+        const cells = [...rowXml.matchAll(/<c\s[^>]*r="([A-Z]+)\d+"[^>]*(?:\/>|>[\s\S]*?<\/c>)/g)];
+        const after = cells.find(m2 => colOf(m2[1]) > colOf(nc.letter));
+        if (after) rowXml = rowXml.replace(after[0], nc.xml + after[0]);
+        else rowXml = rowXml.replace(/<\/row>$/, nc.xml + '</row>');
+      });
+      xml = xml.replace(existRe, rowXml);
+    } else {
+      const rowXml = `<row r="${newRowNum}">${newCells.map(c => c.xml).join('')}</row>`;
+      if (selfCloseRe.test(xml)) xml = xml.replace(selfCloseRe, rowXml); // <row r="N"/> → ligne complète
+      else xml = xml.replace(prevRowMatch[0], prevRowMatch[0] + rowXml); // insertion juste après, ordre croissant préservé
+    }
     xml = xml.replace(/(<dimension[^>]*ref=")([A-Z]+)(\d+):([A-Z]+)(\d+)("[^>]*\/>)/, (m, a, c1, r1, c2, r2, z) => a + c1 + r1 + ':' + c2 + Math.max(+r2, newRowNum) + z);
     files[target] = enc.encode(xml);
     const entries = Object.keys(files).map(name => ({ name, bytes: files[name] }));
@@ -3415,7 +3457,6 @@ class Component {
   }
   async confirmAppendWrite() {
     const pw = this._pendingWrite; if (!pw) { this.setState({ writePreview: null }); return; }
-    console.log('[confirm] kind:', pw.kind, 'step:', pw.step);
     this.setState(s => s.writePreview ? { writePreview: { ...s.writePreview, status: 'writing' } } : {});
     try {
       // 1) CONTRÔLE DE CONCURRENCE : le fichier a-t-il changé depuis l'aperçu ? (travail à plusieurs)
@@ -3429,6 +3470,14 @@ class Component {
       // 2) SAUVEGARDE OBLIGATOIRE avant écriture (RÈGLE 12 : pas de sauvegarde → pas d'écriture)
       const bak = await this._backupBeforeWrite(pw.name, buf);
       if (!bak || !bak.ok) throw new Error('sauvegarde de sécurité impossible — écriture annulée pour ne rien risquer');
+      // 2 bis) CRÉATION DES LIGNES MANQUANTES (avec recopie des formules) — appliquée ICI, sur le
+      // buffer FRAIS relu ci-dessus. Le faire au moment de l'aperçu ne servait à rien : `buf` y est
+      // remplacé par la version disque, donc la ligne créée était perdue et les éditions visaient
+      // une ligne inexistante (rien ne s'écrivait).
+      for (const op of (pw.rowAppends || [])) {
+        const withRow = await this._appendRowCopyingFormulas(buf, op.sheetName, op.prevExcelRow, op.colLetters);
+        buf = await withRow.arrayBuffer();
+      }
       // 3) ÉCRITURE (garde anti-formule sur le chemin patch)
       let patched;
       if (pw.editsBySheet) patched = await this.patchXlsxFile(buf, pw.editsBySheet, { refuseFormula: pw.refuseFormula, markStyle: true, allowFormulaCols: pw.allowFormulaCols }); // écriture multi-feuilles (stock)
