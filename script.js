@@ -902,7 +902,7 @@ class Component {
     // Écritures annexes embarquées dans la MÊME transaction que Factures (voir requestAppendPreview) :
     //  · « Suivi des paiements » : ID Facture toujours (pour que les formules s'y accrochent), Avoir si > 0 ;
     //  · « Grenke » : une ligne de suivi si la vente est financée (le statut ETAT part de venteWriteValues).
-    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, suiviAvoir: rec.idFacture ? { avoir, idFacture: rec.idFacture } : null, grenkeRow: grenke ? { num: this._numSansPrefixe(rec.num), client, ttc } : null, after: () => this._venteAfterWrite(rec), afterClose: () => {
+    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, suiviAvoir: rec.idFacture ? { avoir, idFacture: rec.idFacture, num: rec.num, client, ttc, date: rec.date, datePrev } : null, grenkeRow: grenke ? { num: this._numSansPrefixe(rec.num), client, ttc } : null, after: () => this._venteAfterWrite(rec), afterClose: () => {
       if (this._stockDir) { this._writeQueue = [() => this.requestStockPreview(rec, 'vente')]; this._runNextWrite(); }
     } });
   }
@@ -2089,14 +2089,18 @@ class Component {
         // Ligne préformatée LIBRE = colonne clé vide ET la ligne porte réellement des formules dans
         // au moins une des colonnes attendues (sinon ce n'est qu'un espace blanc, pas une ligne
         // prête à recevoir l'ID — dans ce cas on tombe dans la création en fin de tableau).
-        const fmap = await this._sheetFormulaCols(buf, shLoc.sheetName);
+        // Sans colonnes-formule attendues (ex. suivi, qui écrit des valeurs directes), on saute cette
+        // étape et on crée toujours une nouvelle ligne.
         const li = l => { let v = 0; for (const ch of l) v = v * 26 + (ch.charCodeAt(0) - 64); return v - 1; };
         const fcols = (shLoc.formulaCols || []).map(li);
-        for (let r = shLoc.dataStart; r < rowsX.length; r++) {
-          const v = (rowsX[r] || [])[keyCol];
-          const keyEmpty = (v == null || String(v).trim() === '');
-          const hasFormulas = fcols.some(ci => (fmap[r] || new Set()).has(ci));
-          if (keyEmpty && hasFormulas) return { rowIdx: r, exists: false };
+        if (fcols.length) {
+          const fmap = await this._sheetFormulaCols(buf, shLoc.sheetName);
+          for (let r = shLoc.dataStart; r < rowsX.length; r++) {
+            const v = (rowsX[r] || [])[keyCol];
+            const keyEmpty = (v == null || String(v).trim() === '');
+            const hasFormulas = fcols.some(ci => (fmap[r] || new Set()).has(ci));
+            if (keyEmpty && hasFormulas) return { rowIdx: r, exists: false };
+          }
         }
         let lastContentIdx = -1;
         for (let r = shLoc.dataStart; r < rowsX.length; r++) { if ((rowsX[r] || []).some(c => String(c == null ? '' : c).trim() !== '')) lastContentIdx = r; }
@@ -2108,19 +2112,35 @@ class Component {
         return { rowIdx: lastContentIdx + 1, exists: false };
       };
       if (kind === 'ventes' && opts.suiviAvoir && opts.suiviAvoir.idFacture) {
-        console.log('[suivi] idFacture:', opts.suiviAvoir?.idFacture);
+        const sv = opts.suiviAvoir;
         const sloc = this._suiviLocate(wbH);
         if (sloc && sloc.cols.idFacture >= 0) {
-          sloc.formulaCols = ['B', 'C', 'D', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'];
-          const place = await placeRow(sloc, sloc.cols.idFacture, opts.suiviAvoir.idFacture);
+          // formulaCols vide : on n'accroche plus de formules dans le suivi, on écrit des VALEURS
+          // directes. La ligne est donc créée vide (placeRow → rowAppends avec colLetters=[]) puis
+          // remplie ci-dessous ; aucune ligne « préformatée » n'est réutilisée.
+          sloc.formulaCols = [];
+          const place = await placeRow(sloc, sloc.cols.idFacture, sv.idFacture);
           if (place) {
             startCombined();
-            if (!place.exists) putCell(sloc.sheetName, place.rowIdx, sloc.cols.idFacture, opts.suiviAvoir.idFacture, 'ID Facture (Suivi des paiements)');
-            if (opts.suiviAvoir.avoir && sloc.cols.avoir >= 0) putCell(sloc.sheetName, place.rowIdx, sloc.cols.avoir, opts.suiviAvoir.avoir, 'Avoir (Suivi des paiements)', this.fmt(opts.suiviAvoir.avoir));
+            if (place.exists) {
+              // Ligne déjà présente pour cet ID (ré-exécution) : on met seulement l'Avoir à jour.
+              if (sv.avoir && sloc.cols.avoir >= 0) putCell(sloc.sheetName, place.rowIdx, sloc.cols.avoir, sv.avoir, 'Avoir (Suivi des paiements)', this.fmt(sv.avoir));
+            } else {
+              // Nouvelle ligne : on écrit toutes les valeurs (colonnes détectées par _suiviLocate).
+              const putSv = (key, val, label, display) => { const ci = sloc.cols[key]; if (ci == null || ci < 0 || val === '' || val == null) return; putCell(sloc.sheetName, place.rowIdx, ci, val, label, display); };
+              const putSvDate = (key, iso, label) => { const ci = sloc.cols[key]; if (ci == null || ci < 0) return; const serial = this._excelSerial(iso); if (serial == null) return; putCell(sloc.sheetName, place.rowIdx, ci, serial, label, this._isoToFr(iso)); };
+              putSv('idFacture', sv.idFacture, 'ID Facture (Suivi des paiements)');
+              putSv('numero', sv.num, 'Numéro facture (Suivi des paiements)');
+              putSv('client', sv.client, 'Nom client (Suivi des paiements)');
+              putSv('ttc', sv.ttc, 'Montant TTC (Suivi des paiements)', this.fmt(sv.ttc));
+              if (sv.avoir) putSv('avoir', sv.avoir, 'Avoir (Suivi des paiements)', this.fmt(sv.avoir));
+              putSvDate('dateFac', sv.date, 'Date de facture (Suivi des paiements)');
+              putSvDate('dateEch', sv.datePrev, 'Date échéance (Suivi des paiements)');
+              putSv('solde', sv.ttc, 'Solde restant (Suivi des paiements)', this.fmt(sv.ttc)); // solde initial = montant total, rien encore payé
+              putSv('etat', 'EN ATTENTE', 'Etat (Suivi des paiements)');
+            }
             extraSheets.push(sloc.sheetName);
           }
-          console.log('[suivi] rowAppends:', JSON.stringify(rowAppends));
-          console.log('[suivi] editsBySheet suivi:', JSON.stringify(editsBySheet?.[sloc?.sheetName]));
         }
       }
       // Vente financée par Grenke : une ligne de suivi dans l'onglet « Grenke » du même fichier.
@@ -2943,6 +2963,7 @@ class Component {
     const cols = {
       idFacture: find('id', 'facture'), numero: find('numero', 'facture'), client: find('nom', 'client') >= 0 ? find('nom', 'client') : find('client'),
       ttc: find('montant', 'ttc'), avoir: find('avoir'), dateFac: find('date', 'facture'), dateEch: find('date', 'echeance'),
+      solde: find('solde'), etat: find('etat') >= 0 ? find('etat') : find('statut'),
     };
     return { sheetName: sh.name, headerIdx: hi, dataStart: hi + 1, cols };
   }
