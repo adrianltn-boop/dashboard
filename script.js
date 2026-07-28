@@ -2193,14 +2193,12 @@ class Component {
               putCell(aloc.sheetName, 2, numCol, '/', 'Avoirs — repère');
               putCell(aloc.sheetName, 2, typeCol, '/', 'Avoirs — repère');
             }
-            // Ligne libre du journal (première ligne vide sous la ligne 3), et somme des montants
-            // déjà présents pour ce client — le total est RECALCULÉ, pas une formule Excel.
-            let sumExisting = 0; let freeRowIdx = -1; let lastUsedIdx = 2; // ligne total = index 2
+            // Ligne libre du journal : première ligne vide (date ET montant) sous la ligne 3.
+            let freeRowIdx = -1; let lastUsedIdx = 2; // ligne total = index 2
             for (let r = 3; r < aloc.rows.length; r++) {
               const dv = (aloc.rows[r] || [])[dateCol]; const av = (aloc.rows[r] || [])[amtCol];
               const rowEmpty = (dv == null || String(dv).trim() === '') && (av == null || String(av).trim() === '');
               if (rowEmpty) { freeRowIdx = r; break; }
-              const n = this._vNum(av); if (!isNaN(n)) sumExisting += n;
               lastUsedIdx = r;
             }
             if (freeRowIdx < 0) {
@@ -2211,11 +2209,17 @@ class Component {
               if (prevExcelRow != null) { rowAppends.push({ sheetName: aloc.sheetName, prevExcelRow, colLetters: [] }); freeRowIdx = lastUsedIdx + 1; }
             }
             if (freeRowIdx >= 0) {
-              const newTotal = Math.round((sumExisting + ae.montant) * 100) / 100;
+              // Somme (ligne 3) : nouveau bloc → ce montant seul ; bloc existant → ancien total lu
+              // directement en ligne 3 + ce montant. Toujours en valeur absolue (A comme S).
+              const montantAbs = Math.round(Math.abs(ae.montant) * 100) / 100;
+              const oldTotal = block.isNew ? 0 : (this._vNum((aloc.rows[2] || [])[amtCol]) || 0);
+              const newTotal = Math.round((oldTotal + montantAbs) * 100) / 100;
               putCell(aloc.sheetName, 2, amtCol, newTotal, 'Total avoirs (Avoirs)', this.fmt(newTotal));
-              const serial = this._excelSerial(ae.date);
-              if (serial != null) putCell(aloc.sheetName, freeRowIdx, dateCol, serial, 'Date (Avoirs)', this._isoToFr(ae.date));
-              putCell(aloc.sheetName, freeRowIdx, amtCol, ae.montant, 'Montant avoir (Avoirs)', this.fmt(ae.montant));
+              // Date écrite en texte lisible (JJ/MM/AAAA) plutôt qu'en série Excel : cette colonne,
+              // neuve ou non, n'a pas de format de date garanti, donc une série s'afficherait en
+              // nombre brut (ex. 46131) au lieu d'une date.
+              putCell(aloc.sheetName, freeRowIdx, dateCol, this._isoToFr(ae.date), 'Date (Avoirs)');
+              putCell(aloc.sheetName, freeRowIdx, amtCol, montantAbs, 'Montant avoir (Avoirs)', this.fmt(montantAbs));
               putCell(aloc.sheetName, freeRowIdx, numCol, ae.num, 'N° facture (Avoirs)');
               putCell(aloc.sheetName, freeRowIdx, typeCol, ae.type, 'Type A/S (Avoirs)');
               extraSheets.push(aloc.sheetName);
