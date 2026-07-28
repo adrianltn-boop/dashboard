@@ -2086,7 +2086,18 @@ class Component {
         const rowsX = (wbH.find(s => s.name === shLoc.sheetName) || { rows: [] }).rows;
         const want = String(keyVal == null ? '' : keyVal).trim();
         for (let r = shLoc.dataStart; r < rowsX.length; r++) { const v = (rowsX[r] || [])[keyCol]; if (v != null && String(v).trim() !== '' && String(v).trim() === want) return { rowIdx: r, exists: true }; }
-        for (let r = shLoc.dataStart; r < rowsX.length; r++) { const v = (rowsX[r] || [])[keyCol]; if (v == null || String(v).trim() === '') return { rowIdx: r, exists: false }; }
+        // Ligne préformatée LIBRE = colonne clé vide ET la ligne porte réellement des formules dans
+        // au moins une des colonnes attendues (sinon ce n'est qu'un espace blanc, pas une ligne
+        // prête à recevoir l'ID — dans ce cas on tombe dans la création en fin de tableau).
+        const fmap = await this._sheetFormulaCols(buf, shLoc.sheetName);
+        const li = l => { let v = 0; for (const ch of l) v = v * 26 + (ch.charCodeAt(0) - 64); return v - 1; };
+        const fcols = (shLoc.formulaCols || []).map(li);
+        for (let r = shLoc.dataStart; r < rowsX.length; r++) {
+          const v = (rowsX[r] || [])[keyCol];
+          const keyEmpty = (v == null || String(v).trim() === '');
+          const hasFormulas = fcols.some(ci => (fmap[r] || new Set()).has(ci));
+          if (keyEmpty && hasFormulas) return { rowIdx: r, exists: false };
+        }
         let lastContentIdx = -1;
         for (let r = shLoc.dataStart; r < rowsX.length; r++) { if ((rowsX[r] || []).some(c => String(c == null ? '' : c).trim() !== '')) lastContentIdx = r; }
         if (lastContentIdx < 0) return null;
@@ -2950,6 +2961,25 @@ class Component {
       cols: { invoice: 1, customer: 2, ttc: 3, p1: 4, p2: 5, remains: 6, charges: 7, received: 8, statut: 9 },
       formulaCols: ['G', 'I'], // Remains et Total received sont calculés ; le reste est saisi
     };
+  }
+  // Colonnes (index 0-based) portant une formule <f> sur chaque ligne séquentielle de la feuille,
+  // lues directement du XML — readWorkbook ne restitue que les valeurs, pas la présence de formule.
+  async _sheetFormulaCols(buf, sheetName) {
+    const files = await this.unzipAll(buf); const dec = new TextDecoder();
+    const wbXml = dec.decode(files['xl/workbook.xml'] || new Uint8Array());
+    const relsXml = dec.decode(files['xl/_rels/workbook.xml.rels'] || new Uint8Array());
+    const relMap = this._relMapOf(relsXml);
+    const targetByName = {}; [...wbXml.matchAll(/<sheet[^>]*name="([^"]*)"[^>]*r:id="(rId\d+)"/g)].forEach(m => { targetByName[this.unxml(m[1])] = relMap[m[2]]; });
+    const target = targetByName[sheetName]; if (!target || !files[target]) return [];
+    const xml = dec.decode(files[target]);
+    const coln = ref => { const mm = ref.match(/^([A-Z]+)/); let v = 0; for (const c of mm[1]) v = v * 26 + (c.charCodeAt(0) - 64); return v; };
+    const perRow = []; const rowsRe = /<row[^>]*>[\s\S]*?<\/row>/g; let rm;
+    while (rm = rowsRe.exec(xml)) {
+      const set = new Set(); const cr = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g; let cm;
+      while (cm = cr.exec(rm[0])) { const refM = cm[1].match(/\br="([A-Z]+)\d+"/); if (!refM) continue; if (/<f[\s>/]/.test(cm[2] || '')) set.add(coln(refM[1]) - 1); }
+      perRow.push(set);
+    }
+    return perRow;
   }
   // Traduit chaque index de ligne séquentiel (previewIdx, comme partout ailleurs dans le fichier)
   // en numéro Excel réel (attribut r=) — sans résoudre le contenu des cellules, juste le
