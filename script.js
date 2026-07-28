@@ -2110,7 +2110,7 @@ class Component {
       const opens = [...rm[0].matchAll(/<row\b[^>]*?\br="(\d+)"/g)];
       const rowNum = opens.length ? +opens[opens.length - 1][1] : (maxRowNum + 1);
       maxRowNum = Math.max(maxRowNum, rowNum);
-      let hasContent = false;
+      let hasContent = false; let rowIsAggFlag = false;
       if (rowIdx >= firstDataIdx) {
         const cells = {}; const cellsRaw = {}; const cr = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g; let cm;
         while (cm = cr.exec(rm[0])) { const refM = cm[1].match(/\br="([A-Z]+)\d+"/); if (!refM) continue; const body = cm[2] || ''; const vm = body.match(/<v>([\s\S]*?)<\/v>/); const im = body.match(/<t[^>]*>([\s\S]*?)<\/t>/); const ci = coln(refM[1]); cells[ci] = (im ? im[1] : (vm ? vm[1] : '')).trim(); cellsRaw[ci] = cm[0]; }
@@ -2128,6 +2128,7 @@ class Component {
         // FILTRE GLOBAL — si n'importe quelle cellule de la ligne (pas seulement les colonnes
         // ancres) contient un libellé agrégat, toute la ligne est ignorée comme contenu métier.
         const rowIsAgg = Object.values(cells).some(v => v && isAgg(normAgg(String(v))));
+        rowIsAggFlag = rowIsAgg;
         // RÈGLE : une ligne pré-imprimée (n° de facture + année seuls) n'est PAS du contenu métier
         // réel. On exige une date ancre valide (> 1 en série Excel) ET au moins une AUTRE colonne
         // ancre renseignée (montant ou partenaire) — pas l'une ou l'autre seule.
@@ -2141,7 +2142,7 @@ class Component {
           hasContent = colIdxs.some(cellOk); // colonne date inconnue de l'appelant : comportement précédent
         }
       }
-      rows.push({ previewIdx: rowIdx, excelRow: rowNum });
+      rows.push({ previewIdx: rowIdx, excelRow: rowNum, agg: rowIsAggFlag });
       if (hasContent) lastContentIdx = rowIdx;
     }
     // Tableau vide de saisies → on écrit sur la 1re ligne de données configurée.
@@ -2150,8 +2151,12 @@ class Component {
       if (first) return { previewIdx: first.previewIdx, excelRow: first.excelRow, mode: 'patch' };
       return { previewIdx: firstDataIdx, excelRow: maxRowNum + 1, mode: 'append' };
     }
-    // Ligne logique = juste après la dernière vraie écriture.
+    // Ligne logique = juste après la dernière vraie écriture. Si cette ligne est elle-même une
+    // ligne d'agrégat (TOTAL, RESTE À PAYER…) — cas d'un tableau rempli jusqu'en bas, sans ligne
+    // vide de réserve entre les données et le total — on refuse plutôt que d'écraser le total :
+    // aucun mécanisme fiable ici pour insérer une ligne en décalant tout ce qui suit.
     const next = rows.find(r => r.previewIdx === lastContentIdx + 1);
+    if (next && next.agg) throw new Error(`plus de ligne libre dans « ${sheetName} » avant la ligne de total — ajoutez une ligne vide au-dessus dans Excel, puis réessayez.`);
     if (next) return { previewIdx: next.previewIdx, excelRow: next.excelRow, mode: 'patch' };
     // Pas de ligne préformatée disponible après → nouvelle ligne en fin de tableau.
     const last = rows[lastContentIdx];
@@ -2163,6 +2168,12 @@ class Component {
   // trouve toujours une ligne prête. Best-effort : toute erreur est journalée en silence et
   // n'affecte jamais la saisie qui vient de réussir (jamais d'exception propagée, jamais de modale).
   async _appendNextBlankRow(kind, opts) {
+    // Les n° de facture FOURNISSEUR ne suivent pas une séquence propre à Aqua Sea (contrairement aux
+    // ventes/achats, chacun a sa propre numérotation) : incrémenter le plus grand nombre trouvé dans
+    // la colonne n'a aucun sens ici et fabrique un faux numéro qui, une fois écrit, verrouille la
+    // ligne (requestAppendPreview ne réécrit jamais un n° de facture déjà présent) — la vraie facture
+    // suivante saisie par Faustine sur cette ligne garderait alors ce numéro inventé.
+    if (kind === 'factures') return;
     try {
       const cfg = this.writeMapFor(kind); if (!cfg || !cfg.enabled) return;
       let sheetName, colsMap, firstDataIdx = cfg.firstDataIdx || 0;
@@ -2296,10 +2307,20 @@ class Component {
         if (s !== '') colVals[ci] = raw;
         preview.push({ label: f.label, col: colName(ci + 1), value: s === '' ? '—' : s });
       });
-      // Solde géré par le dashboard : la formule Excel =SIERREUR(Montant-[Total payé];"") ne se
-      // recalcule pas sur une écriture directe du XML — on autorise l'écrasement UNIQUEMENT sur
-      // cette colonne, jamais sur les autres (protection anti-formule conservée partout ailleurs).
-      let allowFormulaCols = (kind === 'operations' && colsMap.solde != null && colsMap.solde >= 0) ? { [sheetName]: new Set([colsMap.solde]) } : null;
+      // Solde et Chèque gérés par le dashboard : la formule Excel du Solde (=SIERREUR(Montant-[Total
+      // payé];"")) ne se recalcule pas sur une écriture directe du XML, et de nombreuses lignes du
+      // fichier réel portent aussi une formule fantôme héritée sur la colonne Chèque (référence
+      // cassée #REF!, propagée automatiquement par le Tableau Excel lors d'ajouts de lignes passés) —
+      // sans cette autorisation, le n° de chèque saisi disparaît EN SILENCE (protection anti-formule),
+      // alors que le message final annonce quand même un succès. On autorise l'écrasement UNIQUEMENT
+      // sur ces deux colonnes calculées/saisies par le dashboard, jamais sur les autres.
+      let allowFormulaCols = null;
+      if (kind === 'operations') {
+        const allow = new Set();
+        if (colsMap.solde != null && colsMap.solde >= 0) allow.add(colsMap.solde);
+        if (colsMap.cheque != null && colsMap.cheque >= 0) allow.add(colsMap.cheque);
+        if (allow.size) allowFormulaCols = { [sheetName]: allow };
+      }
       // Vente avec Avoir : écriture combinée Factures + Suivi des paiements (Avoir uniquement, sur
       // une ligne libre) dans UNE seule transaction editsBySheet — même mécanisme que l'achat pour
       // ses écritures multi-feuilles (pêcheur + chéquier), un seul aperçu/confirmation.
@@ -2734,7 +2755,7 @@ class Component {
         colVals[s.chequeCol] = newChq;
         preview.push({ label: 'Chèque', col: this._colLetter(s.chequeCol + 1), value: newChq });
       }
-      const allowFormulaCols = s.soldeCol != null && s.soldeCol >= 0 ? { [s.sheetName]: new Set([s.soldeCol]) } : null;
+      const allowFormulaCols = this._opsAllowFormulaCols(s.sheetName, s.soldeCol, s.chequeCol);
       this._pendingWrite = { kind: 'operations', buf, handle: s.hi.handle, name: s.hi.name, fingerprint, sheetName: s.sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: 'patch', colVals, refuseFormula: true, allowFormulaCols, after: () => { this.setState({ chqAddDraft: null, msg: { kind: 'ok', text: `Paiement complémentaire enregistré pour la facture ${ref}.` } }); this._refreshChqLiveStatus(ref); } };
       this.setState({ writePreview: { kind: 'chqmodif', fileName: s.hi.name, sheetName: s.sheetName, excelRow: loc.excelRow, rows: preview, status: null, refLabel: ref } });
     } catch (e) {
@@ -2848,7 +2869,7 @@ class Component {
         if (cLoc.etatCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.etatCol] = 'PAYE'; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.etatCol, val: 'PAYE' }); preview.push({ label: 'Chéquier — Etat', col: colName(cLoc.etatCol), value: 'PAYE' }); }
         if (cLoc.obsCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.obsCol] = obs; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.obsCol, val: obs }); preview.push({ label: 'Chéquier — Obs', col: colName(cLoc.obsCol), value: obs }); }
       }
-      const allowFormulaCols = soldeCol != null && soldeCol >= 0 ? { [sheetName]: new Set([soldeCol]) } : null;
+      const allowFormulaCols = this._opsAllowFormulaCols(sheetName, soldeCol, chequeCol);
       this._pendingWrite = { kind: 'operations', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: chequeSheetName ? `${sheetName}, ${chequeSheetName}` : sheetName, editsBySheet, verifyTargets, refuseFormula: true, allowFormulaCols, after: () => this._paiementAfterWrite(pd.ref) };
       this.setState({ writePreview: { kind: 'paiement', fileName: hi.name, sheetName: chequeSheetName ? `${sheetName} + ${chequeSheetName}` : sheetName, rows: preview, status: null, refLabel: pd.ref } });
     } catch (e) {
@@ -2858,6 +2879,18 @@ class Component {
   _paiementAfterWrite(ref) { this.setState({ paiementDraft: null, msg: { kind: 'ok', text: `Paiement enregistré pour la facture ${ref}.` } }); }
   // Prépare les réglages/handle communs aux actions du module Paiement pêcheur (Encaissé/Annuler/Modifier).
   // Retourne null (et affiche l'erreur) si quoi que ce soit manque.
+  // Solde et Chèque : les deux seules colonnes qu'un paiement pêcheur a le droit d'écraser même si
+  // elles portent une formule héritée du fichier (Solde = formule Excel de Tableau, jamais recalculée
+  // sur écriture directe du XML ; Chèque = de nombreuses lignes du fichier réel portent une formule
+  // fantôme héritée, référence cassée #REF!, qui sinon absorbe le n° de chèque saisi EN SILENCE alors
+  // que l'écriture est annoncée réussie). Centralisé ici : utilisé par tous les chemins d'écriture
+  // « paiement pêcheur » (encaissement, complément, annulation, modification, second chèque).
+  _opsAllowFormulaCols(sheetName, soldeCol, chequeCol) {
+    const allow = new Set();
+    if (soldeCol != null && soldeCol >= 0) allow.add(soldeCol);
+    if (chequeCol != null && chequeCol >= 0) allow.add(chequeCol);
+    return allow.size ? { [sheetName]: allow } : null;
+  }
   _paiementOpsSetup() {
     const cfg = this.writeMapFor('operations');
     if (!cfg || !cfg.enabled || !cfg.cols) { this.setState({ msg: { kind: 'error', text: `Écriture non réglée pour « ${this.writeSourceLabel('operations')} » — réglez-la dans Paramètres.` } }); return null; }
@@ -2925,7 +2958,7 @@ class Component {
       editsBySheet[chequeSheetName] = editsBySheet[chequeSheetName] || {};
       if (cLoc.paieCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.paieCol] = montantChq; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.paieCol, val: montantChq }); preview.push({ label: `Chéquier n°${chequeNum} — Paiement`, col: colName(cLoc.paieCol), value: this.fmt(montantChq) }); }
       if (cLoc.etatCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.etatCol] = 'PAYE'; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.etatCol, val: 'PAYE' }); preview.push({ label: `Chéquier n°${chequeNum} — Etat`, col: colName(cLoc.etatCol), value: 'PAYE' }); }
-      const allowFormulaCols = s.soldeCol != null && s.soldeCol >= 0 ? { [s.sheetName]: new Set([s.soldeCol]) } : null;
+      const allowFormulaCols = this._opsAllowFormulaCols(s.sheetName, s.soldeCol, s.chequeCol);
       this._pendingWrite = { kind: 'operations', buf, handle: s.hi.handle, name: s.hi.name, fingerprint, sheetName: `${s.sheetName}, ${chequeSheetName}`, editsBySheet, verifyTargets, refuseFormula: true, allowFormulaCols, after: () => { this.setState({ msg: { kind: 'ok', text: `Chèque n°${chequeNum} de la facture ${ref} marqué encaissé.` } }); this._refreshChqLiveStatus(ref); } };
       this.setState({ writePreview: { kind: 'encaisse', fileName: s.hi.name, sheetName: `${s.sheetName} + ${chequeSheetName}`, rows: preview, status: null, refLabel: ref } });
     } catch (e) {
@@ -2954,7 +2987,7 @@ class Component {
       if (s.paidCol != null && s.paidCol >= 0) { colVals[s.paidCol] = montantTotal; preview.push({ label: 'Total payé', col: colName(s.paidCol), value: this.fmt(montantTotal) }); }
       if (s.soldeCol != null && s.soldeCol >= 0) { colVals[s.soldeCol] = 0; preview.push({ label: 'Solde', col: colName(s.soldeCol), value: this.fmt(0) }); }
       if (s.paidDateCol != null && s.paidDateCol >= 0) { colVals[s.paidDateCol] = serial; preview.push({ label: 'Date de paiement', col: colName(s.paidDateCol), value: this._isoToFr(this._payTodayIso()) }); }
-      const allowFormulaCols = s.soldeCol != null && s.soldeCol >= 0 ? { [s.sheetName]: new Set([s.soldeCol]) } : null;
+      const allowFormulaCols = this._opsAllowFormulaCols(s.sheetName, s.soldeCol, s.chequeCol);
       this._pendingWrite = { kind: 'operations', buf, handle: s.hi.handle, name: s.hi.name, fingerprint, sheetName: s.sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: 'patch', colVals, refuseFormula: true, allowFormulaCols, after: () => { this.setState({ msg: { kind: 'ok', text: `Virement de la facture ${ref} confirmé — facture soldée.` } }); this._refreshChqLiveStatus(ref); } };
       this.setState({ writePreview: { kind: 'encaisse', fileName: s.hi.name, sheetName: s.sheetName, excelRow: loc.excelRow, rows: preview, status: null, refLabel: ref } });
     } catch (e) {
@@ -3019,7 +3052,7 @@ class Component {
           }
         } catch (e) { /* chèque restant introuvable — on ignore, la renumérotation n'est qu'un confort */ }
       });
-      const allowFormulaCols = s.soldeCol != null && s.soldeCol >= 0 ? { [s.sheetName]: new Set([s.soldeCol]) } : null;
+      const allowFormulaCols = this._opsAllowFormulaCols(s.sheetName, s.soldeCol, s.chequeCol);
       this._pendingWrite = { kind: 'operations', buf, handle: s.hi.handle, name: s.hi.name, fingerprint, sheetName: `${s.sheetName}, ${chequeSheetName}`, editsBySheet, verifyTargets, refuseFormula: true, allowFormulaCols, after: () => { this.setState({ chqAnnuleReplaceAsk: !remaining.length ? { ref } : null, msg: { kind: 'ok', text: `Chèque n°${chequeNum} de la facture ${ref} annulé.` } }); this._refreshChqLiveStatus(ref); this._refreshChequiersLive(); } };
       this.setState({ writePreview: { kind: 'chqannule', fileName: s.hi.name, sheetName: `${s.sheetName} + ${chequeSheetName}`, rows: preview, status: null, refLabel: ref } });
     } catch (e) {
@@ -3039,7 +3072,8 @@ class Component {
       if (!loc) { this.setState({ msg: { kind: 'error', text: `Ligne « ${ref} » introuvable dans « ${s.sheetName} » — actualisez puis réessayez.` } }); return; }
       const val = String(newVal || '').trim();
       const colVals = { [s.chequeCol]: val };
-      this._pendingWrite = { kind: 'operations', buf, handle: s.hi.handle, name: s.hi.name, fingerprint, sheetName: s.sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: 'patch', colVals, refuseFormula: true, after: () => this.setState({ chqEditDraft: null, msg: { kind: 'ok', text: `Colonne Chèque de la facture ${ref} modifiée.` } }) };
+      const allowFormulaCols = this._opsAllowFormulaCols(s.sheetName, null, s.chequeCol);
+      this._pendingWrite = { kind: 'operations', buf, handle: s.hi.handle, name: s.hi.name, fingerprint, sheetName: s.sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: 'patch', colVals, refuseFormula: true, allowFormulaCols, after: () => this.setState({ chqEditDraft: null, msg: { kind: 'ok', text: `Colonne Chèque de la facture ${ref} modifiée.` } }) };
       this.setState({ writePreview: { kind: 'chqmodif', fileName: s.hi.name, sheetName: s.sheetName, excelRow: loc.excelRow, rows: [{ label: 'Chèque', col: this._colLetter(s.chequeCol + 1), value: val || '(case vidée)' }], status: null, refLabel: ref } });
     } catch (e) {
       this.setState({ msg: { kind: 'error', text: `Préparation impossible : ${(e && e.message) || 'erreur'}. Rien n'a été modifié.` } });
@@ -3101,7 +3135,8 @@ class Component {
       if (cLoc.descCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.descCol] = desc; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.descCol, val: desc }); preview.push({ label: 'Chéquier — Description', col: colName(cLoc.descCol), value: desc }); }
       if (cLoc.montCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.montCol] = montant; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.montCol, val: montant }); preview.push({ label: 'Chéquier — Montant', col: colName(cLoc.montCol), value: this.fmt(montant) }); }
       if (cLoc.obsCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.obsCol] = newObs; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.obsCol, val: newObs }); preview.push({ label: 'Chéquier — Obs', col: colName(cLoc.obsCol), value: newObs }); }
-      this._pendingWrite = { kind: 'operations', buf, handle: s.hi.handle, name: s.hi.name, fingerprint, sheetName: `${s.sheetName}, ${chequeSheetName}`, editsBySheet, verifyTargets, refuseFormula: true, after: () => { this._refreshChequiersLive(); this.setState({ chqAddDraft: null, msg: { kind: 'ok', text: `Chèque n°${chequeNum} ajouté à la facture ${ref}.` } }); this._refreshChqLiveStatus(ref); } };
+      const allowFormulaCols = this._opsAllowFormulaCols(s.sheetName, null, s.chequeCol);
+      this._pendingWrite = { kind: 'operations', buf, handle: s.hi.handle, name: s.hi.name, fingerprint, sheetName: `${s.sheetName}, ${chequeSheetName}`, editsBySheet, verifyTargets, refuseFormula: true, allowFormulaCols, after: () => { this._refreshChequiersLive(); this.setState({ chqAddDraft: null, msg: { kind: 'ok', text: `Chèque n°${chequeNum} ajouté à la facture ${ref}.` } }); this._refreshChqLiveStatus(ref); } };
       this.setState({ writePreview: { kind: 'chqmodif', fileName: s.hi.name, sheetName: `${s.sheetName} + ${chequeSheetName}`, rows: preview, status: null, refLabel: ref } });
     } catch (e) {
       this.setState({ msg: { kind: 'error', text: `Préparation impossible : ${(e && e.message) || 'erreur'}. Rien n'a été modifié.` } });
@@ -3159,7 +3194,12 @@ class Component {
     if (!sh) return null;
     const rows = sh.rows;
     const sectionAchat = this._stockFindSection(rows, 'achat', 'entree');
-    const sectionVente = this._stockFindSection(rows, 'commandes', 'sortie');
+    // Le libellé de la section vente n'est pas le même sur toutes les feuilles du fichier réel :
+    // « COMMANDES - SORTIE » sur les 5 espèces principales, mais « VENTE - SORTIE » sur 4 autres
+    // (BIG - C.V, VEL-BQ-AR, PRODUIT FINI, CONGELATION) — sans ce repli, toute vente de ces espèces
+    // échouait à 100 % ("Stock non rempli (vente)"), silencieusement pour la vente elle-même
+    // (best-effort) mais de façon systématique.
+    const sectionVente = this._stockFindSection(rows, 'commandes', 'sortie') || this._stockFindSection(rows, 'vente', 'sortie');
     let sec = context === 'vente' ? sectionVente : sectionAchat;
     if (!sec) return null;
     if (sec.headerIdx < 0) {
@@ -6337,13 +6377,19 @@ class Component {
     grenkeRows.forEach(g => { const L = resolveLink(g); if (L.ref) { grenkeLinkedFactRefs.add(this.nrm(L.ref)); const k = gNum(L.ref); if (k) grenkeNumSet.add(k); } else { const k = gNum(g.ref); if (k) grenkeNumSet.add(k); } });
     const filtered = txPager.slice.map(r => {
       const isHt = amountMode === 'HT' && r.type === 'Vente' && r.ht != null; const dispAmt = isHt ? (r.amt < 0 ? -r.ht : r.ht) : r.amt; const isGrk = r.type === 'Vente' && r.ref && (grenkeLinkedFactRefs.has(this.nrm(r.ref)) || (gNum(r.ref) && grenkeNumSet.has(gNum(r.ref)))); const canResolve = r.type === 'Vente' && r.status === 'À vérifier'; const stStyle = opStatus[r.status] || `${badge}background:#eef1f5;color:${slate}`;
-      const annulled = r.type === 'Vente' && isAnnule(r);
+      // RÈGLE : l'annulation existe aussi côté achats pêcheur (requestCancelPreview('operations', …)
+      // fonctionne très bien), mais n'était câblée ici que pour les ventes — un achat pêcheur ne
+      // pouvait donc jamais être annulé depuis ce tableau, quel que soit le réglage de la colonne
+      // « Annulé » dans Paramètres.
+      const cancelableType = r.type === 'Vente' || r.type === 'Achat';
+      const cancelKind = r.type === 'Vente' ? 'ventes' : 'operations';
+      const annulled = cancelableType && isAnnule(r);
       return ({ ref: r.ref || '—', date: `${this.dd(r.d)}/${this.dd(r.m)}`, type: isGrk ? 'Grenke' : r.type, partner: (r.manual ? '✎ ' : '') + r.partner, cat: r.cat, amount: (dispAmt < 0 ? '−' : '+') + Math.abs(dispAmt).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' € ' + (isHt ? 'HT' : 'TTC'), amountColor: dispAmt < 0 ? red : green, status: r.status + (r.paymentWarning ? ' ⚠' : ''),
         statusStyle: stStyle, statusButtonStyle: `${stStyle};border:${canResolve || r.paymentWarning ? '1px solid #e0b85f' : 'none'};cursor:${canResolve ? 'pointer' : 'default'};font-family:inherit`, statusTitle: canResolve ? 'Cliquez pour comprendre et résoudre cette anomalie' : (r.paymentWarning || ''), onResolve: canResolve ? () => this.setState({ payResolveRef: r.ref }) : null,
         typeStyle: isGrk ? `${badge}background:#ede9fe;color:#6d28d9` : r.type === 'Vente' ? `${badge}background:${soft};color:${accent}` : `${badge}background:#eef1f5;color:${slate}`,
-        canCancel: r.type === 'Vente', annulled, notAnnulled: r.type === 'Vente' && !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none',
-        onCancel: r.type === 'Vente' ? () => this.requestCancelPreview('ventes', r.ref) : null, cancelStyle: cancelBtnStyle,
-        onRestore: r.type === 'Vente' ? () => this.requestCancelPreview('ventes', r.ref, { restore: true }) : null, restoreStyle: restoreBtnStyle, annuleBadgeStyle });
+        canCancel: cancelableType, annulled, notAnnulled: cancelableType && !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none',
+        onCancel: cancelableType ? () => this.requestCancelPreview(cancelKind, r.ref) : null, cancelStyle: cancelBtnStyle,
+        onRestore: cancelableType ? () => this.requestCancelPreview(cancelKind, r.ref, { restore: true }) : null, restoreStyle: restoreBtnStyle, annuleBadgeStyle });
     });
     const moreLabel = (view === 'Achats' && scoped.length > cap) ? `Affichage des ${cap} premières lignes sur ${scoped.length} — réduisez la période pour tout voir.` : '';
     const isAchatView = view === 'Achats';
