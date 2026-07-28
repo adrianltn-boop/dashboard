@@ -2727,6 +2727,18 @@
       </div>
     </div>
   </sc-if>
+  <sc-if value="{{ venteAvoirAskOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ prefixOverlayStyle }}" onclick="{{ onVenteAvoirCancel }}">
+      <div style="width:440px;max-width:92vw;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px" onclick="{{ ctxStop }}">
+        <div style="font-size:15px;font-weight:700;color:#0e1b2e">Montant négatif — créer un avoir ?</div>
+        <div style="font-size:12.5px;color:#69788c;margin-top:8px;line-height:1.6">{{ venteAvoirAskText }}</div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">
+          <button style="{{ agBtnGhost }}" onclick="{{ onVenteAvoirCancel }}">Annuler</button>
+          <button style="padding:9px 16px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#1a56db;border:none;cursor:pointer;font-family:inherit" onclick="{{ onVenteAvoirConfirm }}">Confirmer l'avoir</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
   <sc-if value="{{ chqAnnuleAskOpen }}" hint-placeholder-val="{{ false }}">
     <div style="{{ prefixOverlayStyle }}" onclick="{{ onChqAnnuleAskCancel }}">
       <div style="width:420px;max-width:92vw;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px" onclick="{{ ctxStop }}">

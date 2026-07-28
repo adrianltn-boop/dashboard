@@ -797,6 +797,10 @@ class Component {
   }
   askDeletePay(id) { const r = this.payTrackRows().find(x => String(x.id) === String(id)); if (r) this.setState({ payDelAsk: r }); }
   deletePayRow() { const r = this.state.payDelAsk; if (!r) return; this.savePayTrack(this.payTrackRows().filter(x => String(x.id) !== String(r.id))); this.setState({ payDelAsk: null }); }
+  // Confirmation d'un avoir (vente à montant total négatif) : on ferme la modale et on relance
+  // l'enregistrement avec le drapeau, le brouillon étant inchangé.
+  confirmVenteAvoir() { this.setState({ venteAvoirAsk: null }); this._venteAvoirConfirmed = true; try { this.commitVenteSaisie(); } finally { this._venteAvoirConfirmed = false; } }
+  cancelVenteAvoir() { this.setState({ venteAvoirAsk: null }); }
   // ---------- Saisie de vente (transaction manuelle : facture complète) ----------
   venteSaisieRows() { return Array.isArray(this.state.ventesSaisie) ? this.state.ventesSaisie : []; }
   saveVenteSaisie(arr) { this.setState({ ventesSaisie: arr }); this.saveJSON(Component.VSAISIE_KEY, arr); }
@@ -881,8 +885,10 @@ class Component {
   commitVenteSaisie() {
     const d = this.state.venteDraft || this.venteDefault();
     const client = (d.client || '').trim();
-    const lignes = (d.lignes || []).map(l => ({ espece: (l.espece || '').trim(), calibre: (l.calibre || '').trim(), poids: this._vNum(l.poids), prixKg: this._vNum(l.prixKg) })).filter(l => l.poids > 0 && l.prixKg > 0);
-    if (!client || !lignes.length) { this.setState({ msg: { kind: 'error', text: 'Indiquez le client et au moins une espèce avec un poids et un prix.' } }); return; }
+    // Poids et prix peuvent être NÉGATIFS (avoir : ex. poids −10 × prix positif, ou l'inverse) —
+    // on ne rejette une ligne que si le poids OU le prix vaut exactement 0.
+    const lignes = (d.lignes || []).map(l => ({ espece: (l.espece || '').trim(), calibre: (l.calibre || '').trim(), poids: this._vNum(l.poids), prixKg: this._vNum(l.prixKg) })).filter(l => l.poids !== 0 && l.prixKg !== 0);
+    if (!client || !lignes.length) { this.setState({ msg: { kind: 'error', text: 'Indiquez le client et au moins une espèce avec un poids et un prix (non nuls).' } }); return; }
     lignes.forEach(l => { l.montant = Math.round(l.poids * l.prixKg * 100) / 100; });
     const ht = Math.round(lignes.reduce((s, l) => s + l.montant, 0) * 100) / 100;
     const tvaIrl = this._vNum(d.tvaIrl), tvaFr = this._vNum(d.tvaFr);
@@ -899,6 +905,9 @@ class Component {
     // les vues opérationnelles (suivi de paiement, Grenke) ne sont alimentées qu'APRÈS le succès.
     if (i >= 0) { this.setState({ msg: { kind: 'error', text: 'La modification d’une vente déjà enregistrée n’est pas encore disponible : corrigez-la directement dans votre fichier Excel. (Bientôt : correction guidée.)' } }); return; }
     if (!this._venteWriteReady()) { this.setState({ msg: { kind: 'error', text: 'Avant d’enregistrer une vente, réglez l’écriture de votre fichier : Paramètres → « Ventes client » → « Régler l’écriture », puis connectez le fichier. Rien n’est enregistré tant que le fichier ne peut pas être écrit.' } }); return; }
+    // Montant total négatif → c'est un AVOIR : on demande confirmation avant d'enregistrer. Le
+    // draft n'ayant pas bougé, la confirmation relance simplement commitVenteSaisie avec le drapeau.
+    if (rec.ttc < 0 && !this._venteAvoirConfirmed) { this.setState({ venteAvoirAsk: { montant: rec.ttc } }); return; }
     // Écritures annexes embarquées dans la MÊME transaction que Factures (voir requestAppendPreview) :
     //  · « Suivi des paiements » : ID Facture toujours (pour que les formules s'y accrochent), Avoir si > 0 ;
     //  · « Grenke » : une ligne de suivi si la vente est financée (le statut ETAT part de venteWriteValues).
@@ -6109,6 +6118,11 @@ class Component {
     const payDelName = payDelAsk ? `${payDelAsk.client} — ${this.fmt(+payDelAsk.ttc || 0)}` : '';
     const onPayDelConfirm = () => this.deletePayRow();
     const onPayDelCancel = () => this.setState({ payDelAsk: null });
+    const venteAvoirAsk = this.state.venteAvoirAsk;
+    const venteAvoirAskOpen = !!venteAvoirAsk;
+    const venteAvoirAskText = venteAvoirAsk ? `Le montant total est négatif (${this.fmt(venteAvoirAsk.montant)}). Cela va créer un avoir pour ce client. Voulez-vous continuer ?` : '';
+    const onVenteAvoirConfirm = () => this.confirmVenteAvoir();
+    const onVenteAvoirCancel = () => this.cancelVenteAvoir();
 
     // ==================== SAISIE COMPTABLE (portage fidèle de la maquette « Saisie par transaction ») ====================
     const kgN = n => (Math.round((+n || 0) * 10) / 10).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' kg';
@@ -8110,6 +8124,7 @@ class Component {
       onPayNum, onPayClient, onPayTtc, onPayAvoir, onPayDateFac, onPayDateEch, onPayRegle, onPayDatePay, onPayEtat,
       payInput, payInputN, payLbl, paySaveStyle, payResetStyle, payRowBtnStyle, payDelBtnStyle, payDraftSolde,
       payDelOpen, payDelName, onPayDelConfirm, onPayDelCancel,
+      venteAvoirAskOpen, venteAvoirAskText, onVenteAvoirConfirm, onVenteAvoirCancel,
       onHealthOpen: () => this.openHealthCheck(),
       isSaisieCompta, compTab, compIsAchat, compIsVente, compIsFourn, compIsPaiement,
       impayesAchats, paiementEmpty, paiementModeOpts, paiementIsPartiel, paiementIsCheque, paiementIsAutre, paiementIsComptant, paiementComptantSolde, paiementSelectedLabel,
