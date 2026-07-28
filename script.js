@@ -823,13 +823,21 @@ class Component {
       const file = await hi.handle.getFile();
       const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
       const buf = await file.arrayBuffer(); const wb = await this.readWorkbook(buf);
-      const editsBySheet = {}; const verifyTargets = []; const preview = []; const rowAppends = []; const sheets = [];
+      const editsBySheet = {}; const verifyTargets = []; const preview = []; const rowAppends = []; const sheets = []; const dateCols = {};
       const put = (shName, rowIdx, colIdx, val, label, display) => {
         if (colIdx == null || colIdx < 0 || val === '' || val == null) return;
         editsBySheet[shName] = editsBySheet[shName] || {};
         editsBySheet[shName][rowIdx + ':' + colIdx] = val;
         preview.push({ label, col: `${this._colLetter(colIdx + 1)}${rowIdx + 1}`, value: display != null ? display : String(val) });
         verifyTargets.push({ sheetName: shName, rowIdx, col: colIdx, val });
+      };
+      // Date : écrite en SÉRIE Excel (RÈGLE « Dates Excel ») et sa colonne déclarée dans dateCols
+      // pour recevoir un format de date — sinon la série s'afficherait en nombre brut.
+      const putDate = (shName, rowIdx, colIdx, iso, label) => {
+        if (colIdx == null || colIdx < 0) return;
+        const serial = this._excelSerial(iso); if (serial == null) return;
+        (dateCols[shName] = dateCols[shName] || new Set()).add(Number(colIdx));
+        put(shName, rowIdx, colIdx, serial, label, this._isoToFr(iso));
       };
       // 1) « Suivi des paiements » — ligne repérée par ID Facture (colonne A).
       const sloc = this._suiviLocate(wb);
@@ -839,7 +847,7 @@ class Component {
         for (let r = sloc.dataStart; r < rows.length; r++) { const v = (rows[r] || [])[sloc.cols.idFacture]; if (v != null && String(v).trim() === want) { rowIdx = r; break; } }
         if (rowIdx >= 0) {
           put(sloc.sheetName, rowIdx, sloc.cols.regle, rec.regle, 'Montant réglé (Suivi des paiements)', this.fmt(rec.regle));
-          if (rec.datePay) put(sloc.sheetName, rowIdx, sloc.cols.datePay, this._isoToFr(rec.datePay), 'Date du paiement (Suivi des paiements)');
+          if (rec.datePay) putDate(sloc.sheetName, rowIdx, sloc.cols.datePay, rec.datePay, 'Date du paiement (Suivi des paiements)');
           put(sloc.sheetName, rowIdx, sloc.cols.etat, rec.etat, 'État (Suivi des paiements)');
           if (rec.avoir > 0) put(sloc.sheetName, rowIdx, sloc.cols.avoir, rec.avoir, 'Avoir (Suivi des paiements)', this.fmt(rec.avoir));
           sheets.push(sloc.sheetName);
@@ -855,12 +863,12 @@ class Component {
       }
       // 3) « Avoirs » — bloc client, si un avoir est saisi (type A : avoir renseigné à la main).
       if (rec.avoir > 0 && rec.client) {
-        const done = await this._avoirsPlan(wb, buf, { client: rec.client, num: rec.num, montant: rec.avoir, type: 'A', date: rec.datePay || rec.dateFac || this._payTodayIso() }, () => {}, put, rowAppends);
+        const done = await this._avoirsPlan(wb, buf, { client: rec.client, num: rec.num, montant: rec.avoir, type: 'A', date: rec.datePay || rec.dateFac || this._payTodayIso() }, () => {}, put, rowAppends, putDate);
         if (done) sheets.push(done);
       }
       if (!preview.length) { this.setState({ msg: { kind: 'error', text: `Rien à écrire : facture n°${rec.num || rec.id} introuvable dans « ${hi.name} » (vérifiez l'ID Facture et le numéro).` } }); return; }
       const sheetList = [...new Set(sheets)];
-      this._pendingWrite = { kind: 'ventes', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: sheetList.join(', '), editsBySheet, verifyTargets, rowAppends, refuseFormula: true, after: () => this._payAfterWrite(rec) };
+      this._pendingWrite = { kind: 'ventes', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: sheetList.join(', '), editsBySheet, verifyTargets, rowAppends, dateCols, refuseFormula: true, after: () => this._payAfterWrite(rec) };
       this.setState({ writePreview: { kind: 'paiementClient', fileName: hi.name, sheetName: sheetList.join(', '), excelRow: null, rows: preview, status: null, refLabel: rec.num || String(rec.id) } });
     } catch (e) {
       this.setState({ msg: { kind: 'error', text: `Préparation de l'écriture impossible : ${(e && e.message) || 'erreur'}. Le paiement n'a PAS été enregistré.` } });
@@ -1767,7 +1775,7 @@ class Component {
       const appendFill = fillEls && avoirFillId < 0; if (appendFill) avoirFillId = fillEls.length;
       const xfEls = xfsM[1].match(/<xf\b[^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g) || [];
       const baseXfCount = xfEls.length; if (!baseXfCount) return null;
-      const added = []; const cache = {}; const cacheAvoir = {};
+      const added = []; const cache = {}; const cacheAvoir = {}; const cacheDate = {};
       // Dérive un style à partir de celui d'origine ; `extra` applique les attributs supplémentaires.
       const derive = (origIdx, store, extra) => {
         const oi = (origIdx >= 0 && origIdx < baseXfCount) ? origIdx : 0;
@@ -1781,6 +1789,10 @@ class Component {
       };
       const setAttr = (xf, name, val) => (new RegExp(`\\b${name}="[^"]*"`).test(xf) ? xf.replace(new RegExp(`\\b${name}="[^"]*"`), `${name}="${val}"`) : xf.replace(/<xf\b/, `<xf ${name}="${val}"`));
       const mapStyle = (origIdx) => derive(origIdx, cache, xf => setAttr(setAttr(xf, 'fontId', blueFontId), 'applyFont', '1'));
+      // Style « date » : marquage bleu + format de date court intégré (numFmtId 14 → JJ/MM/AAAA en
+      // Excel français). Indispensable pour les cellules NEUVES (ligne créée par le dashboard, donc
+      // sans format hérité) : sans lui, la série Excel s'afficherait en nombre brut (ex. 46231).
+      const mapDateStyle = (origIdx) => derive(origIdx, cacheDate, xf => setAttr(setAttr(setAttr(setAttr(xf, 'fontId', blueFontId), 'applyFont', '1'), 'numFmtId', '14'), 'applyNumberFormat', '1'));
       const mapAvoirStyle = (origIdx) => {
         if (!fillEls) return mapStyle(origIdx); // pas de <fills> exploitable : on garde le marquage standard
         return derive(origIdx, cacheAvoir, xf => setAttr(setAttr(setAttr(setAttr(xf, 'fontId', blackFontId), 'applyFont', '1'), 'fillId', avoirFillId), 'applyFill', '1'));
@@ -1794,7 +1806,7 @@ class Component {
         if (added.length) out = out.replace(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/, (m, inner) => `<cellXfs count="${baseXfCount + added.length}">${inner}${added.join('')}</cellXfs>`);
         return out;
       };
-      return { mapStyle, mapAvoirStyle, finalize };
+      return { mapStyle, mapAvoirStyle, mapDateStyle, finalize };
     } catch (e) { return null; }
   }
   async patchXlsxFile(origBuf, editsBySheetName, opts) {
@@ -1810,11 +1822,16 @@ class Component {
     const colName = n => { let s = '', m = n + 1; while (m > 0) { const r = (m - 1) % 26; s = String.fromCharCode(65 + r) + s; m = Math.floor((m - 1) / 26); } return s; };
     // Style à écrire : si marquage actif, style dérivé (bleu + Andale) du style d'origine ; sinon le
     // style d'origine. Une cellule dont la valeur est « AVOIR » reçoit en plus un fond bleu #4472C4.
-    const styleAttrFor = (origIdxOrNull, val) => {
+    // Colonnes contenant une date (série Excel) : reçoivent un format de date, indispensable quand
+    // la cellule est neuve et n'hérite d'aucun format — voir opts.dateCols et RÈGLE « Dates Excel ».
+    const _dateCols = (opts && opts.dateCols) || null;
+    const styleAttrFor = (origIdxOrNull, val, sheetName, colIdx) => {
       if (!_mark) return origIdxOrNull == null ? '' : ` s="${origIdxOrNull}"`;
       const base = origIdxOrNull == null ? 0 : origIdxOrNull;
       const isAvoir = String(val == null ? '' : val).trim().toUpperCase() === Component.ETAT_AVOIR;
-      return ` s="${isAvoir ? _mark.mapAvoirStyle(base) : _mark.mapStyle(base)}"`;
+      if (isAvoir) return ` s="${_mark.mapAvoirStyle(base)}"`;
+      const isDate = !!(_dateCols && _dateCols[sheetName] && _dateCols[sheetName].has(Number(colIdx)));
+      return ` s="${isDate ? _mark.mapDateStyle(base) : _mark.mapStyle(base)}"`;
     };
     const cellXmlFor = (ref, styleAttr, val) => {
       const s = String(val == null ? '' : val).trim();
@@ -1859,11 +1876,11 @@ class Component {
               const allowed = !!(opts && opts.allowFormulaCols && opts.allowFormulaCols[sheetName] && opts.allowFormulaCols[sheetName].has(Number(cStr)));
               if (_refuseFormula && !allowed) { _formulaHit.push(ref); (_skipped[sheetName] = _skipped[sheetName] || new Set()).add(Number(cStr)); continue; }
             }
-            out = out.replace(cellRe, cellXmlFor(ref, styleAttrFor(styleM ? Number(styleM[1]) : null, rowEdits[cStr]), rowEdits[cStr]));
+            out = out.replace(cellRe, cellXmlFor(ref, styleAttrFor(styleM ? Number(styleM[1]) : null, rowEdits[cStr], sheetName, cStr), rowEdits[cStr]));
           } else {
             // cellule absente (vide à l'origine) : insertion avant la première cellule de colonne
             // supérieure pour garder l'ordre croissant, sinon en fin de ligne.
-            const newCell = cellXmlFor(ref, styleAttrFor(null, rowEdits[cStr]), rowEdits[cStr]);
+            const newCell = cellXmlFor(ref, styleAttrFor(null, rowEdits[cStr], sheetName, cStr), rowEdits[cStr]);
             const cells = [...out.matchAll(/<c\s[^>]*r="([A-Z]+)(\d+)"[^>]*(?:\/>|>[\s\S]*?<\/c>)/g)];
             const colOf = ltr => { let v = 0; for (const ch of ltr) v = v * 26 + (ch.charCodeAt(0) - 64); return v; };
             const after = cells.find(m => colOf(m[1]) > Number(cStr) + 1);
@@ -2188,7 +2205,7 @@ class Component {
       // une ligne libre) dans UNE seule transaction editsBySheet — même mécanisme que l'achat pour
       // ses écritures multi-feuilles (pêcheur + chéquier), un seul aperçu/confirmation.
       let editsBySheet = null; let verifyTargets = null; let combinedSheetName = sheetName;
-      const rowAppends = []; const extraSheets = [];
+      const rowAppends = []; const extraSheets = []; const dateCols = {};
       // Les écritures secondaires ci-dessous rejoignent l'écriture Factures dans UNE seule
       // transaction editsBySheet (un seul aperçu, une seule confirmation, une seule sauvegarde).
       const startCombined = () => {
@@ -2201,6 +2218,14 @@ class Component {
         editsBySheet[shName][rowIdx + ':' + colIdx] = val;
         preview.push({ label, col: `${colName(colIdx + 1)}${rowIdx + 1}`, value: display != null ? display : String(val) });
         verifyTargets.push({ sheetName: shName, rowIdx, col: colIdx, val });
+      };
+      // Date : SÉRIE Excel + colonne déclarée dans dateCols (RÈGLE « Dates Excel ») — ces feuilles
+      // annexes écrivent sur des lignes créées vides, qui n'héritent d'aucun format de date.
+      const putCellDate = (shName, rowIdx, colIdx, iso, label) => {
+        if (colIdx == null || colIdx < 0) return;
+        const serial = this._excelSerial(iso); if (serial == null) return;
+        (dateCols[shName] = dateCols[shName] || new Set()).add(Number(colIdx));
+        putCell(shName, rowIdx, colIdx, serial, label, this._isoToFr(iso));
       };
       // Repère la ligne où écrire dans une feuille annexe : d'abord une ligne EXISTANTE dont la
       // colonne clé vaut déjà la valeur cherchée, sinon la première ligne dont la colonne clé est
@@ -2253,7 +2278,7 @@ class Component {
             } else {
               // Nouvelle ligne : on écrit toutes les valeurs (colonnes détectées par _suiviLocate).
               const putSv = (key, val, label, display) => { const ci = sloc.cols[key]; if (ci == null || ci < 0 || val === '' || val == null) return; putCell(sloc.sheetName, place.rowIdx, ci, val, label, display); };
-              const putSvDate = (key, iso, label) => { const ci = sloc.cols[key]; if (ci == null || ci < 0) return; const serial = this._excelSerial(iso); if (serial == null) return; putCell(sloc.sheetName, place.rowIdx, ci, serial, label, this._isoToFr(iso)); };
+              const putSvDate = (key, iso, label) => putCellDate(sloc.sheetName, place.rowIdx, sloc.cols[key], iso, label);
               putSv('idFacture', sv.idFacture, 'ID Facture (Suivi des paiements)');
               putSv('numero', sv.num, 'Numéro facture (Suivi des paiements)');
               putSv('client', sv.client, 'Nom client (Suivi des paiements)');
@@ -2290,12 +2315,12 @@ class Component {
       // ligne 3, journal chronologique à partir de la ligne 4). Les blocs sont côte à côte
       // horizontalement, séparés d'une colonne vide (voir _avoirsFindBlock).
       if (kind === 'ventes' && opts.avoirEntry && opts.avoirEntry.client) {
-        const done = await this._avoirsPlan(wbH, buf, opts.avoirEntry, () => startCombined(), putCell, rowAppends);
+        const done = await this._avoirsPlan(wbH, buf, opts.avoirEntry, () => startCombined(), putCell, rowAppends, putCellDate);
         if (done) extraSheets.push(done);
       }
       if (extraSheets.length) combinedSheetName = [sheetName, ...extraSheets].join(', ');
       this._pendingWrite = editsBySheet
-        ? { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: combinedSheetName, editsBySheet, verifyTargets, rowAppends, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null }
+        ? { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: combinedSheetName, editsBySheet, verifyTargets, rowAppends, dateCols, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null }
         : { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: loc.mode, colVals, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null };
       this.setState({ writePreview: { kind, fileName: hi.name, sheetName: combinedSheetName, excelRow: editsBySheet ? null : loc.excelRow, rows: preview, status: null } });
     } catch (e) {
@@ -2471,7 +2496,9 @@ class Component {
       const desc = rec.pecheur || '';
       const obs = this._chequeObsText(1, 1, rec.num || '');
       const colVals = {}; const preview = [];
-      if (loc.dateCol >= 0) { colVals[loc.dateCol] = serial != null ? serial : (rec.date || ''); preview.push({ label: 'Date', col: colName(loc.dateCol + 1), value: this._isoToFr(rec.date) }); }
+      // RÈGLE « Dates Excel » : jamais de date en texte. Si la date est illisible (serial null), on
+      // laisse la case vide plutôt que d'y écrire une chaîne non exploitable par Excel.
+      if (loc.dateCol >= 0 && serial != null) { colVals[loc.dateCol] = serial; preview.push({ label: 'Date', col: colName(loc.dateCol + 1), value: this._isoToFr(rec.date) }); }
       if (loc.descCol >= 0) { colVals[loc.descCol] = desc; preview.push({ label: 'Description', col: colName(loc.descCol + 1), value: desc }); }
       if (loc.montCol >= 0) { colVals[loc.montCol] = rec.total; preview.push({ label: 'Montant', col: colName(loc.montCol + 1), value: this.fmt(rec.total) }); }
       if (loc.obsCol >= 0) { colVals[loc.obsCol] = obs; preview.push({ label: 'Obs', col: colName(loc.obsCol + 1), value: obs }); }
@@ -3140,7 +3167,7 @@ class Component {
   // Partagé par la saisie de vente et l'enregistrement de paiement — `start` ouvre la transaction
   // combinée, `put` écrit une cellule, `rowAppends` reçoit les créations de ligne différées.
   // Renvoie le nom de la feuille écrite, ou null si rien n'a pu être placé.
-  async _avoirsPlan(wb, buf, ae, start, put, rowAppends) {
+  async _avoirsPlan(wb, buf, ae, start, put, rowAppends, putDate) {
     const aloc = this._avoirsLocate(wb); if (!aloc) return null;
     const block = this._avoirsFindBlock(aloc.rows, ae.client); if (!block) return null;
     start();
@@ -3176,10 +3203,9 @@ class Component {
     const oldTotal = block.isNew ? 0 : (this._vNum((aloc.rows[2] || [])[amtCol]) || 0);
     const newTotal = Math.round((oldTotal + montantAbs) * 100) / 100;
     put(aloc.sheetName, 2, amtCol, newTotal, 'Total avoirs (Avoirs)', this.fmt(newTotal));
-    // Date écrite en texte lisible (JJ/MM/AAAA) plutôt qu'en série Excel : cette colonne,
-    // neuve ou non, n'a pas de format de date garanti, donc une série s'afficherait en
-    // nombre brut (ex. 46131) au lieu d'une date.
-    put(aloc.sheetName, freeRowIdx, dateCol, this._isoToFr(ae.date), 'Date (Avoirs)');
+    // Date en SÉRIE Excel (RÈGLE « Dates Excel ») : putDate déclare aussi la colonne dans dateCols
+    // pour qu'un format de date lui soit appliqué — la ligne étant neuve, elle n'en hérite d'aucun.
+    putDate(aloc.sheetName, freeRowIdx, dateCol, ae.date, 'Date (Avoirs)');
     put(aloc.sheetName, freeRowIdx, amtCol, montantAbs, 'Montant avoir (Avoirs)', this.fmt(montantAbs));
     put(aloc.sheetName, freeRowIdx, numCol, ae.num, 'N° facture (Avoirs)');
     put(aloc.sheetName, freeRowIdx, typeCol, ae.type, 'Type A/S (Avoirs)');
@@ -3815,9 +3841,9 @@ class Component {
       }
       // 3) ÉCRITURE (garde anti-formule sur le chemin patch)
       let patched;
-      if (pw.editsBySheet) patched = await this.patchXlsxFile(buf, pw.editsBySheet, { refuseFormula: pw.refuseFormula, markStyle: true, allowFormulaCols: pw.allowFormulaCols }); // écriture multi-feuilles (stock)
+      if (pw.editsBySheet) patched = await this.patchXlsxFile(buf, pw.editsBySheet, { refuseFormula: pw.refuseFormula, markStyle: true, allowFormulaCols: pw.allowFormulaCols, dateCols: pw.dateCols }); // écriture multi-feuilles (stock)
       else if (pw.mode === 'append') patched = await this._appendXlsxRow(buf, pw.sheetName, pw.excelRow, pw.colVals);
-      else { const edits = {}; edits[pw.sheetName] = {}; Object.keys(pw.colVals).forEach(ci => { edits[pw.sheetName][pw.previewIdx + ':' + ci] = pw.colVals[ci]; }); patched = await this.patchXlsxFile(buf, edits, { refuseFormula: pw.refuseFormula, markStyle: true, allowFormulaCols: pw.allowFormulaCols }); }
+      else { const edits = {}; edits[pw.sheetName] = {}; Object.keys(pw.colVals).forEach(ci => { edits[pw.sheetName][pw.previewIdx + ':' + ci] = pw.colVals[ci]; }); patched = await this.patchXlsxFile(buf, edits, { refuseFormula: pw.refuseFormula, markStyle: true, allowFormulaCols: pw.allowFormulaCols, dateCols: pw.dateCols }); }
       const patchedBuf = await patched.arrayBuffer();
       // 4) RELECTURE DE CONTRÔLE (avant même d'écrire le disque : on vérifie le blob produit)
       const wbChk = await this.readWorkbook(patchedBuf.slice(0));

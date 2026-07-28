@@ -65,6 +65,16 @@
 - Modification/suppression d'une écriture existante :
   INTERDITE depuis l'interface, rediriger vers Excel
 - Total mensuel heures théorique : 151.67h
+- Dates Excel : toutes les dates écrites dans
+  les fichiers Excel doivent être au format
+  numérique série Excel (pas du texte).
+  Utiliser _excelSerial(dateIso) pour convertir
+  avant toute écriture de date. Si la cellule
+  cible est neuve (ligne créée par le dashboard,
+  donc sans format), déclarer sa colonne dans
+  dateCols pour qu'un format de date lui soit
+  appliqué — sans quoi la série s'affiche en
+  nombre brut (ex. 46231).
 - Aucune dépendance externe, tout en JS pur
 
 ## Bugs Corrigés (ne pas réintroduire)
