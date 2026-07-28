@@ -908,10 +908,15 @@ class Component {
     // Montant total négatif → c'est un AVOIR : on demande confirmation avant d'enregistrer. Le
     // draft n'ayant pas bougé, la confirmation relance simplement commitVenteSaisie avec le drapeau.
     if (rec.ttc < 0 && !this._venteAvoirConfirmed) { this.setState({ venteAvoirAsk: { montant: rec.ttc } }); return; }
+    // Type de l'avoir client : S = montant total négatif confirmé (prioritaire), A = case Avoir
+    // cochée. Montant de l'avoir = valeur absolue du total si négatif, sinon le montant saisi.
+    const avoirType = rec.ttc < 0 ? 'S' : (avoir > 0 ? 'A' : null);
+    const avoirMontant = avoirType === 'S' ? Math.abs(rec.ttc) : avoir;
     // Écritures annexes embarquées dans la MÊME transaction que Factures (voir requestAppendPreview) :
     //  · « Suivi des paiements » : ID Facture toujours (pour que les formules s'y accrochent), Avoir si > 0 ;
-    //  · « Grenke » : une ligne de suivi si la vente est financée (le statut ETAT part de venteWriteValues).
-    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, suiviAvoir: rec.idFacture ? { avoir, idFacture: rec.idFacture, num: rec.num, client, ttc, date: rec.date, datePrev } : null, grenkeRow: grenke ? { num: this._numSansPrefixe(rec.num), client, ttc } : null, after: () => this._venteAfterWrite(rec), afterClose: () => {
+    //  · « Grenke » : une ligne de suivi si la vente est financée (le statut ETAT part de venteWriteValues) ;
+    //  · « Avoirs » : bloc client (nouveau ou existant) si avoir coché ou montant négatif confirmé.
+    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, suiviAvoir: rec.idFacture ? { avoir, idFacture: rec.idFacture, num: rec.num, client, ttc, date: rec.date, datePrev } : null, grenkeRow: grenke ? { num: this._numSansPrefixe(rec.num), client, ttc } : null, avoirEntry: avoirType ? { client, num: rec.num, montant: avoirMontant, type: avoirType, date: rec.date } : null, after: () => this._venteAfterWrite(rec), afterClose: () => {
       if (this._stockDir) { this._writeQueue = [() => this.requestStockPreview(rec, 'vente')]; this._runNextWrite(); }
     } });
   }
@@ -2167,6 +2172,57 @@ class Component {
           }
         }
       }
+      // Avoir client (Avoir coché OU montant total négatif confirmé) : un bloc de 4 colonnes par
+      // client dans l'onglet « Avoirs » (Client/Somme avoir/N° facture/Type A-S en en-tête, total en
+      // ligne 3, journal chronologique à partir de la ligne 4). Les blocs sont côte à côte
+      // horizontalement, séparés d'une colonne vide (voir _avoirsFindBlock).
+      if (kind === 'ventes' && opts.avoirEntry && opts.avoirEntry.client) {
+        const ae = opts.avoirEntry;
+        const aloc = this._avoirsLocate(wbH);
+        if (aloc) {
+          const block = this._avoirsFindBlock(aloc.rows, ae.client);
+          if (block) {
+            startCombined();
+            const sc = block.startCol; const dateCol = sc, amtCol = sc + 1, numCol = sc + 2, typeCol = sc + 3;
+            if (block.isNew) {
+              putCell(aloc.sheetName, 1, sc, ae.client, 'Client (Avoirs)');
+              putCell(aloc.sheetName, 1, amtCol, 'SOMME AVOIR', 'En-tête (Avoirs)');
+              putCell(aloc.sheetName, 1, numCol, 'N° FACTURE', 'En-tête (Avoirs)');
+              putCell(aloc.sheetName, 1, typeCol, 'Type A/S', 'En-tête (Avoirs)');
+              putCell(aloc.sheetName, 2, sc, '/', 'Avoirs — repère');
+              putCell(aloc.sheetName, 2, numCol, '/', 'Avoirs — repère');
+              putCell(aloc.sheetName, 2, typeCol, '/', 'Avoirs — repère');
+            }
+            // Ligne libre du journal (première ligne vide sous la ligne 3), et somme des montants
+            // déjà présents pour ce client — le total est RECALCULÉ, pas une formule Excel.
+            let sumExisting = 0; let freeRowIdx = -1; let lastUsedIdx = 2; // ligne total = index 2
+            for (let r = 3; r < aloc.rows.length; r++) {
+              const dv = (aloc.rows[r] || [])[dateCol]; const av = (aloc.rows[r] || [])[amtCol];
+              const rowEmpty = (dv == null || String(dv).trim() === '') && (av == null || String(av).trim() === '');
+              if (rowEmpty) { freeRowIdx = r; break; }
+              const n = this._vNum(av); if (!isNaN(n)) sumExisting += n;
+              lastUsedIdx = r;
+            }
+            if (freeRowIdx < 0) {
+              // Pas de ligne vide sous ce client dans les lignes déjà utilisées par le tableau :
+              // on ajoute une nouvelle ligne en fin de tableau (aucune formule à recopier ici).
+              const rowNums = await this._sheetRowExcelNumbers(buf, aloc.sheetName);
+              const prevExcelRow = rowNums[lastUsedIdx];
+              if (prevExcelRow != null) { rowAppends.push({ sheetName: aloc.sheetName, prevExcelRow, colLetters: [] }); freeRowIdx = lastUsedIdx + 1; }
+            }
+            if (freeRowIdx >= 0) {
+              const newTotal = Math.round((sumExisting + ae.montant) * 100) / 100;
+              putCell(aloc.sheetName, 2, amtCol, newTotal, 'Total avoirs (Avoirs)', this.fmt(newTotal));
+              const serial = this._excelSerial(ae.date);
+              if (serial != null) putCell(aloc.sheetName, freeRowIdx, dateCol, serial, 'Date (Avoirs)', this._isoToFr(ae.date));
+              putCell(aloc.sheetName, freeRowIdx, amtCol, ae.montant, 'Montant avoir (Avoirs)', this.fmt(ae.montant));
+              putCell(aloc.sheetName, freeRowIdx, numCol, ae.num, 'N° facture (Avoirs)');
+              putCell(aloc.sheetName, freeRowIdx, typeCol, ae.type, 'Type A/S (Avoirs)');
+              extraSheets.push(aloc.sheetName);
+            }
+          }
+        }
+      }
       if (extraSheets.length) combinedSheetName = [sheetName, ...extraSheets].join(', ');
       this._pendingWrite = editsBySheet
         ? { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: combinedSheetName, editsBySheet, verifyTargets, rowAppends, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null }
@@ -2991,6 +3047,28 @@ class Component {
       cols: { invoice: 1, customer: 2, ttc: 3, p1: 4, p2: 5, remains: 6, charges: 7, received: 8, statut: 9 },
       formulaCols: ['G', 'I'], // Remains et Total received sont calculés ; le reste est saisi
     };
+  }
+  // ---------- Circuit G — onglet dédié « Avoirs » du fichier ventes ----------
+  // Blocs de 4 colonnes par client, CÔTE À CÔTE horizontalement (pas empilés), séparés d'une
+  // colonne vide : ligne 2 = en-têtes (Client/SOMME AVOIR/N° FACTURE/Type A-S), ligne 3 = total
+  // (recalculé, pas une formule), ligne 4+ = journal chronologique des avoirs de ce client.
+  _avoirsLocate(wb) {
+    const sh = wb.find(s => this._norm(s.name).indexOf('avoir') >= 0);
+    if (!sh) return null;
+    return { sheetName: sh.name, rows: sh.rows };
+  }
+  // Cherche le bloc du client (en-tête ligne 2, colonnes 0/5/10/15…) ; retourne la position du
+  // 1er bloc dont le nom correspond, sinon la 1re position libre (nouveau bloc, en-têtes à créer).
+  _avoirsFindBlock(rows, clientName) {
+    const want = this._norm(clientName);
+    const headerRow = 1; // ligne 2 Excel (0-based)
+    for (let c = 0; c < 1000; c += 5) {
+      const name = (rows[headerRow] || [])[c];
+      const has = name != null && String(name).trim() !== '';
+      if (has && this._norm(name) === want) return { startCol: c, isNew: false };
+      if (!has) return { startCol: c, isNew: true };
+    }
+    return null;
   }
   // Colonnes (index 0-based) portant une formule <f> sur chaque ligne séquentielle de la feuille,
   // lues directement du XML — readWorkbook ne restitue que les valeurs, pas la présence de formule.
