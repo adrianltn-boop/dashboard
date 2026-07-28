@@ -1069,14 +1069,20 @@ class Component {
     const datePrev = this._addDaysIso(d.date, delai);
     const id = +d.id || this._venteNextId();
     const grenke = (d.grenke && this._vNum(d.grenke.montant) > 0) ? d.grenke : null;
-    const avoir = (d.avoirActif && this._vNum(d.avoir) > 0) ? this._vNum(d.avoir) : 0;
+    const avoirRaw = (d.avoirActif && this._vNum(d.avoir) > 0) ? this._vNum(d.avoir) : 0;
+    // Aucune information ne doit se perdre : si l'avoir tapé dépasse le TTC de CETTE facture (ex.
+    // 300 € d'avoir pour une facture à 102 €), seul ce qui est réellement nécessaire est appliqué/
+    // déduit (jamais plus que le TTC) — le reste (ici 198 €) doit rester au crédit du client dans
+    // l'onglet Avoirs, jamais consommé pour rien. `avoir` est désormais ce montant EFFECTIVEMENT
+    // appliqué ; `avoirRaw` garde la saisie brute, seulement pour informer Faustine du surplus conservé.
+    const avoir = avoirRaw > 0 ? Math.min(avoirRaw, Math.max(ttc, 0)) : 0;
     // Avoir à utiliser plafonné au disponible : on ne bloque pas la frappe (l'alerte suffit pendant
     // la saisie), mais on refuse l'enregistrement si le montant dépasse ce que l'onglet Avoirs a
     // effectivement au crédit du client — l'alerte visuelle seule ne suffit pas à empêcher un envoi.
     if (avoir > 0) {
       const vad = this.state.venteAvoirDispo;
       const dispo = (vad && vad.client === client) ? vad.montant : 0;
-      if (avoir > dispo + 0.005) { this.setState({ msg: { kind: 'error', text: `Avoir insuffisant pour « ${client} » : disponible ${this.fmt(dispo)}, saisi ${this.fmt(avoir)}. Réduisez le montant à utiliser.` } }); return; }
+      if (avoir > dispo + 0.005) { this.setState({ msg: { kind: 'error', text: `Avoir insuffisant pour « ${client} » : disponible ${this.fmt(dispo)}, saisi ${this.fmt(avoirRaw)}. Réduisez le montant à utiliser.` } }); return; }
     }
     const rec = { id, num: (d.num || '').trim(), idFacture: (d.idFacture || '').trim(), client, date: d.date || '', lignes, ht, tvaIrl, tvaFr, ttc, delai, datePrev, grenke, avoir };
     const arr = this.venteSaisieRows().slice(); const i = arr.findIndex(x => String(x.id) === String(id));
@@ -1099,7 +1105,7 @@ class Component {
     //  · « Suivi des paiements » : identité de la facture + avoir, solde et état ;
     //  · « Grenke » : une ligne de suivi si la vente est financée (le statut ETAT part de venteWriteValues) ;
     //  · « Avoirs » : bloc client (nouveau ou existant) si avoir coché ou montant négatif confirmé.
-    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, suiviAvoir: { avoir, idFacture: rec.idFacture, num: rec.num, client, ttc, date: rec.date, datePrev, etat: this._venteEtat(rec, avoir), soldeParAvoir }, grenkeRow: grenke ? { num: this._numSansPrefixe(rec.num), client, ttc } : null, avoirEntry: avoirType ? { client, num: rec.num, montant: avoirMontant, type: avoirType, date: rec.date } : null, after: () => this._venteAfterWrite(rec), afterClose: () => {
+    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, suiviAvoir: { avoir, avoirSaisi: avoirRaw, idFacture: rec.idFacture, num: rec.num, client, ttc, date: rec.date, datePrev, etat: this._venteEtat(rec, avoir), soldeParAvoir }, grenkeRow: grenke ? { num: this._numSansPrefixe(rec.num), client, ttc } : null, avoirEntry: avoirType ? { client, num: rec.num, montant: avoirMontant, type: avoirType, date: rec.date } : null, after: () => this._venteAfterWrite(rec), afterClose: () => {
       if (this._stockDir) { this._writeQueue = [() => this.requestStockPreview(rec, 'vente')]; this._runNextWrite(); }
     } });
   }
@@ -2427,7 +2433,10 @@ class Component {
             if (sv.soldeParAvoir) putSvDate('datePay', sv.date, 'Date du paiement (Suivi des paiements)');
             putSv('etat', sv.etat, 'Etat (Suivi des paiements)');
             // Avoir supérieur au TTC : le surplus reste au crédit du client, on le signale.
-            if (sv.avoir > sv.ttc && sv.ttc >= 0) preview.push({ label: '⚠ Avoir supérieur au montant TTC', col: '—', value: `Le surplus de ${this.fmt(Math.round((sv.avoir - sv.ttc) * 100) / 100)} retourne dans les avoirs.` });
+            // sv.avoir est désormais déjà plafonné au TTC en amont (commitVenteSaisie) : le surplus
+            // qu'aurait pu taper Faustine (sv.avoirSaisi) n'est jamais déduit de l'onglet Avoirs — on
+            // le confirme ici pour qu'elle voie que ce surplus reste disponible, pas qu'il ait disparu.
+            if (sv.avoirSaisi != null && sv.avoirSaisi > sv.avoir + 0.005) preview.push({ label: 'ℹ Avoir saisi supérieur au TTC', col: '—', value: `Seuls ${this.fmt(sv.avoir)} appliqués à cette facture ; le surplus de ${this.fmt(Math.round((sv.avoirSaisi - sv.avoir) * 100) / 100)} reste disponible pour ce client.` });
             extraSheets.push(sloc.sheetName);
           }
         }
