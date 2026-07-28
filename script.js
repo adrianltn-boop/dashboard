@@ -1315,18 +1315,25 @@ class Component {
     const s = this._achatSteps; if (!s) return;
     if (s.pecheur === 'attente' || s.cheque === 'attente' || s.stock === 'attente') return; // encore en cours
     this._achatSteps = null;
-    const rec = s.rec || {}; const ic = v => v === 'ok' ? '✓' : v === 'na' ? '—' : v === 'annulé' ? '⊘' : '✗';
+    const rec = s.rec || {}; const ic = v => v === 'ok' ? '✓' : v === 'na' ? '—' : v === 'annulé' ? '⊘' : v === 'partiel' ? '⚠' : '✗';
     const anyFail = s.cheque === 'fail' || s.stock === 'fail' || s.pecheur === 'fail';
+    const anyPartial = s.stock === 'partiel';
+    const stockTxt = s.stock === 'ok' ? 'poids/prix ajoutés'
+      : s.stock === 'partiel' ? `ÉCART — non placé : ${(s.stockUnresolved || []).join(', ')} (à ajouter à la main)`
+      : s.stock === 'na' ? 'non configuré' : s.stock === 'fail' ? 'ÉCHEC' : s.stock;
     const cards = [
       { l: '🎣 Suivi pêcheur', v: `${ic(s.pecheur)} ${s.pecheur === 'ok' ? 'écrit et relu' : s.pecheur === 'fail' ? 'ÉCHEC' : s.pecheur}` },
       { l: '🧾 Chèque', v: `${ic(s.cheque)} ${s.cheque === 'ok' ? 'ligne complétée' : s.cheque === 'na' ? 'non concerné' : s.cheque === 'fail' ? 'ÉCHEC — à compléter à la main' : s.cheque}` },
-      { l: '📦 Stock', v: `${ic(s.stock)} ${s.stock === 'ok' ? 'poids/prix ajoutés' : s.stock === 'na' ? 'non configuré' : s.stock === 'fail' ? 'ÉCHEC' : s.stock}` },
+      { l: '📦 Stock', v: `${ic(s.stock)} ${stockTxt}` },
       { l: '🔍 Relecture', v: `${s.pecheur === 'ok' ? '✓ vérifiée' : '—'}` },
     ];
     // CORRECTION 2 — seulement si l'écriture pêcheur a réussi (et une fois chèque/stock résolus,
     // pour ne jamais lire/écrire le fichier « operations » en même temps que ces étapes). Best-effort.
     if (s.pecheur === 'ok') await this._appendNextBlankRow('operations'); // awaited pour que le refresh lise le fichier à jour
-    this.setState({ compFan: { mode: 'achat', title: anyFail ? `Achat de ${rec.pecheur || ''} — ⚠ une étape a échoué (voir ci-dessous)` : `Achat de ${rec.pecheur || ''} — enregistré, toutes les étapes OK ✓`, cards } });
+    const title = anyFail ? `Achat de ${rec.pecheur || ''} — ⚠ une étape a échoué (voir ci-dessous)`
+      : anyPartial ? `Achat de ${rec.pecheur || ''} — enregistré, mais ⚠ du stock n'a pas pu être placé (voir ci-dessous)`
+      : `Achat de ${rec.pecheur || ''} — enregistré, toutes les étapes OK ✓`;
+    this.setState({ compFan: { mode: 'achat', title, cards } });
     if (s.pecheur === 'ok') await this.refreshAchatInvoiceNumber(); // BUG 2 — après la ligne vierge ET après la réinitialisation du draft (achatDraft déjà remis à défaut plus tôt dans _achatAfterWrite)
   }
   // Appelé UNIQUEMENT après une écriture Excel confirmée et vérifiée.
@@ -3263,9 +3270,20 @@ class Component {
         const poids = isRetour ? Math.abs(l.poids) : l.poids;
         bySheet[t.sheetName] = bySheet[t.sheetName] || { t, cals: [] }; bySheet[t.sheetName].cals.push({ poidsCol: t.poidsCol, prixCol: t.prixCol, poids, prix: l.prixKg, label: `${l.espece} ${l.calibre}` }); });
       const editsBySheet = {}; const preview = []; const verifyTargets = [];
-      Object.keys(bySheet).forEach(sn => { const g = bySheet[sn]; const sh = wb.find(s => s.name === sn); const rows = sh.rows; const poidsCols = g.cals.map(c => c.poidsCol);
+      // Détection des formules sur le XML brut (readWorkbook ne restitue que la VALEUR mise en
+      // cache — une formule jamais recalculée par Excel, ex. dans un modèle « vierge », s'y lit
+      // comme une cellule vide). Sur les feuilles SANS ligne TOTAL textuelle (BIG - C.V, VEL-BQ-AR,
+      // PRODUIT FINI, CONGELATION), la borne g.t.totalRow reste -1 : sans ce filtre, le scanner
+      // pouvait alors confondre une ligne de total à formule (poids/prix vides en apparence) avec
+      // une ligne libre, y écrire, se faire silencieusement bloquer par la protection anti-formule
+      // à l'écriture, et perdre l'entrée sans jamais le signaler.
+      const fmapBySheet = {};
+      for (const sn of Object.keys(bySheet)) { fmapBySheet[sn] = await this._sheetFormulaCols(buf, sn); }
+      Object.keys(bySheet).forEach(sn => { const g = bySheet[sn]; const sh = wb.find(s => s.name === sn); const rows = sh.rows; const poidsCols = g.cals.map(c => c.poidsCol); const prixCols = g.cals.map(c => c.prixCol);
+        const targetCols = poidsCols.concat(prixCols);
+        const fmap = fmapBySheet[sn] || [];
         const maxRow = Math.min(rows.length, g.t.dataStart + 60, g.t.totalRow >= 0 ? g.t.totalRow : Infinity); // jamais franchir la ligne TOTAL
-        let rowIdx = -1; for (let r = g.t.dataStart; r < maxRow; r++) { const rr = rows[r] || []; const clientEmpty = (rr[g.t.clientCol] == null || String(rr[g.t.clientCol]).trim() === ''); const cellsEmpty = poidsCols.every(pc => rr[pc] == null || String(rr[pc]).trim() === ''); if (clientEmpty && cellsEmpty) { rowIdx = r; break; } }
+        let rowIdx = -1; for (let r = g.t.dataStart; r < maxRow; r++) { const rr = rows[r] || []; const clientEmpty = (rr[g.t.clientCol] == null || String(rr[g.t.clientCol]).trim() === ''); const cellsEmpty = poidsCols.every(pc => rr[pc] == null || String(rr[pc]).trim() === ''); const fset = fmap[r] || new Set(); const hasFormulaHere = fset.has(g.t.clientCol) || targetCols.some(ci => fset.has(ci)); if (clientEmpty && cellsEmpty && !hasFormulaHere) { rowIdx = r; break; } }
         if (rowIdx < 0) { unresolved.push(`${sn} (pas de ligne libre)`); return; }
         editsBySheet[sn] = {}; editsBySheet[sn][rowIdx + ':' + g.t.clientCol] = rec.pecheur || rec.client || '';
         g.cals.forEach(c => { editsBySheet[sn][rowIdx + ':' + c.poidsCol] = c.poids; editsBySheet[sn][rowIdx + ':' + c.prixCol] = c.prix;
@@ -4032,12 +4050,29 @@ class Component {
       catch (we) { const err = new Error(`le fichier est peut-être ouvert dans Excel (${(we && we.message) || 'accès refusé'}) — fermez-le puis Réessayer`); err.locked = true; throw err; }
       // 6) le watcher relira le fichier écrit → la vue se met à jour depuis Excel (source de vérité)
       try { const wm = this._watched || {}; for (const k of Object.keys(wm)) if (wm[k] && wm[k].handle === pw.handle) wm[k].lastMod = 0; } catch (e) {}
-      if (pw.step && this._achatSteps) this._achatSteps[pw.step] = 'ok'; // RÈGLE 8/13 : étape réussie
+      // RÈGLE 8/13 : étape réussie — mais si des lignes de stock n'ont pas pu être placées
+      // (pw.unresolved), ce n'est PAS un succès total : on le distingue en « partiel » pour que
+      // le bilan achat ne mente jamais (sinon une ligne de stock perdue s'affichait comme OK ✓).
+      if (pw.step && this._achatSteps) {
+        if (pw.step === 'stock' && pw.unresolved && pw.unresolved.length) {
+          this._achatSteps[pw.step] = 'partiel';
+          this._achatSteps.stockUnresolved = pw.unresolved;
+        } else {
+          this._achatSteps[pw.step] = 'ok';
+        }
+      }
       if (pw.after) { try { await pw.after(patchedBuf); } catch (e) {} }
       this._pendingWrite = null;
       const bakMsg = bak && bak.ok ? ` — sauvegarde : ${bak.bakName}` : '';
-      const okTxt = pw.excelRow == null ? `✓ « ${pw.name} » mis à jour (feuille « ${pw.sheetName} ») — relu et vérifié${bakMsg}.` : `✓ Écrit dans « ${pw.name} » (feuille « ${pw.sheetName} », ligne ${pw.excelRow}) — relu et vérifié${bakMsg}.`;
-      this.setState({ writePreview: null, msg: { kind: 'ok', text: okTxt } });
+      // TRANSPARENCE : ne jamais cacher qu'une colonne a été protégée (formule non écrasée) ou
+      // qu'une ligne (stock) n'a pas pu être placée — même quand le reste de l'écriture a réussi.
+      const skippedFlat = [];
+      Object.keys(skippedCols || {}).forEach(sn => { (skippedCols[sn] || new Set()).forEach(ci => { skippedFlat.push(`${sn}!${this._colLetter(+ci + 1)}`); }); });
+      let noteTxt = '';
+      if (skippedFlat.length) noteTxt += ` ⚠ colonne(s) protégée(s) (formule Excel conservée, non écrasée) : ${skippedFlat.join(', ')}.`;
+      if (pw.unresolved && pw.unresolved.length) noteTxt += ` ⚠ non placé(s) — à compléter à la main : ${pw.unresolved.join(', ')}.`;
+      const okTxt = (pw.excelRow == null ? `✓ « ${pw.name} » mis à jour (feuille « ${pw.sheetName} ») — relu et vérifié${bakMsg}.` : `✓ Écrit dans « ${pw.name} » (feuille « ${pw.sheetName} », ligne ${pw.excelRow}) — relu et vérifié${bakMsg}.`) + noteTxt;
+      this.setState({ writePreview: null, msg: { kind: noteTxt ? 'warn' : 'ok', text: okTxt } });
       // Déclenché APRÈS la fermeture de cette modale (jamais de course sur writePreview avec un
       // aperçu ouvert par ce hook, ex. le stock après une vente) : ordre garanti par construction,
       // contrairement à un délai fixe (setTimeout) dont la durée ne serait jamais certaine.
@@ -7405,6 +7440,9 @@ class Component {
     const actBtn = `padding:5px 11px;border-radius:7px;font-size:12px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.3)};cursor:pointer;font-family:inherit;white-space:nowrap`;
     let bannerStyle, bannerText, bannerActions;
     if (this.state.msg && this.state.msg.kind === 'error') { bannerStyle = bannerBase + 'background:#fdeaea;color:#8a1c1c'; bannerText = this.state.msg.text; const isPayCheck = /À vérifier|paiement/i.test(bannerText); bannerActions = [isPayCheck ? { label: 'Résoudre les problèmes', onClick: () => this.setState({ view: 'Ventes', q: 'À vérifier', page: 0, msg: null }), style: actBtn } : { label: 'Paramètres', onClick: () => this.setState({ view: 'Paramètres', msg: null }), style: actBtn }, { label: 'Fermer', onClick: () => this.setState({ msg: null }), style: actBtn }]; }
+    // Écriture réussie mais avec réserve (colonne protégée par formule, ligne de stock non placée…) :
+    // jamais silencieux — bandeau ambre dédié, distinct du vert « tout est OK ».
+    else if (this.state.msg && this.state.msg.kind === 'warn') { bannerStyle = bannerBase + 'background:#fff7e6;color:#8a5a00'; bannerText = this.state.msg.text; bannerActions = [{ label: 'Fermer', onClick: () => this.setState({ msg: null }), style: actBtn }]; }
     else if (anyImp) { const parts = []; if (this.state.ventes) parts.push(`ventes (${this.state.ventesName})`); if (this.state.ops) parts.push(`achats (${this.state.opsName})`); if (this.state.factures) parts.push(`factures à payer (${this.state.facturesName})`); if (this.state.credits) parts.push(`crédits (${this.state.creditsName})`); if (this.state.comptable) parts.push(`export comptable (${this.state.comptableName})`); if (this.state.bordereaux) parts.push(`bordereaux (${this.state.bordereauxName})`); if (this.state.banque) parts.push(`banque (${this.state.banqueName})`); if (this.state.stock) parts.push(`stock (${this.state.stockName})`); bannerStyle = bannerBase + 'background:#e7f5ec;color:#14532d'; bannerText = `Sources connectées : ${parts.join(' · ')}${this.state.msg ? ' — ' + this.state.msg.text : ''}`; bannerActions = [{ label: 'Gérer les sources', onClick: () => this.setState({ view: 'Paramètres', msg: null }), style: actBtn }, demo ? { label: 'Quitter le mode démo', onClick: () => this.setDemoMode(false), style: actBtn } : { label: 'Réactiver la démo', onClick: () => this.setDemoMode(true), style: actBtn }]; if (this.state.importChecks) bannerActions.unshift({ label: '⚠ Voir le contrôle', onClick: () => this.setState({ importChecksOpen: true }), style: `${actBtn}color:#8a5a00;border-color:#f0dcae;background:#fff7e6` }); }
     else if (demo) { bannerStyle = bannerBase + `background:${this.hexToRgba(accent, 0.07)};color:#3a4a5e`; bannerText = 'Données de démonstration. Importez vos fichiers Excel depuis Paramètres — un écran vous laisse confirmer les colonnes, puis tout se met à jour automatiquement.'; bannerActions = [{ label: 'Quitter le mode démo', onClick: () => this.setDemoMode(false), style: actBtn }, { label: 'Ouvrir les Paramètres', onClick: () => this.setState({ view: 'Paramètres' }), style: actBtn }]; }
     else { bannerStyle = bannerBase + 'background:#fff7ed;color:#9a3412'; bannerText = 'Mode démo désactivé — aucune donnée importée pour le moment. Reliez vos fichiers Excel depuis Paramètres ; chaque vue reste vide tant que son fichier n’est pas connecté.'; bannerActions = [{ label: 'Ouvrir les Paramètres', onClick: () => this.setState({ view: 'Paramètres' }), style: actBtn }, { label: 'Réactiver la démo', onClick: () => this.setDemoMode(true), style: actBtn }]; }
