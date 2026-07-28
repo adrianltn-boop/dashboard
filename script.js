@@ -8142,6 +8142,9 @@ class Component {
     const prefixCancelStyle = 'padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#69788c;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit';
     const prefixOverlayStyle = 'position:fixed;inset:0;z-index:72;background:rgba(14,27,46,.42);display:flex;align-items:center;justify-content:center;padding:24px';
     const prefixCardStyle = 'width:460px;max-width:100%;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px';
+    // Dédiée à l'aperçu d'écriture (writePreview) : peut afficher beaucoup de lignes (écritures
+    // multi-feuilles) — plafonnée à 70vh avec défilement interne pour ne jamais dépasser l'écran.
+    const wpCardStyle = 'width:460px;max-width:100%;max-height:70vh;overflow-y:auto;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px';
     const ctxStop = e => { if (e) e.stopPropagation(); };
     const pwv = this._pwRenderVals();
 
@@ -8244,7 +8247,7 @@ class Component {
       settingsIntro, sources, inputStyle, objInputs,
       setupOpen, setupSteps, setupPct, setupCountLabel, setupDoneCount, setupTotalCount, setupAllDone, onSetupClose, onSetupOpen, setupEntBadgeStyle, setupEntStatusLabel,
       demoMode: demo, demoToggleLabel, onToggleDemo, demoBtnStyle, demoStatusLabel, demoStatusStyle, demoModeText,
-      prefixAskOpen, prefixAskKindLabel, prefixAskDir, prefixAskThing, prefixAskHelp, prefixAskValue, onPrefixInput, onPrefixConfirm, onPrefixCancel, onPrefixKey, prefixInputStyle, prefixConfirmStyle, prefixCancelStyle, prefixOverlayStyle, prefixCardStyle,
+      prefixAskOpen, prefixAskKindLabel, prefixAskDir, prefixAskThing, prefixAskHelp, prefixAskValue, onPrefixInput, onPrefixConfirm, onPrefixCancel, onPrefixKey, prefixInputStyle, prefixConfirmStyle, prefixCancelStyle, prefixOverlayStyle, prefixCardStyle, wpCardStyle,
       grenkeLinkOpen, grenkeLinkNum, grenkeLinkHelp, grenkeLinkQuery, onGrenkeLinkQuery, onGrenkeLinkCancel, grenkeLinkList, grenkeLinkEmpty, grenkeLinkHasCurrent, grenkeLinkHasOverride, onGrenkeUnlink, onGrenkeAuto, grenkeLinkCardStyle, grenkeUnlinkStyle, grenkeAutoStyle,
       folderSupported, folderConnected, folderName, folderCount, folderFiles, onConnectFolder, onResyncFolder, folderBtnStyle, folderResyncStyle, folderBtnLabel, folderNote, capabilityNote,
       libraryRows, libraryCount, libraryFolderName, libraryEmpty, hasLibrary, libraryHint, libraryBtnStyle, libraryBtnLabel, libTypeChips, libSearch, onLibSearch, libSearchStyle,
