@@ -250,6 +250,7 @@ class Component {
   static AGENDA_KEY = 'avAgenda';
   static PAYTRACK_KEY = 'avPayTrack';
   static GRENKE_STATUT = 'En attente paiement Grenke'; // statut écrit dans Factures (ETAT) et dans l'onglet Grenke
+  static ETAT_AVOIR = 'AVOIR'; // état d'une facture d'avoir — surligné en bleu à l'écriture (voir _buildMarkStyler)
   static VSAISIE_KEY = 'avVentesSaisie';
   static GRKMAN_KEY = 'avGrenkeManuel';
   static ACHSAISIE_KEY = 'avAchatsSaisie';
@@ -916,7 +917,7 @@ class Component {
     //  · « Suivi des paiements » : ID Facture toujours (pour que les formules s'y accrochent), Avoir si > 0 ;
     //  · « Grenke » : une ligne de suivi si la vente est financée (le statut ETAT part de venteWriteValues) ;
     //  · « Avoirs » : bloc client (nouveau ou existant) si avoir coché ou montant négatif confirmé.
-    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, suiviAvoir: rec.idFacture ? { avoir, idFacture: rec.idFacture, num: rec.num, client, ttc, date: rec.date, datePrev } : null, grenkeRow: grenke ? { num: this._numSansPrefixe(rec.num), client, ttc } : null, avoirEntry: avoirType ? { client, num: rec.num, montant: avoirMontant, type: avoirType, date: rec.date } : null, after: () => this._venteAfterWrite(rec), afterClose: () => {
+    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, suiviAvoir: rec.idFacture ? { avoir, idFacture: rec.idFacture, num: rec.num, client, ttc, date: rec.date, datePrev, isAvoir: !!avoirType } : null, grenkeRow: grenke ? { num: this._numSansPrefixe(rec.num), client, ttc } : null, avoirEntry: avoirType ? { client, num: rec.num, montant: avoirMontant, type: avoirType, date: rec.date } : null, after: () => this._venteAfterWrite(rec), afterClose: () => {
       if (this._stockDir) { this._writeQueue = [() => this.requestStockPreview(rec, 'vente')]; this._runNextWrite(); }
     } });
   }
@@ -1669,27 +1670,47 @@ class Component {
       // Réutilise la police bleue Andale si elle existe déjà (écritures précédentes) → pas d'accumulation.
       let blueFontId = fontEls.findIndex(f => /Andale Mono/i.test(f) && /FF0000FF/i.test(f));
       const appendFont = blueFontId < 0; if (appendFont) blueFontId = fontEls.length;
+      // Style « AVOIR » : fond bleu #4472C4, texte noir. Même principe (clone du style d'origine,
+      // seuls la police et le remplissage changent) — police et remplissage réutilisés s'ils
+      // existent déjà. Nécessite une section <fills> ; sinon seul le marquage bleu s'applique.
+      const fillsM = stylesXml.match(/<fills\b[^>]*>([\s\S]*?)<\/fills>/);
+      const fillEls = fillsM ? (fillsM[1].match(/<fill\b[\s\S]*?<\/fill>|<fill\b[^>]*\/>/g) || []) : null;
+      const blackFontXml = '<font><sz val="11"/><color rgb="FF000000"/><name val="Andale Mono"/></font>';
+      const avoirFillXml = '<fill><patternFill patternType="solid"><fgColor rgb="FF4472C4"/><bgColor indexed="64"/></patternFill></fill>';
+      let blackFontId = fontEls.indexOf(blackFontXml);
+      const appendBlackFont = fillEls && blackFontId < 0; if (appendBlackFont) blackFontId = fontEls.length + (appendFont ? 1 : 0);
+      let avoirFillId = fillEls ? fillEls.indexOf(avoirFillXml) : -1;
+      const appendFill = fillEls && avoirFillId < 0; if (appendFill) avoirFillId = fillEls.length;
       const xfEls = xfsM[1].match(/<xf\b[^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g) || [];
       const baseXfCount = xfEls.length; if (!baseXfCount) return null;
-      const added = []; const cache = {};
-      const mapStyle = (origIdx) => {
+      const added = []; const cache = {}; const cacheAvoir = {};
+      // Dérive un style à partir de celui d'origine ; `extra` applique les attributs supplémentaires.
+      const derive = (origIdx, store, extra) => {
         const oi = (origIdx >= 0 && origIdx < baseXfCount) ? origIdx : 0;
-        if (cache[oi] != null) return cache[oi];
+        if (store[oi] != null) return store[oi];
         let xf = xfEls[oi] || '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>';
-        xf = /\bfontId="\d+"/.test(xf) ? xf.replace(/\bfontId="\d+"/, `fontId="${blueFontId}"`) : xf.replace(/<xf\b/, `<xf fontId="${blueFontId}"`);
-        xf = /\bapplyFont="/.test(xf) ? xf.replace(/\bapplyFont="[^"]*"/, 'applyFont="1"') : xf.replace(/<xf\b/, '<xf applyFont="1"');
+        xf = extra(xf);
         // Réutilise un style dérivé identique déjà présent (évite d'empiler des xf à chaque écriture).
         const all = xfEls.concat(added); const dup = all.indexOf(xf);
         const idx = dup >= 0 ? dup : (baseXfCount + added.push(xf) - 1);
-        cache[oi] = idx; return idx;
+        store[oi] = idx; return idx;
+      };
+      const setAttr = (xf, name, val) => (new RegExp(`\\b${name}="[^"]*"`).test(xf) ? xf.replace(new RegExp(`\\b${name}="[^"]*"`), `${name}="${val}"`) : xf.replace(/<xf\b/, `<xf ${name}="${val}"`));
+      const mapStyle = (origIdx) => derive(origIdx, cache, xf => setAttr(setAttr(xf, 'fontId', blueFontId), 'applyFont', '1'));
+      const mapAvoirStyle = (origIdx) => {
+        if (!fillEls) return mapStyle(origIdx); // pas de <fills> exploitable : on garde le marquage standard
+        return derive(origIdx, cacheAvoir, xf => setAttr(setAttr(setAttr(setAttr(xf, 'fontId', blackFontId), 'applyFont', '1'), 'fillId', avoirFillId), 'applyFill', '1'));
       };
       const finalize = () => {
         let out = stylesXml;
-        if (appendFont) out = out.replace(/<fonts\b[^>]*>([\s\S]*?)<\/fonts>/, (m, inner) => `<fonts count="${fontEls.length + 1}">${inner}${blueFontXml}</fonts>`);
+        const newFonts = (appendFont ? blueFontXml : '') + (appendBlackFont ? blackFontXml : '');
+        const nAdded = (appendFont ? 1 : 0) + (appendBlackFont ? 1 : 0);
+        if (nAdded) out = out.replace(/<fonts\b[^>]*>([\s\S]*?)<\/fonts>/, (m, inner) => `<fonts count="${fontEls.length + nAdded}">${inner}${newFonts}</fonts>`);
+        if (appendFill) out = out.replace(/<fills\b[^>]*>([\s\S]*?)<\/fills>/, (m, inner) => `<fills count="${fillEls.length + 1}">${inner}${avoirFillXml}</fills>`);
         if (added.length) out = out.replace(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/, (m, inner) => `<cellXfs count="${baseXfCount + added.length}">${inner}${added.join('')}</cellXfs>`);
         return out;
       };
-      return { mapStyle, finalize };
+      return { mapStyle, mapAvoirStyle, finalize };
     } catch (e) { return null; }
   }
   async patchXlsxFile(origBuf, editsBySheetName, opts) {
@@ -1703,8 +1724,14 @@ class Component {
     const targetByName = {}; [...wbXml.matchAll(/<sheet[^>]*name="([^"]*)"[^>]*r:id="(rId\d+)"/g)].forEach(m => { targetByName[this.unxml(m[1])] = relMap[m[2]]; });
     const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const colName = n => { let s = '', m = n + 1; while (m > 0) { const r = (m - 1) % 26; s = String.fromCharCode(65 + r) + s; m = Math.floor((m - 1) / 26); } return s; };
-    // Style à écrire : si marquage actif, style dérivé (bleu + Andale) du style d'origine ; sinon le style d'origine.
-    const styleAttrFor = (origIdxOrNull) => { if (_mark) return ` s="${_mark.mapStyle(origIdxOrNull == null ? 0 : origIdxOrNull)}"`; return origIdxOrNull == null ? '' : ` s="${origIdxOrNull}"`; };
+    // Style à écrire : si marquage actif, style dérivé (bleu + Andale) du style d'origine ; sinon le
+    // style d'origine. Une cellule dont la valeur est « AVOIR » reçoit en plus un fond bleu #4472C4.
+    const styleAttrFor = (origIdxOrNull, val) => {
+      if (!_mark) return origIdxOrNull == null ? '' : ` s="${origIdxOrNull}"`;
+      const base = origIdxOrNull == null ? 0 : origIdxOrNull;
+      const isAvoir = String(val == null ? '' : val).trim().toUpperCase() === Component.ETAT_AVOIR;
+      return ` s="${isAvoir ? _mark.mapAvoirStyle(base) : _mark.mapStyle(base)}"`;
+    };
     const cellXmlFor = (ref, styleAttr, val) => {
       const s = String(val == null ? '' : val).trim();
       if (s === '') return `<c r="${ref}"${styleAttr}/>`;
@@ -1748,11 +1775,11 @@ class Component {
               const allowed = !!(opts && opts.allowFormulaCols && opts.allowFormulaCols[sheetName] && opts.allowFormulaCols[sheetName].has(Number(cStr)));
               if (_refuseFormula && !allowed) { _formulaHit.push(ref); (_skipped[sheetName] = _skipped[sheetName] || new Set()).add(Number(cStr)); continue; }
             }
-            out = out.replace(cellRe, cellXmlFor(ref, styleAttrFor(styleM ? Number(styleM[1]) : null), rowEdits[cStr]));
+            out = out.replace(cellRe, cellXmlFor(ref, styleAttrFor(styleM ? Number(styleM[1]) : null, rowEdits[cStr]), rowEdits[cStr]));
           } else {
             // cellule absente (vide à l'origine) : insertion avant la première cellule de colonne
             // supérieure pour garder l'ordre croissant, sinon en fin de ligne.
-            const newCell = cellXmlFor(ref, styleAttrFor(null), rowEdits[cStr]);
+            const newCell = cellXmlFor(ref, styleAttrFor(null, rowEdits[cStr]), rowEdits[cStr]);
             const cells = [...out.matchAll(/<c\s[^>]*r="([A-Z]+)(\d+)"[^>]*(?:\/>|>[\s\S]*?<\/c>)/g)];
             const colOf = ltr => { let v = 0; for (const ch of ltr) v = v * 26 + (ch.charCodeAt(0) - 64); return v; };
             const after = cells.find(m => colOf(m[1]) > Number(cStr) + 1);
@@ -2151,7 +2178,9 @@ class Component {
               putSvDate('dateFac', sv.date, 'Date de facture (Suivi des paiements)');
               putSvDate('dateEch', sv.datePrev, 'Date échéance (Suivi des paiements)');
               putSv('solde', sv.ttc, 'Solde restant (Suivi des paiements)', this.fmt(sv.ttc)); // solde initial = montant total, rien encore payé
-              putSv('etat', 'EN ATTENTE', 'Etat (Suivi des paiements)');
+              // Une vente qui est un avoir (total négatif confirmé ou case Avoir cochée) n'est pas
+              // « en attente » de paiement : elle est marquée AVOIR (cellule surlignée en bleu).
+              putSv('etat', sv.isAvoir ? Component.ETAT_AVOIR : 'EN ATTENTE', 'Etat (Suivi des paiements)');
             }
             extraSheets.push(sloc.sheetName);
           }
