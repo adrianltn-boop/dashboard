@@ -2981,6 +2981,11 @@ class Component {
   // context : 'achat' → section ACHAT-ENTREE, 'vente' → section COMMANDES-SORTIE.
   async requestStockPreview(rec, context) {
     const ctx = context === 'vente' ? 'vente' : 'achat';
+    // Vente à montant négatif = retour de marchandise (avoir) : le stock REVIENT au lieu de
+    // sortir — on écrit dans ACHAT-ENTREE (comme un achat) plutôt que COMMANDES-SORTIE, et le
+    // poids s'écrit en valeur absolue (jamais négatif dans le tableau de stock).
+    const isRetour = ctx === 'vente' && (rec.ttc < 0 || rec.ht < 0);
+    const sectionCtx = isRetour ? 'achat' : ctx;
     // RÈGLE 8/13 : toute sortie en échec marque l'étape « stock » et clôt le bilan (achat uniquement — pour la vente, best-effort, non bloquant).
     const stockFailed = (txt) => { this.setState({ msg: { kind: 'error', text: txt } }); if (this._achatSteps) this._achatSteps.stock = 'fail'; this._runNextWrite(); this._maybeFinalizeAchat(); };
     if (!this._stockDir) { if (this._achatSteps) this._achatSteps.stock = 'na'; this._runNextWrite(); this._maybeFinalizeAchat(); return; }
@@ -2992,8 +2997,9 @@ class Component {
       const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
       const buf = await file.arrayBuffer(); const wb = await this.readWorkbook(buf);
       const bySheet = {}; const unresolved = [];
-      (rec.lignes || []).forEach(l => { const t = this._stockResolve(wb, l.espece, l.calibre, ctx); if (!t) { unresolved.push(`${l.espece} ${l.calibre}`); return; }
-        bySheet[t.sheetName] = bySheet[t.sheetName] || { t, cals: [] }; bySheet[t.sheetName].cals.push({ poidsCol: t.poidsCol, prixCol: t.prixCol, poids: l.poids, prix: l.prixKg, label: `${l.espece} ${l.calibre}` }); });
+      (rec.lignes || []).forEach(l => { const t = this._stockResolve(wb, l.espece, l.calibre, sectionCtx); if (!t) { unresolved.push(`${l.espece} ${l.calibre}`); return; }
+        const poids = isRetour ? Math.abs(l.poids) : l.poids;
+        bySheet[t.sheetName] = bySheet[t.sheetName] || { t, cals: [] }; bySheet[t.sheetName].cals.push({ poidsCol: t.poidsCol, prixCol: t.prixCol, poids, prix: l.prixKg, label: `${l.espece} ${l.calibre}` }); });
       const editsBySheet = {}; const preview = []; const verifyTargets = [];
       Object.keys(bySheet).forEach(sn => { const g = bySheet[sn]; const sh = wb.find(s => s.name === sn); const rows = sh.rows; const poidsCols = g.cals.map(c => c.poidsCol);
         const maxRow = Math.min(rows.length, g.t.dataStart + 60, g.t.totalRow >= 0 ? g.t.totalRow : Infinity); // jamais franchir la ligne TOTAL
@@ -3006,7 +3012,8 @@ class Component {
       if (!Object.keys(editsBySheet).length) return stockFailed(`Stock non rempli (${ctx})${unresolved.length ? ' : ' + unresolved.join(', ') : ''}.`);
       const sheetList = Object.keys(editsBySheet);
       this._pendingWrite = { kind: 'operations', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: sheetList.join(', '), editsBySheet, verifyTargets, refuseFormula: true, after: () => this._runNextWrite(), step: 'stock', unresolved };
-      this.setState({ writePreview: { kind: 'stock', fileName: hi.name, sheetName: sheetList.join(', '), excelRow: null, rows: preview, status: null, title: `Stock de la semaine (${ctx === 'vente' ? 'sortie' : 'entrée'}) — ${sheetList.length} feuille(s)${unresolved.length ? ' · non placé : ' + unresolved.join(', ') : ''}` } });
+      const sectionLabel = isRetour ? 'entrée — retour de marchandise' : (ctx === 'vente' ? 'sortie' : 'entrée');
+      this.setState({ writePreview: { kind: 'stock', fileName: hi.name, sheetName: sheetList.join(', '), excelRow: null, rows: preview, status: null, title: `Stock de la semaine (${sectionLabel}) — ${sheetList.length} feuille(s)${unresolved.length ? ' · non placé : ' + unresolved.join(', ') : ''}` } });
     } catch (e) { stockFailed(`Stock non rempli (${ctx}) : ${(e && e.message) || 'erreur'}.`); }
   }
 
