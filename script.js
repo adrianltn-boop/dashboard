@@ -4695,6 +4695,14 @@ class Component {
       if (conflictingTextStatuses && !isGrenke) reason = 'Plusieurs statuts différents dans Excel';
       else if (!paymentStatus && ((!isGrenke && rows.length > 1) || (isGrenke && rows.length > 2))) reason = 'Nombre de paiements inattendu';
       else if (!paymentStatus && ((paid != null && paid > f.ttc + 0.005 && !(statusSaysPaid && solde != null && solde <= 0.005)) || (statusSaysPaid && solde != null && solde > 0.005 && !numericPartial))) reason = 'Montants ou statut contradictoires';
+      // « Les montants priment sur un libellé de statut imparfait » (principe déjà énoncé ci-dessus,
+      // à quelques lignes) — mais jusqu'ici il ne s'appliquait QUE quand aucun texte de statut n'était
+      // reconnu (branches ci-dessus toutes gardées par `!paymentStatus`). Or quand Excel affiche
+      // littéralement « Payée » avec un solde clairement positif, le code forçait quand même paidEff
+      // = TTC (ligne plus bas) et ne posait qu'un ⚠ discret sur la ligne — la facture disparaissait
+      // silencieusement du total « On me doit » alors que l'argent reste dû. Ce cas doit, comme les
+      // autres contradictions montant/statut, passer par « À vérifier » plutôt que d'être avalé.
+      else if (paymentStatus === 'Payée' && solde != null && solde > 0.005) reason = 'Le statut indique « Payée » mais le solde Excel est positif';
       if (reason) {
         const issue = { reason, paid, solde, status: rows.map(r => r.status).filter(Boolean).join(' / '), rowCount: rows.length, source: sh.name };
         const sig = this.paymentIssueSignature(f, issue), ov = (this.state.paymentOverrides || {})[this.invoiceKey(f.ref)];
