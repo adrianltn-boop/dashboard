@@ -495,6 +495,9 @@ class Component {
   };
 
   componentDidMount() {
+    // Nettoyage ponctuel : ancienne clé « avPendingWrites » (bouton « Noter plus tard », supprimé —
+    // voir cancelAppendWrite) qui pouvait avoir accumulé des entrées orphelines jamais relues.
+    try { localStorage.removeItem('avPendingWrites'); } catch (e) {}
     // ---- Mode aide (Helpeur) : en phase capture pour intercepter le clic AVANT l'action normale
     // du bouton/lien visé — en mode aide, cliquer un élément l'explique au lieu de l'exécuter.
     this._helpClick = e => {
@@ -2571,25 +2574,13 @@ class Component {
     this.setState({ annule: m });
     this.saveJSON(Component.ANNULE_KEY, m);
   }
+  // RÈGLE (nettoyage) : l'ancien bouton « Noter plus tard » écrivait une trace dans
+  // localStorage (clé avPendingWrites) que rien, nulle part, ne relisait jamais pour reprendre
+  // l'écriture — un bouton factice qui laissait croire à Faustine que sa saisie serait reprise
+  // plus tard, alors qu'elle disparaissait silencieusement. Supprimé : Annuler produit exactement
+  // le même résultat technique (aucune écriture, étape marquée « annulé ») sans la fausse promesse ;
+  // la saisie elle-même reste visible dans le formulaire tant qu'aucune écriture n'a réussi.
   cancelAppendWrite() { const st = this._pendingWrite && this._pendingWrite.step; this._pendingWrite = null; this.setState({ writePreview: null }); if (st && this._achatSteps) { this._achatSteps[st] = 'annulé'; this._maybeFinalizeAchat(); } this._runNextWrite(); }
-  // « Noter plus tard » (modale Fichier ouvert) : mémorise la saisie en attente (métadonnées seulement —
-  // buf/handle non sérialisables ne sont pas stockés) puis abandonne comme un Annuler classique.
-  savePendingWriteLater() {
-    const pw = this._pendingWrite;
-    if (pw) {
-      try {
-        const list = JSON.parse(localStorage.getItem('avPendingWrites') || '[]');
-        const arr = Array.isArray(list) ? list : [];
-        arr.push({ kind: pw.kind, name: pw.name, sheetName: pw.sheetName, excelRow: pw.excelRow, previewIdx: pw.previewIdx, mode: pw.mode, colVals: pw.colVals, refuseFormula: pw.refuseFormula, step: pw.step, ts: Date.now() });
-        localStorage.setItem('avPendingWrites', JSON.stringify(arr));
-      } catch (e) {}
-    }
-    const st = pw && pw.step;
-    this._pendingWrite = null;
-    this.setState({ writePreview: null });
-    if (st && this._achatSteps) { this._achatSteps[st] = 'annulé'; this._maybeFinalizeAchat(); }
-    this._runNextWrite();
-  }
   // File d'attente des écritures enchaînées après une saisie (ex. achat → chèque → stock).
   // Chaque écriture confirmée (ou annulée) déclenche la suivante, avec son propre aperçu.
   _runNextWrite() { const q = this._writeQueue; if (q && q.length) { const fn = q.shift(); setTimeout(() => { try { fn(); } catch (e) {} }, 0); } }
@@ -3866,9 +3857,8 @@ class Component {
     out.fileLockedOpen = wpLocked;
     if (wpLocked) {
       out.flFileName = wp.fileName;
-      out.flMessage = `Le fichier ${wp.fileName} est actuellement ouvert dans un autre programme. Fermez-le puis réessayez.`;
+      out.flMessage = `Le fichier ${wp.fileName} est actuellement ouvert dans un autre programme. Fermez-le puis réessayez — rien n'a encore été écrit, votre saisie reste affichée dans le formulaire si vous préférez fermer cette fenêtre pour réessayer plus tard.`;
       out.onFlRetry = () => this.confirmAppendWrite();
-      out.onFlLater = () => this.savePendingWriteLater();
       out.onFlCancel = () => this.cancelAppendWrite();
     }
     if (wp) {
