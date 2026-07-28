@@ -220,7 +220,7 @@ class Component {
     empDocs: {}, empDelDoc: null, bankSalaryEmp: '', bankSalaryMonth: '',
     agenda: [], agendaMonth: null, agendaEdit: null, agendaDelAsk: null,
     payTrack: [], payDraft: null, payDelAsk: null,
-    restartRun: null, verifPending: null, venteAvoirAsk: null, venteAvoirDispo: null,
+    restartRun: null, verifPending: null, venteAvoirAsk: null, venteAvoirDispo: null, avoirManuel: null,
     ventesSaisie: [], venteDraft: null,
     grenkeMan: [], grkDraft: null, grkDelAsk: null,
     achatsSaisie: [], achatDraft: null, chequiersLive: [], compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null, chqEditDraft: null,
@@ -973,6 +973,60 @@ class Component {
     const name = String(client || '').trim();
     if (!name) { this.setState({ venteAvoirDispo: null }); return; }
     this._avoirDispoT = setTimeout(() => this._refreshAvoirDispo(name), 500);
+  }
+  // Coche/décoche « Avoir ». À la coche, on vérifie que le client a bien un avoir disponible ;
+  // sinon on propose de le créer manuellement (l'onglet Avoirs est la source, pas la saisie).
+  async toggleVenteAvoir(on) {
+    this.setVenteField('avoirActif', on);
+    if (!on) { this.setState({ venteAvoirDispo: null, avoirManuel: null }); return; }
+    const d = this.state.venteDraft || this.venteDefault();
+    const client = String(d.client || '').trim();
+    if (!client) { this.setState({ msg: { kind: 'error', text: 'Indiquez d\'abord le nom du client pour utiliser son avoir.' } }); return; }
+    clearTimeout(this._avoirDispoT);
+    await this._refreshAvoirDispo(client);
+    const vad = this.state.venteAvoirDispo;
+    if (!vad || vad.montant <= 0) this.setState({ avoirManuel: { client, montant: '', phase: 'ask' } });
+  }
+  // Création manuelle d'un avoir pour un client qui n'en a pas encore : une entrée type A dans
+  // l'onglet Avoirs, avec « AVOIR MANUEL » en guise de numéro de facture.
+  async commitAvoirManuel() {
+    const vam = this.state.avoirManuel; if (!vam) return;
+    const montant = this._vNum(vam.montant);
+    if (!(montant > 0)) { this.setState({ msg: { kind: 'error', text: 'Indiquez un montant d\'avoir supérieur à 0.' } }); return; }
+    this.setState({ avoirManuel: null });
+    await this.requestAvoirManuelPreview(vam.client, montant);
+  }
+  // Aperçu (puis confirmation) de la création manuelle d'un avoir dans l'onglet « Avoirs ».
+  async requestAvoirManuelPreview(client, montant) {
+    const hi = this._writableHandleFor('ventes');
+    if (!hi || !hi.handle) { this.setState({ msg: { kind: 'error', text: 'Écriture impossible : le fichier « Ventes client » n\'est pas connecté.' } }); return; }
+    try {
+      const okPerm = await this._ensureWritePermission(hi.handle);
+      if (!okPerm) { this.setState({ msg: { kind: 'error', text: `Autorisation d'écriture refusée sur « ${hi.name} ». Rien n'a été modifié.` } }); return; }
+      const file = await hi.handle.getFile();
+      const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
+      const buf = await file.arrayBuffer(); const wb = await this.readWorkbook(buf);
+      const editsBySheet = {}; const verifyTargets = []; const preview = []; const rowAppends = []; const dateCols = {};
+      const put = (shName, rowIdx, colIdx, val, label, display) => {
+        if (colIdx == null || colIdx < 0 || val === '' || val == null) return;
+        editsBySheet[shName] = editsBySheet[shName] || {};
+        editsBySheet[shName][rowIdx + ':' + colIdx] = val;
+        preview.push({ label, col: `${this._colLetter(colIdx + 1)}${rowIdx + 1}`, value: display != null ? display : String(val) });
+        verifyTargets.push({ sheetName: shName, rowIdx, col: colIdx, val });
+      };
+      const putDate = (shName, rowIdx, colIdx, iso, label) => {
+        if (colIdx == null || colIdx < 0) return;
+        const serial = this._excelSerial(iso); if (serial == null) return;
+        (dateCols[shName] = dateCols[shName] || new Set()).add(Number(colIdx));
+        put(shName, rowIdx, colIdx, serial, label, this._isoToFr(iso));
+      };
+      const done = await this._avoirsPlan(wb, buf, { client, num: 'AVOIR MANUEL', montant, type: 'A', date: this._payTodayIso() }, () => {}, put, rowAppends, putDate);
+      if (!done) { this.setState({ msg: { kind: 'error', text: `Création impossible : onglet « Avoirs » introuvable ou plein dans « ${hi.name} ».` } }); return; }
+      this._pendingWrite = { kind: 'ventes', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: done, editsBySheet, verifyTargets, rowAppends, dateCols, refuseFormula: true, after: () => this._refreshAvoirDispo(client) };
+      this.setState({ writePreview: { kind: 'avoirManuel', fileName: hi.name, sheetName: done, excelRow: null, rows: preview, status: null, refLabel: client } });
+    } catch (e) {
+      this.setState({ msg: { kind: 'error', text: `Préparation de l'écriture impossible : ${(e && e.message) || 'erreur'}. L'avoir n'a PAS été créé.` } });
+    }
   }
   async _refreshAvoirDispo(client) {
     try {
@@ -3265,21 +3319,23 @@ class Component {
   // RÈGLE : le dashboard n'écrit JAMAIS de lui-même dans un fichier existant. Ces fonctions se
   // contentent de comparer ce qui est dans le fichier à ce qui devrait y être, et renvoient la
   // liste des écarts. L'écriture ne part qu'après un aperçu confirmé (voir requestVerifPreview).
-  // Écarts sur les totaux de l'onglet « Avoirs » : pour chaque bloc client, somme des montants du
-  // journal (valeur absolue, lignes 4+) comparée au total affiché en ligne 3.
+  // Écarts sur les totaux de l'onglet « Avoirs » : pour chaque bloc client, somme SIGNÉE du journal
+  // (lignes 4+) comparée au total affiché en ligne 3. A = Ajout (avoir créé, +), S = Sortie (avoir
+  // consommé, −) : sommer en valeur absolue gonflerait le total à chaque consommation.
   _avoirsEcarts(wb) {
     const aloc = this._avoirsLocate(wb); if (!aloc) return [];
     const rows = aloc.rows; const out = [];
     for (let sc = 0; sc < 1000; sc += 5) {
       const name = (rows[1] || [])[sc];
       if (name == null || String(name).trim() === '') break; // plus de bloc client au-delà
-      const amtCol = sc + 1;
+      const amtCol = sc + 1; const typeCol = sc + 3;
       let somme = 0; let nb = 0;
       for (let r = 3; r < rows.length; r++) {
         const dv = (rows[r] || [])[sc]; const av = (rows[r] || [])[amtCol];
         const vide = (dv == null || String(dv).trim() === '') && (av == null || String(av).trim() === '');
         if (vide) break;
-        const n = this._vNum(av); if (!isNaN(n) && n !== 0) { somme += Math.abs(n); nb++; }
+        const n = this._vNum(av);
+        if (!isNaN(n) && n !== 0) { const est = String((rows[r] || [])[typeCol] == null ? '' : (rows[r] || [])[typeCol]).trim().toUpperCase() === 'S'; somme += est ? -Math.abs(n) : Math.abs(n); nb++; }
       }
       somme = Math.round(somme * 100) / 100;
       const actuel = Math.round((this._vNum((rows[2] || [])[amtCol]) || 0) * 100) / 100;
@@ -3724,13 +3780,15 @@ class Component {
       out.onFlCancel = () => this.cancelAppendWrite();
     }
     if (wp) {
-      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'verif' ? `Appliquer les corrections dans « ${wp.fileName} » ?` : wp.kind === 'paiementClient' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
+      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'verif' ? `Appliquer les corrections dans « ${wp.fileName} » ?` : wp.kind === 'paiementClient' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'avoirManuel' ? `Créer un avoir pour « ${wp.refLabel} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
       out.wpSubText = wp.kind === 'stock'
         ? `${wp.title || ''} — je remplis le poids et le prix par espèce/calibre. Le prix moyen se recalcule tout seul (formule non touchée). Sauvegarde datée avant l'écriture.`
         : wp.kind === 'verif'
         ? `${wp.title || ''} — feuille(s) « ${wp.sheetName} ». Chaque ligne ci-dessous montre la valeur actuelle et celle qui la remplacera. Rien d'autre n'est touché. Une copie de sauvegarde datée est faite avant l'écriture.`
         : wp.kind === 'paiementClient'
         ? `Feuille(s) « ${wp.sheetName} » — complète la ligne existante de cette facture (montant réglé, date du paiement, état), et l'onglet Avoirs si un avoir est saisi. Aucune ligne n'est ajoutée. Une copie de sauvegarde datée est faite avant l'écriture.`
+        : wp.kind === 'avoirManuel'
+        ? `Feuille « ${wp.sheetName} » — ajoute un avoir au crédit de ce client (type A, n° « AVOIR MANUEL ») et met à jour le total de son bloc. Une copie de sauvegarde datée est faite avant l'écriture.`
         : wp.kind === 'cheque'
         ? `${wp.title || ''} — je remplis seulement les cases vides Date / Description / Montant de cette ligne déjà imprimée. Une copie de sauvegarde datée est faite avant l'écriture.`
         : wp.kind === 'annule'
@@ -6779,9 +6837,17 @@ class Component {
     const vPrevIso = vd.datePrev || this._addDaysIso(vd.date, vDelaiN);
     const venteDraft = { id: vd.id, num: vd.num || '', client: vd.client || '', date: vd.date || '', delai: String(vDelaiN), datePrev: vPrevIso ? ptFrDate(vPrevIso) : '—', tvaIrl: vd.tvaIrl === 0 ? '' : (vd.tvaIrl || ''), tvaFr: vd.tvaFr === 0 ? '' : (vd.tvaFr || ''), avoir: vd.avoir === 0 ? '' : (vd.avoir || '') };
     const venteAvoirActif = !!vd.avoirActif;
+    // Case « Avoir » = CONSOMMATION d'un avoir existant. On affiche le disponible (lecture seule) et
+    // le montant à utiliser (saisi), plafonné au disponible.
     const vad = this.state.venteAvoirDispo;
-    const venteAvoirDispoShow = !!(vad && vad.client === (vd.client || '').trim() && vad.montant > 0);
-    const venteAvoirDispoText = venteAvoirDispoShow ? `Avoir disponible : ${this.fmt(vad.montant)}` : '';
+    const vadOk = !!(vad && vad.client === (vd.client || '').trim());
+    const venteAvoirDispoShow = venteAvoirActif && vadOk && vad.montant > 0;
+    const venteAvoirDispoText = vadOk ? this.fmt(vad.montant) : '—';
+    const vAvoirUtil = this._vNum(vd.avoir);
+    const venteAvoirTrop = venteAvoirDispoShow && vAvoirUtil > vad.montant + 0.005;
+    const venteAvoirAlerte = venteAvoirTrop ? `Avoir insuffisant : disponible ${this.fmt(vad.montant)}.` : '';
+    // Solde restant du brouillon, recalculé à chaque frappe : TTC − avoir à utiliser.
+    const venteDraftSolde = this.fmt(Math.round((vTtc - (venteAvoirActif ? vAvoirUtil : 0)) * 100) / 100);
     const venteNumHint = (vd.numFromFile && vd.num) ? `✓ prochaine facture du fichier${vd.numRow ? ' · ligne ' + vd.numRow : ''}` : '';
     const venteNumHintStyle = 'font-size:10.5px;font-weight:600;color:#0e7a46;text-transform:none;letter-spacing:0;margin-left:8px';
     const venteDraftHt = this.fmt(vHt); const venteDraftTtc = this.fmt(vTtc);
@@ -6792,7 +6858,19 @@ class Component {
     const onVSDelai = e => this.setVenteField('delai', e.target.value);
     const onVSTvaIrl = e => this.setVenteField('tvaIrl', e.target.value);
     const onVSTvaFr = e => this.setVenteField('tvaFr', e.target.value);
-    const onVSAvoirToggle = () => this.setVenteField('avoirActif', !venteAvoirActif);
+    const onVSAvoirToggle = () => this.toggleVenteAvoir(!venteAvoirActif);
+    // Pop-up « ce client n'a pas d'avoir » → création manuelle.
+    const vam = this.state.avoirManuel;
+    const avoirManuelOpen = !!vam;
+    const avoirManuelAsk = !!(vam && vam.phase === 'ask');
+    const avoirManuelForm = !!(vam && vam.phase === 'form');
+    const avoirManuelClient = vam ? vam.client : '';
+    const avoirManuelMontant = vam ? (vam.montant || '') : '';
+    const avoirManuelText = vam ? `Le client « ${vam.client} » n'a pas d'avoir enregistré. Voulez-vous créer un avoir manuellement ?` : '';
+    const onAvoirManuelStart = () => this.setState({ avoirManuel: { ...vam, phase: 'form' } });
+    const onAvoirManuelMontant = e => this.setState({ avoirManuel: { ...this.state.avoirManuel, montant: e.target.value } });
+    const onAvoirManuelSave = () => this.commitAvoirManuel();
+    const onAvoirManuelCancel = () => { this.setState({ avoirManuel: null }); this.setVenteField('avoirActif', false); };
     const onVSAvoir = e => this.setVenteField('avoir', e.target.value);
     const onVSCommit = () => this.commitVenteSaisie();
     const onVSReset = () => this.resetVenteDraft();
@@ -8584,9 +8662,11 @@ class Component {
       achatDraft, achatNumHint, achatDraftLignes, achatDraftTotal, achatEditing, achatSaveLabel, onAchatNum, onAchatPecheur, onAchatDate, onAchatAddLigne, onAchatCommit, onAchatReset,
       achatPaiementImmediat, onAchatImmediatToggle,
       compPayModes, achatIsCheque, achatIsAutre, onAchatObservation, onAchatChequier, onAchatChequeNum, chequierOptions, achatChqHint,
-      venteDraft, venteDraftLignes, venteDraftHt, venteDraftTtc, venteDelaiOptions, venteEditing, vsSaveLabel,
+      venteDraft, venteDraftLignes, venteDraftHt, venteDraftTtc, venteDraftSolde, venteDelaiOptions, venteEditing, vsSaveLabel,
       onVSNum, onVSClient, onVSDate, onVSDelai, onVSTvaIrl, onVSTvaFr, onVSCommit, onVSReset, onVenteAddLigne, venteNumHint, venteNumHintStyle,
-      venteAvoirActif, onVSAvoirToggle, onVSAvoir, venteAvoirDispoShow, venteAvoirDispoText,
+      venteAvoirActif, onVSAvoirToggle, onVSAvoir, venteAvoirDispoShow, venteAvoirDispoText, venteAvoirTrop, venteAvoirAlerte,
+      avoirManuelOpen, avoirManuelAsk, avoirManuelForm, avoirManuelClient, avoirManuelMontant, avoirManuelText,
+      onAvoirManuelStart, onAvoirManuelMontant, onAvoirManuelSave, onAvoirManuelCancel,
       venteGrenkeBtnLabel, venteGrenkeBtnStyle, onVenteGrenkeOpen,
       venteGrenkeOpen, vgMontant, vgP1, vgP2, vgCharges, vgRest, onVgMontant, onVgP1, onVgP2, onVgCharges, onVgSave, onVgCancel,
       gmList, gmSummary, gmEmpty, grkDraft, grkDraftRem, grkDraftRecv, grkStatutOptions, grkEditing, grkSaveLabel,

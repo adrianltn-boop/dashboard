@@ -597,17 +597,18 @@
                 </div>
                 <div style="display:flex;gap:12px;align-items:center;margin-top:10px">
                   <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#3a4a5e;cursor:pointer;user-select:none"><input type="checkbox" checked="{{ venteAvoirActif }}" onchange="{{ onVSAvoirToggle }}" style="width:15px;height:15px;accent-color:#1a56db;cursor:pointer">Avoir</label>
-                  <sc-if value="{{ venteAvoirActif }}" hint-placeholder-val="{{ false }}">
-                    <div style="flex:0 0 150px"><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:'IBM Plex Mono',monospace;text-align:right" type="text" inputmode="decimal" value="{{ venteDraft.avoir }}" oninput="{{ onVSAvoir }}" placeholder="0"></div>
-                  </sc-if>
                   <sc-if value="{{ venteAvoirDispoShow }}" hint-placeholder-val="{{ false }}">
-                    <span style="padding:5px 10px;border-radius:9px;background:#eef4fe;border:1px solid #cadcfa;font-size:12px;font-weight:600;color:#1a56db">{{ venteAvoirDispoText }}</span>
+                    <div style="flex:0 0 150px"><label style="display:block;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.3px;color:#93a1b3;margin-bottom:4px">Avoir disponible</label><div style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;padding:9px 11px;background:#eef4fe;border:1px solid #cadcfa;border-radius:9px;text-align:right;color:#1a56db">{{ venteAvoirDispoText }}</div></div>
+                    <div style="flex:0 0 160px"><label style="display:block;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.3px;color:#93a1b3;margin-bottom:4px">Avoir à utiliser</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:'IBM Plex Mono',monospace;text-align:right" type="text" inputmode="decimal" value="{{ venteDraft.avoir }}" oninput="{{ onVSAvoir }}" placeholder="0"></div>
+                  </sc-if>
+                  <sc-if value="{{ venteAvoirTrop }}" hint-placeholder-val="{{ false }}">
+                    <span style="padding:6px 11px;border-radius:9px;background:#fdecec;border:1px solid #f3cccc;font-size:12px;font-weight:600;color:#b91c1c">⚠ {{ venteAvoirAlerte }}</span>
                   </sc-if>
                 </div>
               </div>
 
               <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:14px 0 16px;flex-wrap:wrap;margin-top:6px;border-top:1px solid #eef1f6">
-                <div style="font-size:13px;color:#69788c">Total à encaisser <b style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#0e1b2e;font-weight:700;margin-left:6px">{{ venteDraftTtc }}</b></div>
+                <div style="font-size:13px;color:#69788c">Total à encaisser <b style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#0e1b2e;font-weight:700;margin-left:6px">{{ venteDraftSolde }}</b><sc-if value="{{ venteAvoirDispoShow }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;color:#9aa7b8;margin-left:8px">TTC {{ venteDraftTtc }} − avoir utilisé</span></sc-if></div>
                 <div style="display:flex;gap:8px"><button style="border:1px solid #dde3ec;background:#fff;color:#3a4a5e;padding:9px 15px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit" onclick="{{ onVSReset }}">Annuler</button><button style="border:none;color:#fff;padding:10px 20px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;background:#1a56db" onclick="{{ onVSCommit }}">{{ vsSaveLabel }}</button></div>
               </div>
             </div>
@@ -2773,6 +2774,30 @@
             <button style="padding:9px 16px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#15803d;border:none;cursor:pointer;font-family:inherit" onclick="{{ onRestartApply }}">Voir et appliquer les corrections</button>
           </sc-if>
         </div>
+      </div>
+    </div>
+  </sc-if>
+  <sc-if value="{{ avoirManuelOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ prefixOverlayStyle }}" onclick="{{ onAvoirManuelCancel }}">
+      <div style="width:440px;max-width:92vw;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px" onclick="{{ ctxStop }}">
+        <sc-if value="{{ avoirManuelAsk }}" hint-placeholder-val="{{ true }}">
+          <div style="font-size:15px;font-weight:700;color:#0e1b2e">Aucun avoir pour ce client</div>
+          <div style="font-size:12.5px;color:#69788c;margin-top:8px;line-height:1.6">{{ avoirManuelText }}</div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">
+            <button style="{{ agBtnGhost }}" onclick="{{ onAvoirManuelCancel }}">Annuler</button>
+            <button style="padding:9px 16px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#1a56db;border:none;cursor:pointer;font-family:inherit" onclick="{{ onAvoirManuelStart }}">Créer un avoir</button>
+          </div>
+        </sc-if>
+        <sc-if value="{{ avoirManuelForm }}" hint-placeholder-val="{{ false }}">
+          <div style="font-size:15px;font-weight:700;color:#0e1b2e">Créer un avoir</div>
+          <div style="margin-top:14px"><label style="{{ payLbl }}">Nom client</label><input style="{{ payInput }};background:#f4f7fb;color:#69788c" value="{{ avoirManuelClient }}" readonly></div>
+          <div style="margin-top:10px"><label style="{{ payLbl }}">Montant de l'avoir</label><input style="{{ payInputN }}" type="text" inputmode="decimal" value="{{ avoirManuelMontant }}" oninput="{{ onAvoirManuelMontant }}" placeholder="0"></div>
+          <div style="font-size:11.5px;color:#9aa7b8;margin-top:8px;line-height:1.5">Enregistré dans l'onglet « Avoirs » avec le n° « AVOIR MANUEL ». Un aperçu vous sera montré avant l'écriture.</div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">
+            <button style="{{ agBtnGhost }}" onclick="{{ onAvoirManuelCancel }}">Annuler</button>
+            <button style="padding:9px 16px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#15803d;border:none;cursor:pointer;font-family:inherit" onclick="{{ onAvoirManuelSave }}">Enregistrer l'avoir</button>
+          </div>
+        </sc-if>
       </div>
     </div>
   </sc-if>
