@@ -868,7 +868,12 @@ class Component {
       }
       if (!preview.length) { this.setState({ msg: { kind: 'error', text: `Rien à écrire : facture n°${rec.num || rec.id} introuvable dans « ${hi.name} » (vérifiez l'ID Facture et le numéro).` } }); return; }
       const sheetList = [...new Set(sheets)];
-      this._pendingWrite = { kind: 'ventes', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: sheetList.join(', '), editsBySheet, verifyTargets, rowAppends, dateCols, refuseFormula: true, after: () => this._payAfterWrite(rec) };
+      // Sur une ligne « Suivi des paiements » déjà présente dans le fichier, État est souvent une
+      // FORMULE Excel (ex. « =SI(...) ») : sans cette autorisation, l'écriture ci-dessus (put, à la
+      // ligne 851) est sautée EN SILENCE par patchXlsxFile — le paiement semble enregistré (chèque,
+      // avoir) mais l'État affiché reste celui, périmé, de l'ancienne formule.
+      const allowFormulaCols = (sloc && sloc.cols.etat >= 0) ? { [sloc.sheetName]: new Set([sloc.cols.etat]) } : null;
+      this._pendingWrite = { kind: 'ventes', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: sheetList.join(', '), editsBySheet, verifyTargets, rowAppends, dateCols, refuseFormula: true, allowFormulaCols, after: () => this._payAfterWrite(rec) };
       this.setState({ writePreview: { kind: 'paiementClient', fileName: hi.name, sheetName: sheetList.join(', '), excelRow: null, rows: preview, status: null, refLabel: rec.num || String(rec.id) } });
     } catch (e) {
       this.setState({ msg: { kind: 'error', text: `Préparation de l'écriture impossible : ${(e && e.message) || 'erreur'}. Le paiement n'a PAS été enregistré.` } });
@@ -1065,6 +1070,14 @@ class Component {
     const id = +d.id || this._venteNextId();
     const grenke = (d.grenke && this._vNum(d.grenke.montant) > 0) ? d.grenke : null;
     const avoir = (d.avoirActif && this._vNum(d.avoir) > 0) ? this._vNum(d.avoir) : 0;
+    // Avoir à utiliser plafonné au disponible : on ne bloque pas la frappe (l'alerte suffit pendant
+    // la saisie), mais on refuse l'enregistrement si le montant dépasse ce que l'onglet Avoirs a
+    // effectivement au crédit du client — l'alerte visuelle seule ne suffit pas à empêcher un envoi.
+    if (avoir > 0) {
+      const vad = this.state.venteAvoirDispo;
+      const dispo = (vad && vad.client === client) ? vad.montant : 0;
+      if (avoir > dispo + 0.005) { this.setState({ msg: { kind: 'error', text: `Avoir insuffisant pour « ${client} » : disponible ${this.fmt(dispo)}, saisi ${this.fmt(avoir)}. Réduisez le montant à utiliser.` } }); return; }
+    }
     const rec = { id, num: (d.num || '').trim(), idFacture: (d.idFacture || '').trim(), client, date: d.date || '', lignes, ht, tvaIrl, tvaFr, ttc, delai, datePrev, grenke, avoir };
     const arr = this.venteSaisieRows().slice(); const i = arr.findIndex(x => String(x.id) === String(id));
     // Circuit A — le fichier Excel fait foi. Une vente n'est enregistrée QUE si l'écriture
@@ -2286,7 +2299,7 @@ class Component {
       // Solde géré par le dashboard : la formule Excel =SIERREUR(Montant-[Total payé];"") ne se
       // recalcule pas sur une écriture directe du XML — on autorise l'écrasement UNIQUEMENT sur
       // cette colonne, jamais sur les autres (protection anti-formule conservée partout ailleurs).
-      const allowFormulaCols = (kind === 'operations' && colsMap.solde != null && colsMap.solde >= 0) ? { [sheetName]: new Set([colsMap.solde]) } : null;
+      let allowFormulaCols = (kind === 'operations' && colsMap.solde != null && colsMap.solde >= 0) ? { [sheetName]: new Set([colsMap.solde]) } : null;
       // Vente avec Avoir : écriture combinée Factures + Suivi des paiements (Avoir uniquement, sur
       // une ligne libre) dans UNE seule transaction editsBySheet — même mécanisme que l'achat pour
       // ses écritures multi-feuilles (pêcheur + chéquier), un seul aperçu/confirmation.
@@ -2350,6 +2363,18 @@ class Component {
       if (kind === 'ventes' && opts.suiviAvoir) {
         const sv = opts.suiviAvoir;
         const sloc = this._suiviLocate(wbH);
+        // Sur une ligne déjà présente dans le fichier (créée à la main par Faustine ou par un ancien
+        // classeur), Solde et État sont souvent des FORMULES Excel (ex. « =D2-E2-H2 », « =SI(...) ») :
+        // sans cette autorisation, patchXlsxFile saute ces deux colonnes EN SILENCE (protection
+        // anti-formule) — le solde et l'état affichés restent alors ceux de l'ancienne formule, sans
+        // que rien ne le signale. Comme pour Solde côté achats pêcheur, on autorise l'écrasement
+        // UNIQUEMENT sur ces deux colonnes calculées par le dashboard lui-même.
+        if (sloc) {
+          const allowHere = new Set();
+          if (sloc.cols.solde >= 0) allowHere.add(sloc.cols.solde);
+          if (sloc.cols.etat >= 0) allowHere.add(sloc.cols.etat);
+          if (allowHere.size) allowFormulaCols = { ...(allowFormulaCols || {}), [sloc.sheetName]: allowHere };
+        }
         // Repère de ligne : l'ID Facture s'il est disponible, sinon le numéro de facture. Sans ce
         // repli, une colonne « ID Facture » non réglée dans Paramètres faisait sauter TOUT le bloc
         // (ni identité de facture ni montant écrits dans le suivi).
