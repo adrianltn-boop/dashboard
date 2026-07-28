@@ -2097,6 +2097,7 @@ class Component {
         return { rowIdx: lastContentIdx + 1, exists: false };
       };
       if (kind === 'ventes' && opts.suiviAvoir && opts.suiviAvoir.idFacture) {
+        console.log('[suivi] idFacture:', opts.suiviAvoir?.idFacture);
         const sloc = this._suiviLocate(wbH);
         if (sloc && sloc.cols.idFacture >= 0) {
           sloc.formulaCols = ['B', 'C', 'D', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N'];
@@ -2107,6 +2108,8 @@ class Component {
             if (opts.suiviAvoir.avoir && sloc.cols.avoir >= 0) putCell(sloc.sheetName, place.rowIdx, sloc.cols.avoir, opts.suiviAvoir.avoir, 'Avoir (Suivi des paiements)', this.fmt(opts.suiviAvoir.avoir));
             extraSheets.push(sloc.sheetName);
           }
+          console.log('[suivi] rowAppends:', JSON.stringify(rowAppends));
+          console.log('[suivi] editsBySheet suivi:', JSON.stringify(editsBySheet?.[sloc?.sheetName]));
         }
       }
       // Vente financée par Grenke : une ligne de suivi dans l'onglet « Grenke » du même fichier.
