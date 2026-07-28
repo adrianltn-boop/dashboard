@@ -220,6 +220,7 @@ class Component {
     empDocs: {}, empDelDoc: null, bankSalaryEmp: '', bankSalaryMonth: '',
     agenda: [], agendaMonth: null, agendaEdit: null, agendaDelAsk: null,
     payTrack: [], payDraft: null, payDelAsk: null,
+    restartRun: null, verifPending: null, venteAvoirAsk: null,
     ventesSaisie: [], venteDraft: null,
     grenkeMan: [], grkDraft: null, grkDelAsk: null,
     achatsSaisie: [], achatDraft: null, chequiersLive: [], compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null, chqEditDraft: null,
@@ -3110,6 +3111,68 @@ class Component {
     }
     return null;
   }
+  // ---------- Vérifications de cohérence du fichier ventes (CALCUL SEUL, aucune écriture) ----------
+  // RÈGLE : le dashboard n'écrit JAMAIS de lui-même dans un fichier existant. Ces fonctions se
+  // contentent de comparer ce qui est dans le fichier à ce qui devrait y être, et renvoient la
+  // liste des écarts. L'écriture ne part qu'après un aperçu confirmé (voir requestVerifPreview).
+  // Écarts sur les totaux de l'onglet « Avoirs » : pour chaque bloc client, somme des montants du
+  // journal (valeur absolue, lignes 4+) comparée au total affiché en ligne 3.
+  _avoirsEcarts(wb) {
+    const aloc = this._avoirsLocate(wb); if (!aloc) return [];
+    const rows = aloc.rows; const out = [];
+    for (let sc = 0; sc < 1000; sc += 5) {
+      const name = (rows[1] || [])[sc];
+      if (name == null || String(name).trim() === '') break; // plus de bloc client au-delà
+      const amtCol = sc + 1;
+      let somme = 0; let nb = 0;
+      for (let r = 3; r < rows.length; r++) {
+        const dv = (rows[r] || [])[sc]; const av = (rows[r] || [])[amtCol];
+        const vide = (dv == null || String(dv).trim() === '') && (av == null || String(av).trim() === '');
+        if (vide) break;
+        const n = this._vNum(av); if (!isNaN(n) && n !== 0) { somme += Math.abs(n); nb++; }
+      }
+      somme = Math.round(somme * 100) / 100;
+      const actuel = Math.round((this._vNum((rows[2] || [])[amtCol]) || 0) * 100) / 100;
+      if (nb && Math.abs(somme - actuel) > 0.005) out.push({ sheetName: aloc.sheetName, rowIdx: 2, col: amtCol, client: String(name).trim(), actuel, attendu: somme });
+    }
+    return out;
+  }
+  // État attendu d'une ligne du suivi des paiements, d'après son solde, son avoir et son échéance.
+  _etatAttendu(solde, avoir, dateEchIso, todayIso) {
+    if (avoir > 0) return Component.ETAT_AVOIR;
+    if (Math.abs(solde) <= 0.005) return 'PAYÉE';
+    if (dateEchIso && todayIso && dateEchIso < todayIso) return 'À RELANCER';
+    return 'EN ATTENTE';
+  }
+  // Écarts d'état dans « Suivi des paiements » : compare la colonne Etat à l'état attendu.
+  _etatsEcarts(wb) {
+    const sloc = this._suiviLocate(wb); if (!sloc || sloc.cols.etat < 0) return [];
+    const sh = wb.find(s => s.name === sloc.sheetName); if (!sh) return [];
+    const rows = sh.rows; const c = sloc.cols; const today = this._payTodayIso(); const out = [];
+    for (let r = sloc.dataStart; r < rows.length; r++) {
+      const rr = rows[r] || [];
+      const num = c.numero >= 0 ? String(rr[c.numero] == null ? '' : rr[c.numero]).trim() : '';
+      const client = c.client >= 0 ? String(rr[c.client] == null ? '' : rr[c.client]).trim() : '';
+      if (!num && !client) continue; // ligne vide : rien à vérifier
+      const solde = c.solde >= 0 ? (this._vNum(rr[c.solde]) || 0) : NaN;
+      if (isNaN(solde)) continue; // sans solde exploitable, on ne présume rien
+      const avoir = c.avoir >= 0 ? (this._vNum(rr[c.avoir]) || 0) : 0;
+      const ech = c.dateEch >= 0 ? this._cellToIso(rr[c.dateEch]) : '';
+      const attendu = this._etatAttendu(solde, avoir, ech, today);
+      const actuel = String(rr[c.etat] == null ? '' : rr[c.etat]).trim();
+      if (this._norm(actuel) !== this._norm(attendu)) out.push({ sheetName: sloc.sheetName, rowIdx: r, col: c.etat, ref: num || client, actuel: actuel || '(vide)', attendu });
+    }
+    return out;
+  }
+  // Valeur de cellule (série Excel ou texte JJ/MM/AAAA) → date ISO comparable, '' si illisible.
+  _cellToIso(v) {
+    const s = String(v == null ? '' : v).trim(); if (!s) return '';
+    const fr = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (fr) return `${fr[3]}-${this.dd(+fr[2])}-${this.dd(+fr[1])}`;
+    const n = parseFloat(s.replace(',', '.'));
+    if (!isNaN(n) && n > 1) { const d = new Date(Date.UTC(1899, 11, 30) + Math.round(n) * 86400000); return d.getUTCFullYear() + '-' + this.dd(d.getUTCMonth() + 1) + '-' + this.dd(d.getUTCDate()); }
+    return '';
+  }
   // Colonnes (index 0-based) portant une formule <f> sur chaque ligne séquentielle de la feuille,
   // lues directement du XML — readWorkbook ne restitue que les valeurs, pas la présence de formule.
   async _sheetFormulaCols(buf, sheetName) {
@@ -3511,9 +3574,11 @@ class Component {
       out.onFlCancel = () => this.cancelAppendWrite();
     }
     if (wp) {
-      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
+      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'verif' ? `Appliquer les corrections dans « ${wp.fileName} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
       out.wpSubText = wp.kind === 'stock'
         ? `${wp.title || ''} — je remplis le poids et le prix par espèce/calibre. Le prix moyen se recalcule tout seul (formule non touchée). Sauvegarde datée avant l'écriture.`
+        : wp.kind === 'verif'
+        ? `${wp.title || ''} — feuille(s) « ${wp.sheetName} ». Chaque ligne ci-dessous montre la valeur actuelle et celle qui la remplacera. Rien d'autre n'est touché. Une copie de sauvegarde datée est faite avant l'écriture.`
         : wp.kind === 'cheque'
         ? `${wp.title || ''} — je remplis seulement les cases vides Date / Description / Montant de cette ligne déjà imprimée. Une copie de sauvegarde datée est faite avant l'écriture.`
         : wp.kind === 'annule'
@@ -5395,7 +5460,7 @@ class Component {
       } catch (e) { perm = 'prompt'; }
       if (perm === 'granted') { this._applyRestored(val); granted++; } else need++;
     }
-    if (granted) { this.startWatching(); this.pollWatched(); this.refreshFolders(); this.setState({ lastSync: Date.now() }); }
+    if (granted) { this.startWatching(); this.pollWatched(); this.refreshFolders(); this.setState({ lastSync: Date.now() }); setTimeout(() => this.checkVerifsAtStartup(), 1500); }
     if (need) this.setState({ reconnectCount: need });
   }
   async reconnectHandles() {
@@ -5413,6 +5478,78 @@ class Component {
     try { if (this._blDir) await this.refreshLivraisonFolder(this._blDir, true); } catch (e) {}
     try { if (this._transpDir) await this.refreshTransportFolder(this._transpDir, true); } catch (e) {}
     try { if (this._libDir && !this.state.folder) await this.refreshLibFolder(this._libDir, true); } catch (e) {}
+  }
+  // ---------- Redémarrage du tableau de bord (relecture + vérifications) ----------
+  // Relit tous les fichiers connectés, puis CALCULE les écarts (totaux Avoirs, états du suivi)
+  // sans rien écrire. Le résultat est présenté ; l'écriture ne part qu'après confirmation.
+  async restartDashboard() {
+    if (this.state.restartRun && this.state.restartRun.running) return;
+    this.setState({ restartRun: { running: true, done: false, files: 0, avoirs: [], etats: [], error: '' } });
+    let files = 0; let avoirs = []; let etats = [];
+    try {
+      // 1) relecture de tous les fichiers et dossiers connectés
+      try { if (this._stockDir) await this.refreshStockFolder(this._stockDir, true); } catch (e) {}
+      try { if (this._blDir) await this.refreshLivraisonFolder(this._blDir, true); } catch (e) {}
+      try { if (this._transpDir) await this.refreshTransportFolder(this._transpDir, true); } catch (e) {}
+      try { if (this._libDir) await this.refreshLibFolder(this._libDir, true); } catch (e) {}
+      try { const w = this._watched || {}; Object.keys(w).forEach(n => { w[n].lastMod = 0; }); await this.pollWatched(); files = Object.keys(w).length; } catch (e) {}
+      // 2) vérifications sur le fichier ventes (calcul seul)
+      const chk = await this._computeVerifs();
+      avoirs = chk.avoirs; etats = chk.etats;
+      this.setState({ lastSync: Date.now(), restartRun: { running: false, done: true, files, avoirs, etats, error: chk.error || '' } });
+    } catch (e) {
+      this.setState({ restartRun: { running: false, done: true, files, avoirs, etats, error: (e && e.message) || 'erreur' } });
+    }
+  }
+  // Lit le fichier ventes et renvoie les écarts détectés — aucune écriture, aucun effet de bord.
+  async _computeVerifs() {
+    const hi = this._writableHandleFor('ventes');
+    if (!hi || !hi.handle) return { avoirs: [], etats: [], error: 'Fichier « Ventes client » non connecté — vérifications ignorées.' };
+    try {
+      const file = await hi.handle.getFile(); const buf = await file.arrayBuffer();
+      const wb = await this.readWorkbook(buf);
+      return { avoirs: this._avoirsEcarts(wb), etats: this._etatsEcarts(wb), error: '' };
+    } catch (e) { return { avoirs: [], etats: [], error: (e && e.message) || 'lecture impossible' }; }
+  }
+  // Vérification silencieuse au démarrage : calcule les écarts et les signale, SANS jamais écrire.
+  async checkVerifsAtStartup() {
+    try {
+      const chk = await this._computeVerifs();
+      const n = chk.avoirs.length + chk.etats.length;
+      if (n) this.setState({ verifPending: { avoirs: chk.avoirs, etats: chk.etats } });
+    } catch (e) { /* best-effort : ne bloque jamais le démarrage */ }
+  }
+  // Aperçu (puis confirmation) des corrections : totaux Avoirs et/ou états du suivi.
+  async requestVerifPreview(avoirs, etats) {
+    const list = [...(avoirs || []), ...(etats || [])];
+    if (!list.length) { this.setState({ msg: { kind: 'ok', text: 'Rien à corriger : tout est déjà à jour.' } }); return; }
+    const hi = this._writableHandleFor('ventes');
+    if (!hi || !hi.handle) { this.setState({ msg: { kind: 'error', text: 'Correction impossible : le fichier « Ventes client » n\'est pas connecté.' } }); return; }
+    try {
+      const okPerm = await this._ensureWritePermission(hi.handle);
+      if (!okPerm) { this.setState({ msg: { kind: 'error', text: `Autorisation d'écriture refusée sur « ${hi.name} ». Rien n'a été modifié.` } }); return; }
+      const file = await hi.handle.getFile();
+      const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
+      const buf = await file.arrayBuffer();
+      const editsBySheet = {}; const verifyTargets = []; const preview = [];
+      (avoirs || []).forEach(a => {
+        editsBySheet[a.sheetName] = editsBySheet[a.sheetName] || {};
+        editsBySheet[a.sheetName][a.rowIdx + ':' + a.col] = a.attendu;
+        verifyTargets.push({ sheetName: a.sheetName, rowIdx: a.rowIdx, col: a.col, val: a.attendu });
+        preview.push({ label: `Total avoirs — ${a.client}`, col: `${this._colLetter(a.col + 1)}${a.rowIdx + 1}`, value: `${this.fmt(a.actuel)} → ${this.fmt(a.attendu)}` });
+      });
+      (etats || []).forEach(t => {
+        editsBySheet[t.sheetName] = editsBySheet[t.sheetName] || {};
+        editsBySheet[t.sheetName][t.rowIdx + ':' + t.col] = t.attendu;
+        verifyTargets.push({ sheetName: t.sheetName, rowIdx: t.rowIdx, col: t.col, val: t.attendu });
+        preview.push({ label: `État — ${t.ref}`, col: `${this._colLetter(t.col + 1)}${t.rowIdx + 1}`, value: `${t.actuel} → ${t.attendu}` });
+      });
+      const sheetList = Object.keys(editsBySheet);
+      this._pendingWrite = { kind: 'ventes', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: sheetList.join(', '), editsBySheet, verifyTargets, refuseFormula: true, after: () => this.setState({ verifPending: null, restartRun: null }) };
+      this.setState({ writePreview: { kind: 'verif', fileName: hi.name, sheetName: sheetList.join(', '), excelRow: null, rows: preview, status: null, title: `${preview.length} correction(s) à appliquer` } });
+    } catch (e) {
+      this.setState({ msg: { kind: 'error', text: `Préparation des corrections impossible : ${(e && e.message) || 'erreur'}. Aucun fichier n'a été modifié.` } });
+    }
   }
   watch(kind, name, handle, lastMod) {
     if (!handle || !handle.getFile) return;
@@ -6241,6 +6378,30 @@ class Component {
     const venteAvoirAskText = venteAvoirAsk ? `Le montant total est négatif (${this.fmt(venteAvoirAsk.montant)}). Cela va créer un avoir pour ce client. Voulez-vous continuer ?` : '';
     const onVenteAvoirConfirm = () => this.confirmVenteAvoir();
     const onVenteAvoirCancel = () => this.cancelVenteAvoir();
+    // ---- Redémarrage du tableau de bord + vérifications de cohérence (aperçu avant écriture) ----
+    const rr = this.state.restartRun;
+    const restartOpen = !!rr;
+    const restartRunning = !!(rr && rr.running);
+    const restartDone = !!(rr && rr.done);
+    const rrAvoirs = (rr && rr.avoirs) || []; const rrEtats = (rr && rr.etats) || [];
+    const restartCount = rrAvoirs.length + rrEtats.length;
+    const restartTitle = restartRunning ? 'Importation des fichiers en cours…' : 'Redémarrage terminé';
+    const restartSummary = restartRunning ? 'Relecture de vos fichiers Excel, puis vérification des totaux et des états.'
+      : `${rr ? rr.files : 0} fichier(s) relu(s) · ${restartCount} correction(s) proposée(s)${rr && rr.error ? ' · ' + rr.error : ''}`;
+    const restartRows = [
+      ...rrAvoirs.map(a => ({ label: `Total avoirs — ${a.client}`, value: `${this.fmt(a.actuel)} → ${this.fmt(a.attendu)}` })),
+      ...rrEtats.map(t => ({ label: `État — ${t.ref}`, value: `${t.actuel} → ${t.attendu}` })),
+    ];
+    const restartHasFixes = restartDone && restartCount > 0;
+    const restartAllGood = restartDone && restartCount === 0;
+    const onRestartDash = () => this.restartDashboard();
+    const onRestartClose = () => this.setState({ restartRun: null });
+    const onRestartApply = () => { this.setState({ restartRun: null }); this.requestVerifPreview(rrAvoirs, rrEtats); };
+    const vp = this.state.verifPending;
+    const verifBannerOpen = !!vp && !restartOpen;
+    const verifBannerText = vp ? `${(vp.avoirs || []).length + (vp.etats || []).length} correction(s) à appliquer dans votre fichier de ventes (totaux d'avoirs, états de facture).` : '';
+    const onVerifBannerApply = () => this.requestVerifPreview(vp ? vp.avoirs : [], vp ? vp.etats : []);
+    const onVerifBannerHide = () => this.setState({ verifPending: null });
 
     // ==================== SAISIE COMPTABLE (portage fidèle de la maquette « Saisie par transaction ») ====================
     const kgN = n => (Math.round((+n || 0) * 10) / 10).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' kg';
@@ -8246,6 +8407,9 @@ class Component {
       payInput, payInputN, payLbl, paySaveStyle, payResetStyle, payRowBtnStyle, payDelBtnStyle, payDraftSolde,
       payDelOpen, payDelName, onPayDelConfirm, onPayDelCancel,
       venteAvoirAskOpen, venteAvoirAskText, onVenteAvoirConfirm, onVenteAvoirCancel,
+      restartOpen, restartRunning, restartDone, restartTitle, restartSummary, restartRows, restartHasFixes, restartAllGood,
+      onRestartDash, onRestartClose, onRestartApply,
+      verifBannerOpen, verifBannerText, onVerifBannerApply, onVerifBannerHide,
       onHealthOpen: () => this.openHealthCheck(),
       isSaisieCompta, compTab, compIsAchat, compIsVente, compIsFourn, compIsPaiement,
       impayesAchats, paiementEmpty, paiementModeOpts, paiementIsPartiel, paiementIsCheque, paiementIsAutre, paiementIsComptant, paiementComptantSolde, paiementSelectedLabel,
