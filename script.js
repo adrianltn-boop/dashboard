@@ -785,7 +785,7 @@ class Component {
   _payTodayIso() { const T = Component.TODAY; return `${T.y}-${this.dd(T.m)}-${this.dd(T.d)}`; }
   payDefault() { return { id: this._payNextId(), num: '', client: '', ttc: '', avoir: '', dateFac: this._payTodayIso(), dateEch: '', regle: '', datePay: '', etat: 'En attente', editing: false }; }
   setPayField(k, v) { const d = this.state.payDraft || this.payDefault(); this.setState({ payDraft: { ...d, [k]: v } }); }
-  resetPayDraft() { this.setState({ payDraft: this.payDefault() }); }
+  resetPayDraft() { this.setState({ payDraft: this.payDefault() }); this.refreshPayIdFacture(); }
   editPayRow(id) { const r = this.payTrackRows().find(x => String(x.id) === String(id)); if (!r) return; this.setState({ payDraft: { ...r, ttc: r.ttc === '' ? '' : String(r.ttc), avoir: r.avoir === '' ? '' : String(r.avoir), regle: r.regle === '' ? '' : String(r.regle), editing: true } }); }
   commitPay() {
     const d = this.state.payDraft || this.payDefault();
@@ -793,9 +793,78 @@ class Component {
     const num = v => { const n = parseFloat(String(v == null ? '' : v).replace(',', '.').replace(/[^\d.-]/g, '')); return isFinite(n) ? n : 0; };
     if (!client || !(num(d.ttc) > 0)) { this.setState({ msg: { kind: 'error', text: 'Indiquez au moins le nom du client et un Montant TTC.' } }); return; }
     const rec = { id: +d.id || this._payNextId(), num: (d.num || '').trim(), client, ttc: num(d.ttc), avoir: num(d.avoir), dateFac: d.dateFac || '', dateEch: d.dateEch || '', regle: num(d.regle), datePay: d.datePay || '', etat: d.etat || 'En attente' };
+    // Circuit A — le fichier Excel fait foi : la vue locale n'est alimentée qu'APRÈS une écriture
+    // confirmée et vérifiée (voir _payAfterWrite). Si l'écriture n'est pas réglée/connectée, on
+    // conserve l'ancien comportement purement local pour ne pas bloquer la saisie.
+    if (!this._venteWriteReady()) { this._payAfterWrite(rec); return; }
+    this.requestPaiementClientPreview(rec);
+  }
+  // Alimente la vue locale (suivi de paiement) et réinitialise le formulaire.
+  _payAfterWrite(rec) {
     const arr = this.payTrackRows().slice(); const i = arr.findIndex(x => String(x.id) === String(rec.id));
     if (i >= 0) arr[i] = rec; else arr.unshift(rec);
     this.savePayTrack(arr); this.setState({ payDraft: this.payDefault() });
+    this.refreshPayIdFacture();
+  }
+  // Aperçu (puis confirmation) d'un enregistrement de paiement client. Écrit dans le fichier ventes :
+  //  · « Suivi des paiements » (ligne trouvée par ID Facture) : Montant réglé, Date du paiement,
+  //    État, et Avoir si renseigné ;
+  //  · « Factures » (ligne trouvée par n° de facture) : colonne État ;
+  //  · « Avoirs » : bloc client, si un avoir est saisi.
+  // Ces lignes EXISTENT déjà : on ne peut donc pas passer par requestAppendPreview (qui ajoute une
+  // ligne) — on construit editsBySheet directement, puis le même aperçu → confirmation → sauvegarde
+  // datée → relecture de contrôle que toutes les autres écritures.
+  async requestPaiementClientPreview(rec) {
+    const hi = this._writableHandleFor('ventes');
+    if (!hi || !hi.handle) { this.setState({ msg: { kind: 'error', text: 'Écriture impossible : le fichier « Ventes client » n\'est pas connecté.' } }); return; }
+    try {
+      const okPerm = await this._ensureWritePermission(hi.handle);
+      if (!okPerm) { this.setState({ msg: { kind: 'error', text: `Autorisation d'écriture refusée sur « ${hi.name} ». Rien n'a été modifié.` } }); return; }
+      const file = await hi.handle.getFile();
+      const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
+      const buf = await file.arrayBuffer(); const wb = await this.readWorkbook(buf);
+      const editsBySheet = {}; const verifyTargets = []; const preview = []; const rowAppends = []; const sheets = [];
+      const put = (shName, rowIdx, colIdx, val, label, display) => {
+        if (colIdx == null || colIdx < 0 || val === '' || val == null) return;
+        editsBySheet[shName] = editsBySheet[shName] || {};
+        editsBySheet[shName][rowIdx + ':' + colIdx] = val;
+        preview.push({ label, col: `${this._colLetter(colIdx + 1)}${rowIdx + 1}`, value: display != null ? display : String(val) });
+        verifyTargets.push({ sheetName: shName, rowIdx, col: colIdx, val });
+      };
+      // 1) « Suivi des paiements » — ligne repérée par ID Facture (colonne A).
+      const sloc = this._suiviLocate(wb);
+      if (sloc && sloc.cols.idFacture >= 0) {
+        const rows = (wb.find(s => s.name === sloc.sheetName) || { rows: [] }).rows;
+        const want = String(rec.id).trim(); let rowIdx = -1;
+        for (let r = sloc.dataStart; r < rows.length; r++) { const v = (rows[r] || [])[sloc.cols.idFacture]; if (v != null && String(v).trim() === want) { rowIdx = r; break; } }
+        if (rowIdx >= 0) {
+          put(sloc.sheetName, rowIdx, sloc.cols.regle, rec.regle, 'Montant réglé (Suivi des paiements)', this.fmt(rec.regle));
+          if (rec.datePay) put(sloc.sheetName, rowIdx, sloc.cols.datePay, this._isoToFr(rec.datePay), 'Date du paiement (Suivi des paiements)');
+          put(sloc.sheetName, rowIdx, sloc.cols.etat, rec.etat, 'État (Suivi des paiements)');
+          if (rec.avoir > 0) put(sloc.sheetName, rowIdx, sloc.cols.avoir, rec.avoir, 'Avoir (Suivi des paiements)', this.fmt(rec.avoir));
+          sheets.push(sloc.sheetName);
+        }
+      }
+      // 2) « Factures » — ligne repérée par n° de facture, colonne État (mappée dans Paramètres).
+      const cfg = this.writeMapFor('ventes');
+      if (rec.num && cfg && cfg.cols && cfg.cols.ref >= 0 && cfg.cols.status != null && cfg.cols.status >= 0) {
+        const hdrIdx = cfg.headerRowIdx != null ? cfg.headerRowIdx : 0;
+        const firstData = cfg.firstDataIdx != null ? cfg.firstDataIdx : (hdrIdx + 1);
+        const loc = await this._locateRowByRef(buf.slice(0), cfg.sheetName, cfg.cols.ref, rec.num, firstData);
+        if (loc) { put(cfg.sheetName, loc.previewIdx, cfg.cols.status, rec.etat, 'État (Factures)'); sheets.push(cfg.sheetName); }
+      }
+      // 3) « Avoirs » — bloc client, si un avoir est saisi (type A : avoir renseigné à la main).
+      if (rec.avoir > 0 && rec.client) {
+        const done = await this._avoirsPlan(wb, buf, { client: rec.client, num: rec.num, montant: rec.avoir, type: 'A', date: rec.datePay || rec.dateFac || this._payTodayIso() }, () => {}, put, rowAppends);
+        if (done) sheets.push(done);
+      }
+      if (!preview.length) { this.setState({ msg: { kind: 'error', text: `Rien à écrire : facture n°${rec.num || rec.id} introuvable dans « ${hi.name} » (vérifiez l'ID Facture et le numéro).` } }); return; }
+      const sheetList = [...new Set(sheets)];
+      this._pendingWrite = { kind: 'ventes', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: sheetList.join(', '), editsBySheet, verifyTargets, rowAppends, refuseFormula: true, after: () => this._payAfterWrite(rec) };
+      this.setState({ writePreview: { kind: 'paiementClient', fileName: hi.name, sheetName: sheetList.join(', '), excelRow: null, rows: preview, status: null, refLabel: rec.num || String(rec.id) } });
+    } catch (e) {
+      this.setState({ msg: { kind: 'error', text: `Préparation de l'écriture impossible : ${(e && e.message) || 'erreur'}. Le paiement n'a PAS été enregistré.` } });
+    }
   }
   askDeletePay(id) { const r = this.payTrackRows().find(x => String(x.id) === String(id)); if (r) this.setState({ payDelAsk: r }); }
   deletePayRow() { const r = this.state.payDelAsk; if (!r) return; this.savePayTrack(this.payTrackRows().filter(x => String(x.id) !== String(r.id))); this.setState({ payDelAsk: null }); }
@@ -859,19 +928,33 @@ class Component {
   // ID Facture (colonne dédiée, ex. colonne I) : PAS pré-imprimé comme le n° de facture — calculé
   // comme dernier ID existant + 1, lu directement dans le fichier (même logique que _venteNextId(),
   // mais sur la vraie colonne Excel plutôt que sur les chiffres du n° de facture).
-  async refreshVenteIdFacture() {
+  // Prochain ID Facture lu DANS LE FICHIER (dernier existant + 1), source unique pour le formulaire
+  // de vente comme pour celui d'enregistrement de paiement. null si le fichier ou la colonne
+  // ne sont pas disponibles — l'appelant garde alors son comportement de repli.
+  async _nextIdFactureFromFile() {
     try {
-      const cfg = this.writeMapFor('ventes'); if (!cfg || !cfg.enabled || !cfg.cols) return;
-      const idCol = cfg.cols.idFacture; if (idCol == null || idCol < 0) return; // colonne pas encore réglée dans Paramètres
-      const hi = this._writableHandleFor('ventes'); if (!hi || !hi.handle) return;
+      const cfg = this.writeMapFor('ventes'); if (!cfg || !cfg.enabled || !cfg.cols) return null;
+      const idCol = cfg.cols.idFacture; if (idCol == null || idCol < 0) return null; // colonne pas encore réglée dans Paramètres
+      const hi = this._writableHandleFor('ventes'); if (!hi || !hi.handle) return null;
       const f = await hi.handle.getFile(); const buf = await f.arrayBuffer();
-      const wb = await this.readWorkbook(buf); const sh = wb.find(s => s.name === cfg.sheetName); if (!sh) return;
+      const wb = await this.readWorkbook(buf); const sh = wb.find(s => s.name === cfg.sheetName); if (!sh) return null;
       const hdrIdx = cfg.headerRowIdx != null ? cfg.headerRowIdx : 0;
       const firstData = cfg.firstDataIdx != null ? cfg.firstDataIdx : (hdrIdx + 1);
       let max = 0;
       for (let r = firstData; r < sh.rows.length; r++) { const v = (sh.rows[r] || [])[idCol]; const n = parseInt(String(v == null ? '' : v).trim(), 10); if (!isNaN(n) && n > max) max = n; }
-      const d = this.state.venteDraft; if (d && !d.editing) this.setState({ venteDraft: { ...d, idFacture: String(max + 1) } });
-    } catch (e) { /* non bloquant : on garde l'ID courant */ }
+      return max + 1;
+    } catch (e) { return null; }
+  }
+  async refreshVenteIdFacture() {
+    const next = await this._nextIdFactureFromFile(); if (next == null) return;
+    const d = this.state.venteDraft; if (d && !d.editing) this.setState({ venteDraft: { ...d, idFacture: String(next) } });
+  }
+  // Même correction pour le suivi de paiement : l'ID affiché venait de _payNextId(), calculé sur les
+  // seules lignes locales (et contaminé par les chiffres des n° de facture via _venteNextId) — d'où
+  // des ID sans rapport avec le fichier. On lit désormais la vraie colonne ID Facture.
+  async refreshPayIdFacture() {
+    const next = await this._nextIdFactureFromFile(); if (next == null) return; // repli : _payNextId() déjà en place
+    const d = this.state.payDraft; if (d && !d.editing) this.setState({ payDraft: { ...d, id: next } });
   }
   venteDefault() { const t = this._payTodayIso(); return { id: this._venteNextId(), num: '', idFacture: '', client: '', date: t, delai: '30', datePrev: this._addDaysIso(t, 30), lignes: [this.compEmptyLigne()], tvaIrl: '', tvaFr: '', grenke: null, avoirActif: false, avoir: '', editing: false }; }
   setVenteField(k, v) { const d = this.state.venteDraft || this.venteDefault(); const patch = { ...d, [k]: v }; if (k === 'delai') patch.datePrev = this._addDaysIso(d.date, Math.max(0, Math.min(30, Math.round(this._vNum(v))))); if (k === 'date') patch.datePrev = this._addDaysIso(v, Math.max(0, Math.min(30, Math.round(this._vNum(d.delai))))); this.setState({ venteDraft: patch }); }
@@ -2207,55 +2290,8 @@ class Component {
       // ligne 3, journal chronologique à partir de la ligne 4). Les blocs sont côte à côte
       // horizontalement, séparés d'une colonne vide (voir _avoirsFindBlock).
       if (kind === 'ventes' && opts.avoirEntry && opts.avoirEntry.client) {
-        const ae = opts.avoirEntry;
-        const aloc = this._avoirsLocate(wbH);
-        if (aloc) {
-          const block = this._avoirsFindBlock(aloc.rows, ae.client);
-          if (block) {
-            startCombined();
-            const sc = block.startCol; const dateCol = sc, amtCol = sc + 1, numCol = sc + 2, typeCol = sc + 3;
-            if (block.isNew) {
-              putCell(aloc.sheetName, 1, sc, ae.client, 'Client (Avoirs)');
-              putCell(aloc.sheetName, 1, amtCol, 'SOMME AVOIR', 'En-tête (Avoirs)');
-              putCell(aloc.sheetName, 1, numCol, 'N° FACTURE', 'En-tête (Avoirs)');
-              putCell(aloc.sheetName, 1, typeCol, 'Type A/S', 'En-tête (Avoirs)');
-              putCell(aloc.sheetName, 2, sc, '/', 'Avoirs — repère');
-              putCell(aloc.sheetName, 2, numCol, '/', 'Avoirs — repère');
-              putCell(aloc.sheetName, 2, typeCol, '/', 'Avoirs — repère');
-            }
-            // Ligne libre du journal : première ligne vide (date ET montant) sous la ligne 3.
-            let freeRowIdx = -1; let lastUsedIdx = 2; // ligne total = index 2
-            for (let r = 3; r < aloc.rows.length; r++) {
-              const dv = (aloc.rows[r] || [])[dateCol]; const av = (aloc.rows[r] || [])[amtCol];
-              const rowEmpty = (dv == null || String(dv).trim() === '') && (av == null || String(av).trim() === '');
-              if (rowEmpty) { freeRowIdx = r; break; }
-              lastUsedIdx = r;
-            }
-            if (freeRowIdx < 0) {
-              // Pas de ligne vide sous ce client dans les lignes déjà utilisées par le tableau :
-              // on ajoute une nouvelle ligne en fin de tableau (aucune formule à recopier ici).
-              const rowNums = await this._sheetRowExcelNumbers(buf, aloc.sheetName);
-              const prevExcelRow = rowNums[lastUsedIdx];
-              if (prevExcelRow != null) { rowAppends.push({ sheetName: aloc.sheetName, prevExcelRow, colLetters: [] }); freeRowIdx = lastUsedIdx + 1; }
-            }
-            if (freeRowIdx >= 0) {
-              // Somme (ligne 3) : nouveau bloc → ce montant seul ; bloc existant → ancien total lu
-              // directement en ligne 3 + ce montant. Toujours en valeur absolue (A comme S).
-              const montantAbs = Math.round(Math.abs(ae.montant) * 100) / 100;
-              const oldTotal = block.isNew ? 0 : (this._vNum((aloc.rows[2] || [])[amtCol]) || 0);
-              const newTotal = Math.round((oldTotal + montantAbs) * 100) / 100;
-              putCell(aloc.sheetName, 2, amtCol, newTotal, 'Total avoirs (Avoirs)', this.fmt(newTotal));
-              // Date écrite en texte lisible (JJ/MM/AAAA) plutôt qu'en série Excel : cette colonne,
-              // neuve ou non, n'a pas de format de date garanti, donc une série s'afficherait en
-              // nombre brut (ex. 46131) au lieu d'une date.
-              putCell(aloc.sheetName, freeRowIdx, dateCol, this._isoToFr(ae.date), 'Date (Avoirs)');
-              putCell(aloc.sheetName, freeRowIdx, amtCol, montantAbs, 'Montant avoir (Avoirs)', this.fmt(montantAbs));
-              putCell(aloc.sheetName, freeRowIdx, numCol, ae.num, 'N° facture (Avoirs)');
-              putCell(aloc.sheetName, freeRowIdx, typeCol, ae.type, 'Type A/S (Avoirs)');
-              extraSheets.push(aloc.sheetName);
-            }
-          }
-        }
+        const done = await this._avoirsPlan(wbH, buf, opts.avoirEntry, () => startCombined(), putCell, rowAppends);
+        if (done) extraSheets.push(done);
       }
       if (extraSheets.length) combinedSheetName = [sheetName, ...extraSheets].join(', ');
       this._pendingWrite = editsBySheet
@@ -3070,6 +3106,7 @@ class Component {
       idFacture: find('id', 'facture'), numero: find('numero', 'facture'), client: find('nom', 'client') >= 0 ? find('nom', 'client') : find('client'),
       ttc: find('montant', 'ttc'), avoir: find('avoir'), dateFac: find('date', 'facture'), dateEch: find('date', 'echeance'),
       solde: find('solde'), etat: find('etat') >= 0 ? find('etat') : find('statut'),
+      regle: find('montant', 'regle') >= 0 ? find('montant', 'regle') : find('regle'), datePay: find('date', 'paiement'),
     };
     return { sheetName: sh.name, headerIdx: hi, dataStart: hi + 1, cols };
   }
@@ -3097,6 +3134,56 @@ class Component {
     const sh = wb.find(s => this._norm(s.name).indexOf('avoir') >= 0);
     if (!sh) return null;
     return { sheetName: sh.name, rows: sh.rows };
+  }
+  // Prépare l'écriture d'une entrée d'avoir dans l'onglet « Avoirs » : bloc client (créé si absent),
+  // ligne de journal libre (créée en fin de tableau si besoin) et total de la ligne 3 recalculé.
+  // Partagé par la saisie de vente et l'enregistrement de paiement — `start` ouvre la transaction
+  // combinée, `put` écrit une cellule, `rowAppends` reçoit les créations de ligne différées.
+  // Renvoie le nom de la feuille écrite, ou null si rien n'a pu être placé.
+  async _avoirsPlan(wb, buf, ae, start, put, rowAppends) {
+    const aloc = this._avoirsLocate(wb); if (!aloc) return null;
+    const block = this._avoirsFindBlock(aloc.rows, ae.client); if (!block) return null;
+    start();
+    const sc = block.startCol; const dateCol = sc, amtCol = sc + 1, numCol = sc + 2, typeCol = sc + 3;
+    if (block.isNew) {
+      put(aloc.sheetName, 1, sc, ae.client, 'Client (Avoirs)');
+      put(aloc.sheetName, 1, amtCol, 'SOMME AVOIR', 'En-tête (Avoirs)');
+      put(aloc.sheetName, 1, numCol, 'N° FACTURE', 'En-tête (Avoirs)');
+      put(aloc.sheetName, 1, typeCol, 'Type A/S', 'En-tête (Avoirs)');
+      put(aloc.sheetName, 2, sc, '/', 'Avoirs — repère');
+      put(aloc.sheetName, 2, numCol, '/', 'Avoirs — repère');
+      put(aloc.sheetName, 2, typeCol, '/', 'Avoirs — repère');
+    }
+    // Ligne libre du journal : première ligne vide (date ET montant) sous la ligne 3.
+    let freeRowIdx = -1; let lastUsedIdx = 2; // ligne total = index 2
+    for (let r = 3; r < aloc.rows.length; r++) {
+      const dv = (aloc.rows[r] || [])[dateCol]; const av = (aloc.rows[r] || [])[amtCol];
+      const rowEmpty = (dv == null || String(dv).trim() === '') && (av == null || String(av).trim() === '');
+      if (rowEmpty) { freeRowIdx = r; break; }
+      lastUsedIdx = r;
+    }
+    if (freeRowIdx < 0) {
+      // Pas de ligne vide sous ce client dans les lignes déjà utilisées par le tableau :
+      // on ajoute une nouvelle ligne en fin de tableau (aucune formule à recopier ici).
+      const rowNums = await this._sheetRowExcelNumbers(buf, aloc.sheetName);
+      const prevExcelRow = rowNums[lastUsedIdx];
+      if (prevExcelRow != null) { rowAppends.push({ sheetName: aloc.sheetName, prevExcelRow, colLetters: [] }); freeRowIdx = lastUsedIdx + 1; }
+    }
+    if (freeRowIdx < 0) return null;
+    // Somme (ligne 3) : nouveau bloc → ce montant seul ; bloc existant → ancien total lu
+    // directement en ligne 3 + ce montant. Toujours en valeur absolue (A comme S).
+    const montantAbs = Math.round(Math.abs(ae.montant) * 100) / 100;
+    const oldTotal = block.isNew ? 0 : (this._vNum((aloc.rows[2] || [])[amtCol]) || 0);
+    const newTotal = Math.round((oldTotal + montantAbs) * 100) / 100;
+    put(aloc.sheetName, 2, amtCol, newTotal, 'Total avoirs (Avoirs)', this.fmt(newTotal));
+    // Date écrite en texte lisible (JJ/MM/AAAA) plutôt qu'en série Excel : cette colonne,
+    // neuve ou non, n'a pas de format de date garanti, donc une série s'afficherait en
+    // nombre brut (ex. 46131) au lieu d'une date.
+    put(aloc.sheetName, freeRowIdx, dateCol, this._isoToFr(ae.date), 'Date (Avoirs)');
+    put(aloc.sheetName, freeRowIdx, amtCol, montantAbs, 'Montant avoir (Avoirs)', this.fmt(montantAbs));
+    put(aloc.sheetName, freeRowIdx, numCol, ae.num, 'N° facture (Avoirs)');
+    put(aloc.sheetName, freeRowIdx, typeCol, ae.type, 'Type A/S (Avoirs)');
+    return aloc.sheetName;
   }
   // Cherche le bloc du client (en-tête ligne 2, colonnes 0/5/10/15…) ; retourne la position du
   // 1er bloc dont le nom correspond, sinon la 1re position libre (nouveau bloc, en-têtes à créer).
@@ -3574,11 +3661,13 @@ class Component {
       out.onFlCancel = () => this.cancelAppendWrite();
     }
     if (wp) {
-      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'verif' ? `Appliquer les corrections dans « ${wp.fileName} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
+      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'verif' ? `Appliquer les corrections dans « ${wp.fileName} » ?` : wp.kind === 'paiementClient' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
       out.wpSubText = wp.kind === 'stock'
         ? `${wp.title || ''} — je remplis le poids et le prix par espèce/calibre. Le prix moyen se recalcule tout seul (formule non touchée). Sauvegarde datée avant l'écriture.`
         : wp.kind === 'verif'
         ? `${wp.title || ''} — feuille(s) « ${wp.sheetName} ». Chaque ligne ci-dessous montre la valeur actuelle et celle qui la remplacera. Rien d'autre n'est touché. Une copie de sauvegarde datée est faite avant l'écriture.`
+        : wp.kind === 'paiementClient'
+        ? `Feuille(s) « ${wp.sheetName} » — complète la ligne existante de cette facture (montant réglé, date du paiement, état), et l'onglet Avoirs si un avoir est saisi. Aucune ligne n'est ajoutée. Une copie de sauvegarde datée est faite avant l'écriture.`
         : wp.kind === 'cheque'
         ? `${wp.title || ''} — je remplis seulement les cases vides Date / Description / Montant de cette ligne déjà imprimée. Une copie de sauvegarde datée est faite avant l'écriture.`
         : wp.kind === 'annule'
@@ -5514,6 +5603,7 @@ class Component {
   // Vérification silencieuse au démarrage : calcule les écarts et les signale, SANS jamais écrire.
   async checkVerifsAtStartup() {
     try {
+      this.refreshPayIdFacture(); // ID Facture du suivi de paiement : lu du fichier dès qu'il est connecté
       const chk = await this._computeVerifs();
       const n = chk.avoirs.length + chk.etats.length;
       if (n) this.setState({ verifPending: { avoirs: chk.avoirs, etats: chk.etats } });
