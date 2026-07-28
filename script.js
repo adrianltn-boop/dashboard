@@ -220,7 +220,7 @@ class Component {
     empDocs: {}, empDelDoc: null, bankSalaryEmp: '', bankSalaryMonth: '',
     agenda: [], agendaMonth: null, agendaEdit: null, agendaDelAsk: null,
     payTrack: [], payDraft: null, payDelAsk: null,
-    restartRun: null, verifPending: null, venteAvoirAsk: null,
+    restartRun: null, verifPending: null, venteAvoirAsk: null, venteAvoirDispo: null,
     ventesSaisie: [], venteDraft: null,
     grenkeMan: [], grkDraft: null, grkDelAsk: null,
     achatsSaisie: [], achatDraft: null, chequiersLive: [], compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null, chqEditDraft: null,
@@ -965,7 +965,27 @@ class Component {
     const d = this.state.payDraft; if (d && !d.editing) this.setState({ payDraft: { ...d, id: next } });
   }
   venteDefault() { const t = this._payTodayIso(); return { id: this._venteNextId(), num: '', idFacture: '', client: '', date: t, delai: '30', datePrev: this._addDaysIso(t, 30), lignes: [this.compEmptyLigne()], tvaIrl: '', tvaFr: '', grenke: null, avoirActif: false, avoir: '', editing: false }; }
-  setVenteField(k, v) { const d = this.state.venteDraft || this.venteDefault(); const patch = { ...d, [k]: v }; if (k === 'delai') patch.datePrev = this._addDaysIso(d.date, Math.max(0, Math.min(30, Math.round(this._vNum(v))))); if (k === 'date') patch.datePrev = this._addDaysIso(v, Math.max(0, Math.min(30, Math.round(this._vNum(d.delai))))); this.setState({ venteDraft: patch }); }
+  setVenteField(k, v) { const d = this.state.venteDraft || this.venteDefault(); const patch = { ...d, [k]: v }; if (k === 'delai') patch.datePrev = this._addDaysIso(d.date, Math.max(0, Math.min(30, Math.round(this._vNum(v))))); if (k === 'date') patch.datePrev = this._addDaysIso(v, Math.max(0, Math.min(30, Math.round(this._vNum(d.delai))))); this.setState({ venteDraft: patch }); if (k === 'client') this._scheduleAvoirDispo(v); }
+  // Avoir disponible du client, lu dans l'onglet « Avoirs » (total du bloc, ligne 3). Différé pour
+  // ne pas relire le fichier à chaque frappe ; best-effort, n'empêche jamais la saisie.
+  _scheduleAvoirDispo(client) {
+    clearTimeout(this._avoirDispoT);
+    const name = String(client || '').trim();
+    if (!name) { this.setState({ venteAvoirDispo: null }); return; }
+    this._avoirDispoT = setTimeout(() => this._refreshAvoirDispo(name), 500);
+  }
+  async _refreshAvoirDispo(client) {
+    try {
+      const hi = this._writableHandleFor('ventes'); if (!hi || !hi.handle) return;
+      const file = await hi.handle.getFile(); const buf = await file.arrayBuffer();
+      const wb = await this.readWorkbook(buf);
+      const aloc = this._avoirsLocate(wb); if (!aloc) { this.setState({ venteAvoirDispo: null }); return; }
+      const block = this._avoirsFindBlock(aloc.rows, client);
+      if (!block || block.isNew) { this.setState({ venteAvoirDispo: { client, montant: 0 } }); return; }
+      const montant = Math.round((this._vNum((aloc.rows[2] || [])[block.startCol + 1]) || 0) * 100) / 100;
+      this.setState({ venteAvoirDispo: { client, montant } });
+    } catch (e) { /* best-effort : pas d'avoir affiché, la saisie continue */ }
+  }
   setVenteLigne(i, k, v) { const d = this.state.venteDraft || this.venteDefault(); const lignes = (d.lignes || []).map((l, j) => { if (j !== i) return l; const nl = { ...l, [k]: v }; if (k === 'espece') nl.calibre = (Component.ESP[v] || ['Standard'])[0]; return nl; }); this.setState({ venteDraft: { ...d, lignes } }); }
   addVenteLigne() { const d = this.state.venteDraft || this.venteDefault(); this.setState({ venteDraft: { ...d, lignes: [...(d.lignes || []), this.compEmptyLigne()] } }); }
   removeVenteLigne(i) { const d = this.state.venteDraft || this.venteDefault(); const lignes = (d.lignes || []).filter((l, j) => j !== i); this.setState({ venteDraft: { ...d, lignes: lignes.length ? lignes : [this.compEmptyLigne()] } }); }
@@ -1001,15 +1021,18 @@ class Component {
     // Montant total négatif → c'est un AVOIR : on demande confirmation avant d'enregistrer. Le
     // draft n'ayant pas bougé, la confirmation relance simplement commitVenteSaisie avec le drapeau.
     if (rec.ttc < 0 && !this._venteAvoirConfirmed) { this.setState({ venteAvoirAsk: { montant: rec.ttc } }); return; }
-    // Type de l'avoir client : S = montant total négatif confirmé (prioritaire), A = case Avoir
-    // cochée. Montant de l'avoir = valeur absolue du total si négatif, sinon le montant saisi.
-    const avoirType = rec.ttc < 0 ? 'S' : (avoir > 0 ? 'A' : null);
-    const avoirMontant = avoirType === 'S' ? Math.abs(rec.ttc) : avoir;
+    // Sens de l'avoir client :
+    //  · A = Ajout — une vente à total NÉGATIF crée de l'avoir : le total du client AUGMENTE ;
+    //  · S = Sortie — la case « Avoir » cochée consomme de l'avoir : le total du client DIMINUE.
+    const avoirType = rec.ttc < 0 ? 'A' : (avoir > 0 ? 'S' : null);
+    const avoirMontant = avoirType === 'A' ? Math.abs(rec.ttc) : avoir;
+    // Avoir consommé ≥ TTC → la facture est soldée immédiatement par l'avoir.
+    const soldeParAvoir = avoirType === 'S' && avoir >= ttc;
     // Écritures annexes embarquées dans la MÊME transaction que Factures (voir requestAppendPreview) :
-    //  · « Suivi des paiements » : ID Facture toujours (pour que les formules s'y accrochent), Avoir si > 0 ;
+    //  · « Suivi des paiements » : identité de la facture + avoir, solde et état ;
     //  · « Grenke » : une ligne de suivi si la vente est financée (le statut ETAT part de venteWriteValues) ;
     //  · « Avoirs » : bloc client (nouveau ou existant) si avoir coché ou montant négatif confirmé.
-    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, suiviAvoir: rec.idFacture ? { avoir, idFacture: rec.idFacture, num: rec.num, client, ttc, date: rec.date, datePrev, isAvoir: !!avoirType } : null, grenkeRow: grenke ? { num: this._numSansPrefixe(rec.num), client, ttc } : null, avoirEntry: avoirType ? { client, num: rec.num, montant: avoirMontant, type: avoirType, date: rec.date } : null, after: () => this._venteAfterWrite(rec), afterClose: () => {
+    this.requestAppendPreview('ventes', this.venteWriteValues(rec), { refuseFormula: true, suiviAvoir: { avoir, idFacture: rec.idFacture, num: rec.num, client, ttc, date: rec.date, datePrev, etat: this._venteEtat(rec, avoir), soldeParAvoir }, grenkeRow: grenke ? { num: this._numSansPrefixe(rec.num), client, ttc } : null, avoirEntry: avoirType ? { client, num: rec.num, montant: avoirMontant, type: avoirType, date: rec.date } : null, after: () => this._venteAfterWrite(rec), afterClose: () => {
       if (this._stockDir) { this._writeQueue = [() => this.requestStockPreview(rec, 'vente')]; this._runNextWrite(); }
     } });
   }
@@ -1960,7 +1983,16 @@ class Component {
   achatWriteValues(rec) { const immediat = !!rec.paiementImmediat; return { ref: rec.num || '', annee: String(rec.date || '').slice(0, 4), date: rec.date || '', partner: rec.pecheur || '', amt: rec.total, cheque: rec.paiement === 'cheque' ? (rec.chequeNum || '') : (rec.paiement === 'autre' ? (rec.observation || '') : ''), paid: immediat ? rec.total : '', paidDate: immediat ? this._payTodayIso() : '', solde: immediat ? 0 : rec.total }; }
   // Le statut (colonne ETAT) part de la même clé « status » déjà mappée dans Paramètres → aucune
   // colonne codée en dur : une vente financée par Grenke est marquée « En attente paiement Grenke ».
-  venteWriteValues(rec) { const delai = Math.max(0, Math.min(30, Math.round(this._vNum(rec.delai)))); return { idFacture: rec.idFacture || '', ref: rec.num || '', partner: rec.client || '', date: rec.date || '', ht: rec.ht, tvaIr: rec.tvaIrl, tvaFr: rec.tvaFr, grenke: rec.grenke ? rec.grenke.montant : '', ttc: rec.ttc, delai: delai ? (delai + ' jrs') : '', datePrev: rec.datePrev || '', status: rec.grenke ? Component.GRENKE_STATUT : '' }; }
+  // État d'une vente : financée Grenke, avoir créé (total négatif), soldée par un avoir consommé
+  // (avoir ≥ TTC), sinon en attente de règlement. Le montant TTC reste TOUJOURS le prix normal :
+  // l'avoir ne le diminue pas, il se déduit du solde.
+  _venteEtat(rec, avoir) {
+    if (rec.grenke) return Component.GRENKE_STATUT;
+    if (rec.ttc < 0) return Component.ETAT_AVOIR;
+    if (avoir > 0 && avoir >= rec.ttc) return 'PAYÉE';
+    return 'EN ATTENTE';
+  }
+  venteWriteValues(rec) { const delai = Math.max(0, Math.min(30, Math.round(this._vNum(rec.delai)))); return { idFacture: rec.idFacture || '', ref: rec.num || '', partner: rec.client || '', date: rec.date || '', ht: rec.ht, tvaIr: rec.tvaIrl, tvaFr: rec.tvaFr, grenke: rec.grenke ? rec.grenke.montant : '', ttc: rec.ttc, delai: delai ? (delai + ' jrs') : '', datePrev: rec.datePrev || '', status: this._venteEtat(rec, this._vNum(rec.avoir)) }; }
   // N° de facture sans son préfixe (« INV-5720 » → « 5720 ») — format attendu par l'onglet Grenke.
   _numSansPrefixe(num) { return String(num == null ? '' : num).trim().replace(/^[^0-9]+/, ''); }
 
@@ -2261,36 +2293,41 @@ class Component {
         rowAppends.push({ sheetName: shLoc.sheetName, prevExcelRow, colLetters: shLoc.formulaCols });
         return { rowIdx: lastContentIdx + 1, exists: false };
       };
-      if (kind === 'ventes' && opts.suiviAvoir && opts.suiviAvoir.idFacture) {
+      if (kind === 'ventes' && opts.suiviAvoir) {
         const sv = opts.suiviAvoir;
         const sloc = this._suiviLocate(wbH);
-        if (sloc && sloc.cols.idFacture >= 0) {
+        // Repère de ligne : l'ID Facture s'il est disponible, sinon le numéro de facture. Sans ce
+        // repli, une colonne « ID Facture » non réglée dans Paramètres faisait sauter TOUT le bloc
+        // (ni identité de facture ni montant écrits dans le suivi).
+        const keyCol = (sv.idFacture && sloc && sloc.cols.idFacture >= 0) ? sloc.cols.idFacture : (sloc ? sloc.cols.numero : -1);
+        const keyVal = (sv.idFacture && sloc && sloc.cols.idFacture >= 0) ? sv.idFacture : sv.num;
+        if (sloc && keyCol >= 0 && keyVal) {
           // formulaCols vide : on n'accroche plus de formules dans le suivi, on écrit des VALEURS
           // directes. La ligne est donc créée vide (placeRow → rowAppends avec colLetters=[]) puis
           // remplie ci-dessous ; aucune ligne « préformatée » n'est réutilisée.
           sloc.formulaCols = [];
-          const place = await placeRow(sloc, sloc.cols.idFacture, sv.idFacture);
+          const place = await placeRow(sloc, keyCol, keyVal);
           if (place) {
             startCombined();
-            if (place.exists) {
-              // Ligne déjà présente pour cet ID (ré-exécution) : on met seulement l'Avoir à jour.
-              if (sv.avoir && sloc.cols.avoir >= 0) putCell(sloc.sheetName, place.rowIdx, sloc.cols.avoir, sv.avoir, 'Avoir (Suivi des paiements)', this.fmt(sv.avoir));
-            } else {
-              // Nouvelle ligne : on écrit toutes les valeurs (colonnes détectées par _suiviLocate).
-              const putSv = (key, val, label, display) => { const ci = sloc.cols[key]; if (ci == null || ci < 0 || val === '' || val == null) return; putCell(sloc.sheetName, place.rowIdx, ci, val, label, display); };
-              const putSvDate = (key, iso, label) => putCellDate(sloc.sheetName, place.rowIdx, sloc.cols[key], iso, label);
-              putSv('idFacture', sv.idFacture, 'ID Facture (Suivi des paiements)');
-              putSv('numero', sv.num, 'Numéro facture (Suivi des paiements)');
-              putSv('client', sv.client, 'Nom client (Suivi des paiements)');
-              putSv('ttc', sv.ttc, 'Montant TTC (Suivi des paiements)', this.fmt(sv.ttc));
-              if (sv.avoir) putSv('avoir', sv.avoir, 'Avoir (Suivi des paiements)', this.fmt(sv.avoir));
-              putSvDate('dateFac', sv.date, 'Date de facture (Suivi des paiements)');
-              putSvDate('dateEch', sv.datePrev, 'Date échéance (Suivi des paiements)');
-              putSv('solde', sv.ttc, 'Solde restant (Suivi des paiements)', this.fmt(sv.ttc)); // solde initial = montant total, rien encore payé
-              // Une vente qui est un avoir (total négatif confirmé ou case Avoir cochée) n'est pas
-              // « en attente » de paiement : elle est marquée AVOIR (cellule surlignée en bleu).
-              putSv('etat', sv.isAvoir ? Component.ETAT_AVOIR : 'EN ATTENTE', 'Etat (Suivi des paiements)');
-            }
+            const putSv = (key, val, label, display) => { const ci = sloc.cols[key]; if (ci == null || ci < 0 || val === '' || val == null) return; putCell(sloc.sheetName, place.rowIdx, ci, val, label, display); };
+            const putSvDate = (key, iso, label) => putCellDate(sloc.sheetName, place.rowIdx, sloc.cols[key], iso, label);
+            // Identité de la facture : réécrite même sur une ligne existante (ré-exécution), pour
+            // qu'une ligne partiellement remplie soit complétée plutôt que laissée en l'état.
+            putSv('idFacture', sv.idFacture, 'ID Facture (Suivi des paiements)');
+            putSv('numero', sv.num, 'Numéro facture (Suivi des paiements)');
+            putSv('client', sv.client, 'Nom client (Suivi des paiements)');
+            // Montant TTC = prix normal : l'avoir ne le diminue jamais, il se déduit du solde.
+            putSv('ttc', sv.ttc, 'Montant TTC (Suivi des paiements)', this.fmt(sv.ttc));
+            if (sv.avoir) putSv('avoir', sv.avoir, 'Avoir (Suivi des paiements)', this.fmt(sv.avoir));
+            putSvDate('dateFac', sv.date, 'Date de facture (Suivi des paiements)');
+            putSvDate('dateEch', sv.datePrev, 'Date échéance (Suivi des paiements)');
+            const solde = Math.round((sv.ttc - (sv.avoir || 0)) * 100) / 100;
+            putSv('solde', solde, 'Solde restant (Suivi des paiements)', this.fmt(solde));
+            // Avoir ≥ TTC : la facture est réglée le jour même par l'avoir → date de paiement remplie.
+            if (sv.soldeParAvoir) putSvDate('datePay', sv.date, 'Date du paiement (Suivi des paiements)');
+            putSv('etat', sv.etat, 'Etat (Suivi des paiements)');
+            // Avoir supérieur au TTC : le surplus reste au crédit du client, on le signale.
+            if (sv.avoir > sv.ttc && sv.ttc >= 0) preview.push({ label: '⚠ Avoir supérieur au montant TTC', col: '—', value: `Le surplus de ${this.fmt(Math.round((sv.avoir - sv.ttc) * 100) / 100)} retourne dans les avoirs.` });
             extraSheets.push(sloc.sheetName);
           }
         }
@@ -3197,11 +3234,11 @@ class Component {
       if (prevExcelRow != null) { rowAppends.push({ sheetName: aloc.sheetName, prevExcelRow, colLetters: [] }); freeRowIdx = lastUsedIdx + 1; }
     }
     if (freeRowIdx < 0) return null;
-    // Somme (ligne 3) : nouveau bloc → ce montant seul ; bloc existant → ancien total lu
-    // directement en ligne 3 + ce montant. Toujours en valeur absolue (A comme S).
+    // Somme (ligne 3) : ancien total lu en ligne 3, puis A = Ajout (avoir créé → +) et
+    // S = Sortie (avoir consommé → −). Le montant du journal reste toujours en valeur absolue.
     const montantAbs = Math.round(Math.abs(ae.montant) * 100) / 100;
     const oldTotal = block.isNew ? 0 : (this._vNum((aloc.rows[2] || [])[amtCol]) || 0);
-    const newTotal = Math.round((oldTotal + montantAbs) * 100) / 100;
+    const newTotal = Math.round((oldTotal + (ae.type === 'S' ? -montantAbs : montantAbs)) * 100) / 100;
     put(aloc.sheetName, 2, amtCol, newTotal, 'Total avoirs (Avoirs)', this.fmt(newTotal));
     // Date en SÉRIE Excel (RÈGLE « Dates Excel ») : putDate déclare aussi la colonne dans dateCols
     // pour qu'un format de date lui soit appliqué — la ligne étant neuve, elle n'en hérite d'aucun.
@@ -6742,6 +6779,9 @@ class Component {
     const vPrevIso = vd.datePrev || this._addDaysIso(vd.date, vDelaiN);
     const venteDraft = { id: vd.id, num: vd.num || '', client: vd.client || '', date: vd.date || '', delai: String(vDelaiN), datePrev: vPrevIso ? ptFrDate(vPrevIso) : '—', tvaIrl: vd.tvaIrl === 0 ? '' : (vd.tvaIrl || ''), tvaFr: vd.tvaFr === 0 ? '' : (vd.tvaFr || ''), avoir: vd.avoir === 0 ? '' : (vd.avoir || '') };
     const venteAvoirActif = !!vd.avoirActif;
+    const vad = this.state.venteAvoirDispo;
+    const venteAvoirDispoShow = !!(vad && vad.client === (vd.client || '').trim() && vad.montant > 0);
+    const venteAvoirDispoText = venteAvoirDispoShow ? `Avoir disponible : ${this.fmt(vad.montant)}` : '';
     const venteNumHint = (vd.numFromFile && vd.num) ? `✓ prochaine facture du fichier${vd.numRow ? ' · ligne ' + vd.numRow : ''}` : '';
     const venteNumHintStyle = 'font-size:10.5px;font-weight:600;color:#0e7a46;text-transform:none;letter-spacing:0;margin-left:8px';
     const venteDraftHt = this.fmt(vHt); const venteDraftTtc = this.fmt(vTtc);
@@ -8546,7 +8586,7 @@ class Component {
       compPayModes, achatIsCheque, achatIsAutre, onAchatObservation, onAchatChequier, onAchatChequeNum, chequierOptions, achatChqHint,
       venteDraft, venteDraftLignes, venteDraftHt, venteDraftTtc, venteDelaiOptions, venteEditing, vsSaveLabel,
       onVSNum, onVSClient, onVSDate, onVSDelai, onVSTvaIrl, onVSTvaFr, onVSCommit, onVSReset, onVenteAddLigne, venteNumHint, venteNumHintStyle,
-      venteAvoirActif, onVSAvoirToggle, onVSAvoir,
+      venteAvoirActif, onVSAvoirToggle, onVSAvoir, venteAvoirDispoShow, venteAvoirDispoText,
       venteGrenkeBtnLabel, venteGrenkeBtnStyle, onVenteGrenkeOpen,
       venteGrenkeOpen, vgMontant, vgP1, vgP2, vgCharges, vgRest, onVgMontant, onVgP1, onVgP2, onVgCharges, onVgSave, onVgCancel,
       gmList, gmSummary, gmEmpty, grkDraft, grkDraftRem, grkDraftRecv, grkStatutOptions, grkEditing, grkSaveLabel,

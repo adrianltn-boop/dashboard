@@ -600,6 +600,9 @@
                   <sc-if value="{{ venteAvoirActif }}" hint-placeholder-val="{{ false }}">
                     <div style="flex:0 0 150px"><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:'IBM Plex Mono',monospace;text-align:right" type="text" inputmode="decimal" value="{{ venteDraft.avoir }}" oninput="{{ onVSAvoir }}" placeholder="0"></div>
                   </sc-if>
+                  <sc-if value="{{ venteAvoirDispoShow }}" hint-placeholder-val="{{ false }}">
+                    <span style="padding:5px 10px;border-radius:9px;background:#eef4fe;border:1px solid #cadcfa;font-size:12px;font-weight:600;color:#1a56db">{{ venteAvoirDispoText }}</span>
+                  </sc-if>
                 </div>
               </div>
 
