@@ -4541,9 +4541,18 @@ class Component {
       if (solde != null) paid = Math.max(0, Math.round((gross - reste) * 100) / 100);
       let status = reste > 0.005 ? 'Non payé' : 'Payé';
       if (ci.status >= 0) { const st = norm(f[ci.status]); if (st.includes('retard') || st.includes('impay')) status = 'Retard'; }
+      // Le fichier fait foi pour le Solde affiché (choix assumé, voir l'aide « Restant à payer »)
+      // — mais quand Solde ET Réglé sont TOUS LES DEUX renseignés dans Excel et qu'ils se
+      // contredisent au regard du Montant de la facture, c'est le signe d'une formule cassée ou
+      // d'une saisie oubliée : on le signale (⚠) sans changer quelle valeur est affichée.
+      let paymentWarning = null;
+      if (soldeRaw != null && paidRaw != null) {
+        const expectedReste = Math.max(0, Math.round((gross - paidRaw) * 100) / 100);
+        if (Math.abs(soldeRaw - expectedReste) > 1) paymentWarning = `Écart : Solde Excel (${this.fmt(Math.max(0, soldeRaw))}) ≠ Montant − Réglé (${this.fmt(expectedReste)}).`;
+      }
       const chq = ci.chq >= 0 ? String(f[ci.chq] == null ? '' : f[ci.chq]).trim() : '';
       const colA = String(f[0] == null ? '' : f[0]).trim();
-      list.push({ y: dt.y, m: dt.m, d: dt.d, ref: (ci.ref >= 0 && f[ci.ref]) || 'OP-' + (i + 1), type, partner: (ci.partner >= 0 && f[ci.partner]) || '—', cat: (ci.cat >= 0 && f[ci.cat]) || 'Autre', amt: type === 'Achat' ? -gross : gross, paid, reste, status, chq, colA }); });
+      list.push({ y: dt.y, m: dt.m, d: dt.d, ref: (ci.ref >= 0 && f[ci.ref]) || 'OP-' + (i + 1), type, partner: (ci.partner >= 0 && f[ci.partner]) || '—', cat: (ci.cat >= 0 && f[ci.cat]) || 'Autre', amt: type === 'Achat' ? -gross : gross, paid, reste, status, paymentWarning, chq, colA }); });
     list.sort((a, b) => (b.y * 12 + b.m) - (a.y * 12 + a.m) || b.d - a.d);
     return { list, skipped };
   }
@@ -4608,12 +4617,21 @@ class Component {
       const amountSaysPaid = _soldeRaw != null ? Math.max(0, _soldeRaw) <= 0.005 : (_paidRaw != null ? _paidRaw >= Math.abs(ttc) - 0.005 : false);
       const dateSaysPaid = !!payeLeOk && ((_soldeRaw == null && _paidRaw == null) ? !/partiel|acompte/.test(stTxt) : amountSaysPaid);
       const paymentStatus = this.paymentStatusFromText(stTxt);
-      const statusPaid = paymentStatus === 'Payée' || (!paymentStatus && dateSaysPaid);
-      if (statusPaid) paid = Math.abs(ttc);
+      let statusPaid = paymentStatus === 'Payée' || (!paymentStatus && dateSaysPaid);
+      // Même principe que pour les ventes (applySalesPayments) : un texte de statut « Payée »
+      // ne doit pas effacer un reste dû clairement indiqué par les montants bruts (Solde/Réglé).
+      // Sans ce garde-fou, une facture fournisseur au statut resté figé sur « Payée » sortait
+      // silencieusement de « Je dois » alors que Solde indiquait encore un montant positif.
+      const impliedReste = _soldeRaw != null ? Math.max(0, _soldeRaw) : (_paidRaw != null ? Math.max(0, Math.abs(ttc) - _paidRaw) : null);
+      let paymentWarning = null;
+      if (paymentStatus === 'Payée' && impliedReste != null && impliedReste > 0.5) {
+        paymentWarning = `Le statut indique « Payée » mais ${_soldeRaw != null ? 'le solde Excel indique encore ' + this.fmt(impliedReste) + ' dû' : 'le montant réglé n’atteint pas le TTC'}.`;
+        statusPaid = false; // les montants priment : on garde le reste réel, on ne l'efface pas
+      } else if (statusPaid) paid = Math.abs(ttc);
       let delaiJ = null; if (ci.delai >= 0) { const s = norm(f[ci.delai]); if (s) { if (/recept|comptant|immediat|livraison/.test(s)) delaiJ = 0; else { const dm = s.match(/(\d+)/); if (dm) delaiJ = +dm[1]; } } }
       const due = ci.due >= 0 && this.parseDate(f[ci.due]) ? this.parseDate(f[ci.due]) : this.addDays(dt, delaiJ != null ? delaiJ : 30);
       const htv = ci.ht >= 0 ? Math.abs(this.parseAmount(f[ci.ht]) || 0) : Math.abs(ttc);
-      list.push({ d: this.iso(dt), due: this.iso(due), ref: (ci.ref >= 0 && f[ci.ref]) || 'FAC-' + (i + 1), sens, partner: (ci.partner >= 0 && f[ci.partner]) || '—', cat: (ci.cat >= 0 && f[ci.cat]) || 'Autre', ttc: Math.abs(ttc), ht: htv, paid: Math.max(0, Math.min(Math.abs(ttc), paid)), statusPaid: !!statusPaid, paymentStatus, stText: ci.status >= 0 ? (f[ci.status] || '') : '', delai: delaiJ });
+      list.push({ d: this.iso(dt), due: this.iso(due), ref: (ci.ref >= 0 && f[ci.ref]) || 'FAC-' + (i + 1), sens, partner: (ci.partner >= 0 && f[ci.partner]) || '—', cat: (ci.cat >= 0 && f[ci.cat]) || 'Autre', ttc: Math.abs(ttc), ht: htv, paid: Math.max(0, Math.min(Math.abs(ttc), paid)), statusPaid: !!statusPaid, paymentStatus, paymentWarning, stText: ci.status >= 0 ? (f[ci.status] || '') : '', delai: delaiJ });
     });
     return { list, skipped };
   }
@@ -6523,7 +6541,7 @@ class Component {
     const grenkeLinkCardStyle = 'width:560px;max-width:100%;max-height:88vh;overflow:auto;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px';
     const grenkeUnlinkStyle = 'padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#b91c1c;background:#fff;border:1px solid #f0c9c9;cursor:pointer;font-family:inherit';
     const grenkeAutoStyle = 'padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#69788c;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit';
-    const achatAll = (isAchatView ? scoped : []).map(r => { const gross = Math.abs(r.amt); const paid = r.paid != null ? r.paid : (r.status === 'Payé' ? gross : 0); const reste = r.reste != null ? r.reste : Math.max(0, gross - paid); const st = reste > 0.005 ? (r.status === 'Retard' ? 'Retard' : 'Non payé') : 'Payé'; const annulled = isAnnule(r); return { date: `${this.dd(r.d)}/${this.dd(r.m)}`, ref: r.ref, partner: (r.manual ? '✎ ' : '') + r.partner, paidStr: this.fmt(paid), resteStr: this.fmt(reste), resteColor: reste > 0.005 ? red : green, status: st, statusStyle: st === 'Payé' ? `${badge}background:#e7f5ec;color:${green}` : st === 'Retard' ? `${badge}background:#fdeaea;color:${red}` : `${badge}background:#fef4e6;color:${amber}`, statusButtonStyle: (st === 'Payé' ? `${badge}background:#e7f5ec;color:${green}` : st === 'Retard' ? `${badge}background:#fdeaea;color:${red}` : `${badge}background:#fef4e6;color:${amber}`) + ';border:none;cursor:default;font-family:inherit', onResolve: null, statusTitle: '', onTrash: () => this.setState({ trashAsk: { kind: 'op', key: this.opHideKey(r), label: 'Facture ' + (r.ref || '—') + ' · ' + (r.partner || '—') + ' · ' + this.fmt(gross) } }), trashStyle: trashBtnStyle, annulled, notAnnulled: !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none', onCancel: () => this.requestCancelPreview('operations', r.ref), cancelStyle: cancelBtnStyle, onRestore: () => this.requestCancelPreview('operations', r.ref, { restore: true }), restoreStyle: restoreBtnStyle, annuleBadgeStyle }; });
+    const achatAll = (isAchatView ? scoped : []).map(r => { const gross = Math.abs(r.amt); const paid = r.paid != null ? r.paid : (r.status === 'Payé' ? gross : 0); const reste = r.reste != null ? r.reste : Math.max(0, gross - paid); const st = reste > 0.005 ? (r.status === 'Retard' ? 'Retard' : 'Non payé') : 'Payé'; const annulled = isAnnule(r); const opWarn = r.paymentWarning || null; return { date: `${this.dd(r.d)}/${this.dd(r.m)}`, ref: r.ref, partner: (r.manual ? '✎ ' : '') + r.partner, paidStr: this.fmt(paid), resteStr: this.fmt(reste), resteColor: reste > 0.005 ? red : green, status: st + (opWarn ? ' ⚠' : ''), statusStyle: st === 'Payé' ? `${badge}background:#e7f5ec;color:${green}` : st === 'Retard' ? `${badge}background:#fdeaea;color:${red}` : `${badge}background:#fef4e6;color:${amber}`, statusButtonStyle: (st === 'Payé' ? `${badge}background:#e7f5ec;color:${green}` : st === 'Retard' ? `${badge}background:#fdeaea;color:${red}` : `${badge}background:#fef4e6;color:${amber}`) + ';border:none;cursor:default;font-family:inherit', onResolve: null, statusTitle: opWarn || '', onTrash: () => this.setState({ trashAsk: { kind: 'op', key: this.opHideKey(r), label: 'Facture ' + (r.ref || '—') + ' · ' + (r.partner || '—') + ' · ' + this.fmt(gross) } }), trashStyle: trashBtnStyle, annulled, notAnnulled: !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none', onCancel: () => this.requestCancelPreview('operations', r.ref), cancelStyle: cancelBtnStyle, onRestore: () => this.requestCancelPreview('operations', r.ref, { restore: true }), restoreStyle: restoreBtnStyle, annuleBadgeStyle }; });
     const achatStatusVals = [...new Set(achatAll.map(t => t.status))];
     const achatStatusEff = effStatus('achat', achatStatusVals);
     const achatStatusChips = statusChipsFor('achat', achatStatusVals);
