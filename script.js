@@ -2240,7 +2240,10 @@ class Component {
   }
 
   // Insère une nouvelle <row> (cas où il n'y a plus de ligne vide préformatée). Préserve tout le reste.
-  async _appendXlsxRow(buf, sheetName, excelRow, colVals) {
+  // dateColIdxs (Set optionnel) : colonnes à formater en date Excel (RÈGLE « Dates Excel ») — une
+  // ligne toute neuve n'hérite d'AUCUN format, donc sans ce marquage une date écrite ici s'affiche
+  // en nombre de série brut (ex. 46261) au lieu d'un JJ/MM/AAAA.
+  async _appendXlsxRow(buf, sheetName, excelRow, colVals, dateColIdxs) {
     const files = await this.unzipAll(buf); const dec = new TextDecoder(); const enc = new TextEncoder();
     const wbXml = dec.decode(files['xl/workbook.xml'] || new Uint8Array());
     const relsXml = dec.decode(files['xl/_rels/workbook.xml.rels'] || new Uint8Array());
@@ -2251,15 +2254,18 @@ class Component {
     let xml = dec.decode(files[target]);
     const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const colName = n => { let s = '', m = n; while (m > 0) { const r = (m - 1) % 26; s = String.fromCharCode(65 + r) + s; m = Math.floor((m - 1) / 26); } return s; };
+    const dateSet = dateColIdxs || new Set();
+    const _mark = dateSet.size ? this._buildMarkStyler(dec.decode(files['xl/styles.xml'] || new Uint8Array())) : null;
     const cols = Object.keys(colVals).map(Number).sort((a, b) => a - b);
     let cellsXml = '';
-    cols.forEach(ci => { const ref = colName(ci + 1) + excelRow; const v = colVals[ci]; const s = String(v == null ? '' : v).trim(); if (s === '') return; const num = this._editNumeric(s); cellsXml += num != null ? `<c r="${ref}"><v>${num}</v></c>` : `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`; });
+    cols.forEach(ci => { const ref = colName(ci + 1) + excelRow; const v = colVals[ci]; const s = String(v == null ? '' : v).trim(); if (s === '') return; const num = this._editNumeric(s); const styleAttr = (_mark && dateSet.has(ci)) ? ` s="${_mark.mapDateStyle(0)}"` : ''; cellsXml += num != null ? `<c r="${ref}"${styleAttr}><v>${num}</v></c>` : `<c r="${ref}"${styleAttr} t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`; });
     const rowXml = `<row r="${excelRow}">${cellsXml}</row>`;
     if (/<\/sheetData>/.test(xml)) xml = xml.replace('</sheetData>', rowXml + '</sheetData>');
     else if (/<sheetData\/>/.test(xml)) xml = xml.replace('<sheetData/>', `<sheetData>${rowXml}</sheetData>`);
     else throw new Error('structure de feuille inattendue — ajout annulé');
     xml = xml.replace(/(<dimension[^>]*ref=")([A-Z]+)(\d+):([A-Z]+)(\d+)("[^>]*\/>)/, (m, a, c1, r1, c2, r2, z) => a + c1 + r1 + ':' + c2 + Math.max(+r2, excelRow) + z);
     files[target] = enc.encode(xml);
+    if (_mark) { const ns = _mark.finalize(); if (ns) files['xl/styles.xml'] = enc.encode(ns); }
     const entries = Object.keys(files).map(name => ({ name, bytes: files[name] }));
     return this.zipBuild(entries, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   }
@@ -2311,6 +2317,12 @@ class Component {
       const missingHdr = colIdxs.filter(ci => !String(hdrRow[ci] == null ? '' : hdrRow[ci]).trim());
       if (colIdxs.length && missingHdr.length === colIdxs.length) throw new Error(`la structure de « ${sheetName} » a changé (en-têtes introuvables ligne ${hdrIdx + 1}) — rouvrez le réglage des colonnes dans Paramètres`);
       const colVals = {}; const preview = [];
+      // Déclaré ICI (avant la boucle) et non plus seulement pour les écritures secondaires
+      // (avoir/Grenke via putDate) : sans ça, la date PRINCIPALE de cette ligne (celle de la
+      // saisie elle-même) n'était jamais marquée comme colonne-date — sur une ligne neuve
+      // (mode 'append') ou une ligne vide préformatée jamais utilisée, elle s'affichait donc en
+      // nombre de série brut (ex. 46261) au lieu d'une date JJ/MM/AAAA (RÈGLE « Dates Excel »).
+      const dateCols = {};
       fields.forEach(f => {
         const ci = colsMap[f.key]; const raw = valsByField[f.key];
         // Ne JAMAIS écraser un n° de facture déjà pré-imprimé : on garde celui du fichier.
@@ -2318,7 +2330,7 @@ class Component {
         const s = (raw == null ? '' : String(raw)).trim();
         if (dateFields[f.key] && s !== '') {
           const serial = this._excelSerial(raw); // écrit une VRAIE date Excel (série), affiche JJ/MM/AAAA
-          if (serial != null) { colVals[ci] = serial; preview.push({ label: f.label, col: colName(ci + 1), value: this._isoToFr(raw) }); return; }
+          if (serial != null) { colVals[ci] = serial; (dateCols[sheetName] = dateCols[sheetName] || new Set()).add(Number(ci)); preview.push({ label: f.label, col: colName(ci + 1), value: this._isoToFr(raw) }); return; }
         }
         if (s !== '') colVals[ci] = raw;
         preview.push({ label: f.label, col: colName(ci + 1), value: s === '' ? '—' : s });
@@ -2341,7 +2353,9 @@ class Component {
       // une ligne libre) dans UNE seule transaction editsBySheet — même mécanisme que l'achat pour
       // ses écritures multi-feuilles (pêcheur + chéquier), un seul aperçu/confirmation.
       let editsBySheet = null; let verifyTargets = null; let combinedSheetName = sheetName;
-      const rowAppends = []; const extraSheets = []; const dateCols = {};
+      // dateCols déjà déclaré plus haut (avant la boucle fields.forEach) — réutilisé ici pour les
+      // écritures secondaires (avoir/Grenke via putCellDate), pas de redéclaration.
+      const rowAppends = []; const extraSheets = [];
       // Les écritures secondaires ci-dessous rejoignent l'écriture Factures dans UNE seule
       // transaction editsBySheet (un seul aperçu, une seule confirmation, une seule sauvegarde).
       const startCombined = () => {
@@ -2477,7 +2491,9 @@ class Component {
       if (extraSheets.length) combinedSheetName = [sheetName, ...extraSheets].join(', ');
       this._pendingWrite = editsBySheet
         ? { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: combinedSheetName, editsBySheet, verifyTargets, rowAppends, dateCols, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null }
-        : { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: loc.mode, colVals, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null };
+        // dateCols inclus ici aussi (cas simple mono-feuille, sans avoir/Grenke combinés) — sinon la
+        // date principale de la ligne perdait son format lors de l'écriture réelle (RÈGLE « Dates Excel »).
+        : { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: loc.mode, colVals, dateCols, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null };
       this.setState({ writePreview: { kind, fileName: hi.name, sheetName: combinedSheetName, excelRow: editsBySheet ? null : loc.excelRow, rows: preview, status: null } });
     } catch (e) {
       const tail = kind === 'ventes' ? " La vente n'a PAS été enregistrée — corrigez le réglage de l'écriture puis recommencez." : ' Votre saisie est enregistrée dans le tableau de bord.';
@@ -4051,7 +4067,7 @@ class Component {
       // 3) ÉCRITURE (garde anti-formule sur le chemin patch)
       let patched;
       if (pw.editsBySheet) patched = await this.patchXlsxFile(buf, pw.editsBySheet, { refuseFormula: pw.refuseFormula, markStyle: true, allowFormulaCols: pw.allowFormulaCols, dateCols: pw.dateCols }); // écriture multi-feuilles (stock)
-      else if (pw.mode === 'append') patched = await this._appendXlsxRow(buf, pw.sheetName, pw.excelRow, pw.colVals);
+      else if (pw.mode === 'append') patched = await this._appendXlsxRow(buf, pw.sheetName, pw.excelRow, pw.colVals, pw.dateCols && pw.dateCols[pw.sheetName]);
       else { const edits = {}; edits[pw.sheetName] = {}; Object.keys(pw.colVals).forEach(ci => { edits[pw.sheetName][pw.previewIdx + ':' + ci] = pw.colVals[ci]; }); patched = await this.patchXlsxFile(buf, edits, { refuseFormula: pw.refuseFormula, markStyle: true, allowFormulaCols: pw.allowFormulaCols, dateCols: pw.dateCols }); }
       const patchedBuf = await patched.arrayBuffer();
       // 4) RELECTURE DE CONTRÔLE (avant même d'écrire le disque : on vérifie le blob produit)
