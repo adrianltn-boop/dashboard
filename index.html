@@ -2067,7 +2067,12 @@
               <div style="display:grid;grid-template-columns:1fr 118px 90px 108px 100px 96px 80px;gap:8px;align-items:center;padding:{{ rowPad }};border-top:1px solid #f1f4f8;font-size:13px">
                 <div style="display:flex;align-items:center;gap:10px;min-width:0">
                   <div style="{{ f.av }}">{{ f.ini }}</div>
-                  <span style="color:#0e1b2e;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.name }}</span>
+                  <div style="min-width:0">
+                    <div style="color:#0e1b2e;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.name }}</div>
+                    <sc-if value="{{ f.avoirLabel }}" hint-placeholder-val="{{ false }}">
+                      <div style="font-size:11px;font-weight:600;color:#15803d;margin-top:1px">{{ f.avoirLabel }}</div>
+                    </sc-if>
+                  </div>
                 </div>
                 <span style="color:#69788c;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.tag }}</span>
                 <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#3a4a5e">{{ f.ops }}</span>

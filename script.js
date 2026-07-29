@@ -223,7 +223,7 @@ class Component {
     restartRun: null, verifPending: null, venteAvoirAsk: null, venteAvoirDispo: null, avoirManuel: null,
     ventesSaisie: [], venteDraft: null,
     grenkeMan: [], grkDraft: null, grkDelAsk: null,
-    achatsSaisie: [], achatDraft: null, chequiersLive: [], compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null, chqEditDraft: null, stockRoomAlert: null,
+    achatsSaisie: [], achatDraft: null, chequiersLive: [], compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null, chqEditDraft: null, stockRoomAlert: null, avoirTotals: {},
     paiementFilters: [], paiementSort: null, chqAnnuleConfirm: null, chqAnnuleReplaceAsk: null, chqAddDraft: null, chqLiveStatus: null,
     fournSaisie: [], fournDraft: null,
     backupFolderName: null, backupStatus: null, backupLast: null, backupError: null, restoreStatus: null, restorePreview: null,
@@ -5191,7 +5191,7 @@ class Component {
     if (tsv.indexOf('\n') < 0) return;
     this.saveMapping(p.kind, { sheetName: p.wb[p.sheetIdx].name, headerIdx: p.headerIdx, fields: p.fields, combine: p.combine });
     const imported = this.applyImport(p.kind, tsv, p.name);
-    if (p.kind === 'ventes') { this.applySalesPayments(p.wb, p.name, imported && imported.list); this.extractGrenke(p.wb, p.name); }
+    if (p.kind === 'ventes') { this.applySalesPayments(p.wb, p.name, imported && imported.list); this.extractGrenke(p.wb, p.name); this.extractAvoirTotals(p.wb, p.name); }
     if (p.kind === 'stock') this.applyStockEspeces(p.wb, p.name);
     if (p.handle) this.watch(p.kind, p.name, p.handle, p.lastMod);
     this.setState({ pending: null });
@@ -5204,6 +5204,22 @@ class Component {
     const merged = [{ file: name, sem: name, ...esp }, ...prev];
     this.setState({ stockEspeces: merged });
     this.saveJSON(Component.STKESP_KEY, { name, rows: merged });
+  }
+  // Total avoir disponible par client, lu directement dans l'onglet Avoirs (ligne 3 de chaque
+  // bloc client) — affiché dans Tiers/Clients pour qu'il soit visible sans avoir à ouvrir Excel.
+  // Excel reste seul juge : rien n'est recalculé ni stocké ailleurs, juste relu à chaque
+  // rafraîchissement du fichier ventes.
+  extractAvoirTotals(wb, name) {
+    const aloc = this._avoirsLocate(wb); if (!aloc) { this.setState({ avoirTotals: {} }); return; }
+    const rows = aloc.rows; const map = {};
+    for (let sc = 0; sc < 1000; sc += 5) {
+      const cname = (rows[1] || [])[sc];
+      if (cname == null || String(cname).trim() === '') break;
+      const client = String(cname).trim();
+      const montant = Math.round((this._vNum((rows[2] || [])[sc + 1]) || 0) * 100) / 100;
+      map[this._norm(client)] = { client, montant };
+    }
+    this.setState({ avoirTotals: map });
   }
   extractGrenke(wb, name) {
     const gi = wb.findIndex(s => /grenke/i.test(s.name || ''));
@@ -5247,7 +5263,7 @@ class Component {
     const tsv = this.emitTSV({ kind: it.kind, wb, sheetIdx, headerIdx, fields, combine: m ? m.combine : false, spec });
     if (tsv.indexOf('\n') < 0) return; // fichier momentanément vide : on garde les données déjà importées
     const imported = this.applyImport(it.kind, tsv, it.name, true);
-    if (it.kind === 'ventes') { this.applySalesPayments(wb, it.name, imported && imported.list); this.extractGrenke(wb, it.name); }
+    if (it.kind === 'ventes') { this.applySalesPayments(wb, it.name, imported && imported.list); this.extractGrenke(wb, it.name); this.extractAvoirTotals(wb, it.name); }
     if (it.kind === 'stock') this.applyStockEspeces(wb, it.name);
   }
   // ---------- STOCK : dossier lu en continu ----------
@@ -7380,7 +7396,12 @@ class Component {
     const partnerType = this.state.tiers === 'Fournisseurs' ? 'Achat' : 'Vente';
     const byP = {};
     between(tiersRange[0], tiersRange[1]).filter(r => r.type === partnerType).forEach(r => { const p = byP[r.partner] = byP[r.partner] || { n: 0, vol: 0, enc: 0, last: null, cat: r.cat }; p.n++; p.vol += Math.abs(r.amt); if (r.status !== 'Payé') p.enc += (r.reste != null ? r.reste : Math.abs(r.amt)); if (!p.last) p.last = r; });
-    const partnersRows = Object.entries(byP).sort((a, b) => b[1].vol - a[1].vol).slice(0, 20).map(([name, p]) => { const actif = ymOf(p.last) >= anchor - 1; return { ini: name[0], av, name, tag: this.state.tiers === 'Fournisseurs' ? p.cat : (C.SEGMENTS[name] || p.cat), ops: String(p.n), vol: this.fmt(p.vol), enc: p.enc ? this.fmt(p.enc) : '—', encColor: p.enc ? red : gray, last: `${this.dd(p.last.d)}/${this.dd(p.last.m)}`, status: actif ? 'Actif' : 'Veille', statusStyle: actif ? `${badge}background:#e7f5ec;color:${green}` : `${badge}background:#eef1f5;color:${slate}` }; });
+    const avoirTotals = this.state.avoirTotals || {};
+    const partnersRows = Object.entries(byP).sort((a, b) => b[1].vol - a[1].vol).slice(0, 20).map(([name, p]) => { const actif = ymOf(p.last) >= anchor - 1;
+      // Avoir disponible (source : onglet Avoirs, relu depuis Excel) — uniquement côté Clients.
+      const avEntry = this.state.tiers !== 'Fournisseurs' ? avoirTotals[this._norm(name)] : null;
+      const avoirLabel = avEntry && Math.abs(avEntry.montant) > 0.005 ? `Avoir : ${this.fmt(avEntry.montant)}` : '';
+      return { ini: name[0], av, name, avoirLabel, tag: this.state.tiers === 'Fournisseurs' ? p.cat : (C.SEGMENTS[name] || p.cat), ops: String(p.n), vol: this.fmt(p.vol), enc: p.enc ? this.fmt(p.enc) : '—', encColor: p.enc ? red : gray, last: `${this.dd(p.last.d)}/${this.dd(p.last.m)}`, status: actif ? 'Actif' : 'Veille', statusStyle: actif ? `${badge}background:#e7f5ec;color:${green}` : `${badge}background:#eef1f5;color:${slate}` }; });
     const partnerTagHeader = this.state.tiers === 'Fournisseurs' ? 'Catégorie' : 'Segment';
     const volHeader = `Volume ${tiersScopeLabel}`;
     const tiersPeriodTabs = ['Mois', 'Année'].map(name => ({ name, onClick: () => this.setState({ tiersPeriodMode: name }), style: tiersMode === name ? `padding:6px 13px;border-radius:8px;font-size:12.5px;font-weight:600;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit` : 'padding:6px 13px;border-radius:8px;font-size:12.5px;font-weight:500;color:#69788c;background:transparent;border:none;cursor:pointer;font-family:inherit' }));
