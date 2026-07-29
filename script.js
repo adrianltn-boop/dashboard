@@ -223,7 +223,7 @@ class Component {
     restartRun: null, verifPending: null, venteAvoirAsk: null, venteAvoirDispo: null, avoirManuel: null,
     ventesSaisie: [], venteDraft: null,
     grenkeMan: [], grkDraft: null, grkDelAsk: null,
-    achatsSaisie: [], achatDraft: null, chequiersLive: [], compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null, chqEditDraft: null,
+    achatsSaisie: [], achatDraft: null, chequiersLive: [], compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null, chqEditDraft: null, stockRoomAlert: null,
     paiementFilters: [], paiementSort: null, chqAnnuleConfirm: null, chqAnnuleReplaceAsk: null, chqAddDraft: null, chqLiveStatus: null,
     fournSaisie: [], fournDraft: null,
     backupFolderName: null, backupStatus: null, backupLast: null, backupError: null, restoreStatus: null, restorePreview: null,
@@ -3280,12 +3280,29 @@ class Component {
         g.cals.forEach(c => { editsBySheet[sn][rowIdx + ':' + c.poidsCol] = c.poids; editsBySheet[sn][rowIdx + ':' + c.prixCol] = c.prix;
           preview.push({ label: `${sn} · ${c.label}`, col: `${this._colLetter(c.poidsCol + 1)}${rowIdx + 1}`, value: `${c.poids} kg @ ${this.fmt(c.prix)}/kg` });
           verifyTargets.push({ sheetName: sn, rowIdx, col: c.poidsCol, val: c.poids }, { sheetName: sn, rowIdx, col: c.prixCol, val: c.prix }); }); });
+      // Une section sans ligne libre = du poids/prix qui ne sera écrit NULLE PART si on n'agit
+      // pas — jamais une simple erreur qu'on peut manquer en bas d'écran. Alerte bloquante dédiée
+      // (voir stockRoomAlert / index.html), qui reste affichée jusqu'à ce que Faustine l'ait
+      // explicitement vue, avec la marche à suivre (ajouter une ligne au-dessus du TOTAL dans
+      // Excel) — en plus du bilan « partiel » déjà posé par ailleurs sur l'étape stock.
+      const noRoomSheets = unresolved.filter(u => / \(pas de ligne libre\)$/.test(u)).map(u => u.replace(/ \(pas de ligne libre\)$/, ''));
+      if (noRoomSheets.length) this.setState({ stockRoomAlert: { rec, context: ctx, fileName: hi.name, sheets: noRoomSheets } });
       if (!Object.keys(editsBySheet).length) return stockFailed(`Stock non rempli (${ctx})${unresolved.length ? ' : ' + unresolved.join(', ') : ''}.`);
       const sheetList = Object.keys(editsBySheet);
       this._pendingWrite = { kind: 'operations', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: sheetList.join(', '), editsBySheet, verifyTargets, refuseFormula: true, after: () => this._runNextWrite(), step: 'stock', unresolved };
       const sectionLabel = isRetour ? 'entrée — retour de marchandise' : (ctx === 'vente' ? 'sortie' : 'entrée');
       this.setState({ writePreview: { kind: 'stock', fileName: hi.name, sheetName: sheetList.join(', '), excelRow: null, rows: preview, status: null, title: `Stock de la semaine (${sectionLabel}) — ${sheetList.length} feuille(s)${unresolved.length ? ' · non placé : ' + unresolved.join(', ') : ''}` } });
     } catch (e) { stockFailed(`Stock non rempli (${ctx}) : ${(e && e.message) || 'erreur'}.`); }
+  }
+  // Alerte bloquante « plus de ligne libre » : Faustine ajoute une ligne vide dans Excel
+  // au-dessus de la ligne TOTAL de la section concernée, ferme le fichier, puis relance depuis
+  // ici — sans avoir à retrouver/retaper sa saisie. Fermer sans réessayer laisse l'entrée non
+  // placée : le bilan de l'achat (⚠ partiel) et le message d'écriture le rappellent déjà.
+  closeStockRoomAlert() { this.setState({ stockRoomAlert: null }); }
+  async retryStockRoomAlert() {
+    const a = this.state.stockRoomAlert; if (!a) return;
+    this.setState({ stockRoomAlert: null });
+    await this.requestStockPreview(a.rec, a.context);
   }
 
   // ---------- Circuit E — onglet dédié « Suivi des paiements » du fichier ventes ----------
@@ -3860,6 +3877,21 @@ class Component {
       out.flMessage = `Le fichier ${wp.fileName} est actuellement ouvert dans un autre programme. Fermez-le puis réessayez — rien n'a encore été écrit, votre saisie reste affichée dans le formulaire si vous préférez fermer cette fenêtre pour réessayer plus tard.`;
       out.onFlRetry = () => this.confirmAppendWrite();
       out.onFlCancel = () => this.cancelAppendWrite();
+    }
+    // Alerte bloquante « plus de ligne libre » (stock) — ne se ferme pas toute seule, contrairement
+    // au bandeau d'erreur habituel, pour ne jamais laisser croire qu'une entrée a bien été placée
+    // alors qu'elle ne l'a pas été (perte d'information = ce que ce tableau de bord doit éviter
+    // en priorité).
+    const sra = this.state.stockRoomAlert;
+    out.stockRoomAlertOpen = !!sra;
+    if (sra) {
+      const plural = sra.sheets.length > 1;
+      out.sraFileName = sra.fileName;
+      out.sraSheets = sra.sheets.join(', ');
+      out.sraMessage = `${plural ? 'Ces feuilles sont' : 'La feuille « ' + sra.sheets[0] + ' » est'} complète dans « ${sra.fileName} » : plus aucune ligne vide avant la ligne TOTAL. Rien n'a été écrit pour ${plural ? 'ces espèces' : 'cette espèce'} — le poids et le prix seraient perdus si vous validiez sans corriger.`;
+      out.sraHelp = `Dans Excel : ouvrez « ${sra.fileName} », ${plural ? 'sur chaque feuille concernée' : 'sur la feuille « ' + sra.sheets[0] + ' »'} insérez une ligne vide juste au-dessus de la ligne TOTAL (clic droit sur le numéro de ligne du TOTAL → Insérer), enregistrez, fermez le fichier, puis cliquez « Réessayer ».`;
+      out.onSraRetry = () => this.retryStockRoomAlert();
+      out.onSraClose = () => this.closeStockRoomAlert();
     }
     if (wp) {
       out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'verif' ? `Appliquer les corrections dans « ${wp.fileName} » ?` : wp.kind === 'paiementClient' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'avoirManuel' ? `Créer un avoir pour « ${wp.refLabel} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
