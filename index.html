@@ -449,7 +449,7 @@
             <div style="flex:1 1 130px"><label style="{{ payLbl }}">Date échéance</label><input style="{{ payInput }}" type="date" value="{{ payDraft.dateEch }}" oninput="{{ onPayDateEch }}"></div>
             <div style="flex:1 1 120px"><label style="{{ payLbl }}">Montant réglé</label><input style="{{ payInputN }}" type="text" inputmode="decimal" value="{{ payDraft.regle }}" oninput="{{ onPayRegle }}" placeholder="0"></div>
             <div style="flex:1 1 130px"><label style="{{ payLbl }}">Date du paiement</label><input style="{{ payInput }}" type="date" value="{{ payDraft.datePay }}" oninput="{{ onPayDatePay }}"></div>
-            <div style="flex:1 1 150px"><label style="{{ payLbl }}">État</label><select style="{{ payInput }}" value="{{ payDraft.etat }}" onchange="{{ onPayEtat }}"><sc-for list="{{ payEtatOptions }}" as="o" hint-placeholder-count="5"><option value="{{ o.value }}">{{ o.label }}</option></sc-for></select></div>
+            <div style="flex:1 1 150px"><label style="{{ payLbl }}">État (calculé)</label><div style="{{ payInput }};display:flex;align-items:center;background:#f4f7fb"><span style="{{ payDraftEtatStyle }}">{{ payDraft.etat }}</span></div></div>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;margin-top:14px;padding-top:12px;border-top:1px solid #f1f4f8;flex-wrap:wrap">
             <div style="font-size:13px;color:#69788c">Solde restant <b style="font-family:'IBM Plex Mono',monospace;font-size:17px;color:#0e1b2e;margin-left:6px">{{ payDraftSolde }}</b> <span style="font-size:11.5px;color:#9aa7b8">(TTC − avoir − réglé)</span></div>
@@ -479,7 +479,7 @@
                 <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:{{ r.soldeColor }}">{{ r.solde }}</span>
                 <span style="color:#69788c;font-family:'IBM Plex Mono',monospace">{{ r.datePay }}</span>
                 <span><span style="{{ r.etatStyle }}">{{ r.etat }}</span></span>
-                <span style="display:flex;gap:5px;justify-content:flex-end"><button style="{{ payRowBtnStyle }}" onclick="{{ r.onEdit }}" title="Modifier">✎</button><button style="{{ payDelBtnStyle }}" onclick="{{ r.onDelete }}" title="Supprimer">🗑</button></span>
+                <span style="display:flex;gap:5px;justify-content:flex-end"><button style="{{ payRowBtnStyle }}" onclick="{{ r.onEdit }}" title="Modifier">✎</button></span>
               </div>
             </sc-for>
             <sc-if value="{{ payListEmpty }}" hint-placeholder-val="{{ false }}">
@@ -2738,19 +2738,6 @@
     </div>
   </sc-if>
 
-  <!-- ============ SUIVI DE PAIEMENT — suppression d'une facture ============ -->
-  <sc-if value="{{ payDelOpen }}" hint-placeholder-val="{{ false }}">
-    <div style="{{ prefixOverlayStyle }}" onclick="{{ onPayDelCancel }}">
-      <div style="width:420px;max-width:92vw;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px" onclick="{{ ctxStop }}">
-        <div style="font-size:15px;font-weight:700;color:#0e1b2e">Retirer cette facture du suivi ?</div>
-        <div style="font-size:12.5px;color:#69788c;margin-top:8px;line-height:1.6">« {{ payDelName }} » sera supprimée du suivi de paiement. Cette action est irréversible.</div>
-        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">
-          <button style="{{ agBtnGhost }}" onclick="{{ onPayDelCancel }}">Annuler</button>
-          <button style="padding:9px 16px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#b91c1c;border:none;cursor:pointer;font-family:inherit" onclick="{{ onPayDelConfirm }}">Supprimer</button>
-        </div>
-      </div>
-    </div>
-  </sc-if>
   <sc-if value="{{ restartOpen }}" hint-placeholder-val="{{ false }}">
     <div style="{{ prefixOverlayStyle }}">
       <div style="{{ wpCardStyle }}" onclick="{{ ctxStop }}">

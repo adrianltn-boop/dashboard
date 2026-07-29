@@ -219,7 +219,7 @@ class Component {
     heures: {}, heuresMois: {}, filePaths: {}, annule: {}, hRoster: [], hFocus: null, hMode: 'semaine', hRange: null, hCollapse: {}, hDelAsk: null, hNuit: false,
     empDocs: {}, empDelDoc: null, bankSalaryEmp: '', bankSalaryMonth: '',
     agenda: [], agendaMonth: null, agendaEdit: null, agendaDelAsk: null,
-    payTrack: [], payDraft: null, payDelAsk: null,
+    payTrack: [], payDraft: null,
     restartRun: null, verifPending: null, venteAvoirAsk: null, venteAvoirDispo: null, avoirManuel: null,
     ventesSaisie: [], venteDraft: null,
     grenkeMan: [], grkDraft: null, grkDelAsk: null,
@@ -252,6 +252,19 @@ class Component {
   static PAYTRACK_KEY = 'avPayTrack';
   static GRENKE_STATUT = 'En attente paiement Grenke'; // statut écrit dans Factures (ETAT) et dans l'onglet Grenke
   static ETAT_AVOIR = 'AVOIR'; // état d'une facture d'avoir — surligné en bleu à l'écriture (voir _buildMarkStyler)
+  // Vocabulaire UNIQUE des états « Suivi des paiements » — partagé par la création d'une vente
+  // (_venteEtat), la saisie manuelle d'un paiement (commitPay/_paySuiviEtat) et la relecture de
+  // démarrage qui vérifie/corrige la colonne État déjà écrite dans Excel (_etatAttendu/_etatsEcarts).
+  // Avant cette unification, chaque chemin écrivait/attendait un texte différent pour la même
+  // situation (ex. « En retard » saisi à la main vs « À RELANCER » attendu par la relecture, ou
+  // aucun état prévu du tout pour un paiement partiel) : la relecture signalait alors un écart
+  // après CHAQUE paiement enregistré depuis le tableau de bord, ce qui rendait la vérification
+  // inutilisable. RÈGLE : « AVOIR » ne s'applique que si l'avoir couvre la TOTALITÉ du montant dû —
+  // un avoir partiel réduit seulement le solde, il ne clôt pas la facture à lui seul.
+  static ETAT_PAYEE = 'PAYÉE';
+  static ETAT_PARTIELLE = 'PARTIELLEMENT RÉGLÉE';
+  static ETAT_RETARD = 'À RELANCER';
+  static ETAT_ATTENTE = 'EN ATTENTE';
   static VSAISIE_KEY = 'avVentesSaisie';
   static GRKMAN_KEY = 'avGrenkeManuel';
   static ACHSAISIE_KEY = 'avAchatsSaisie';
@@ -786,7 +799,7 @@ class Component {
   savePayTrack(arr) { this.setState({ payTrack: arr }); this.saveJSON(Component.PAYTRACK_KEY, arr); }
   _payNextId() { const ids = this.payTrackRows().map(r => +r.id || 0); return (ids.length ? Math.max(...ids) : 141) + 1; }
   _payTodayIso() { const T = Component.TODAY; return `${T.y}-${this.dd(T.m)}-${this.dd(T.d)}`; }
-  payDefault() { return { id: this._payNextId(), num: '', client: '', ttc: '', avoir: '', dateFac: this._payTodayIso(), dateEch: '', regle: '', datePay: '', etat: 'En attente', editing: false }; }
+  payDefault() { return { id: this._payNextId(), num: '', client: '', ttc: '', avoir: '', dateFac: this._payTodayIso(), dateEch: '', regle: '', datePay: '', etat: Component.ETAT_ATTENTE, editing: false }; }
   setPayField(k, v) { const d = this.state.payDraft || this.payDefault(); this.setState({ payDraft: { ...d, [k]: v } }); }
   resetPayDraft() { this.setState({ payDraft: this.payDefault() }); this.refreshPayIdFacture(); }
   editPayRow(id) { const r = this.payTrackRows().find(x => String(x.id) === String(id)); if (!r) return; this.setState({ payDraft: { ...r, ttc: r.ttc === '' ? '' : String(r.ttc), avoir: r.avoir === '' ? '' : String(r.avoir), regle: r.regle === '' ? '' : String(r.regle), editing: true } }); }
@@ -795,7 +808,11 @@ class Component {
     const client = (d.client || '').trim();
     const num = v => { const n = parseFloat(String(v == null ? '' : v).replace(',', '.').replace(/[^\d.-]/g, '')); return isFinite(n) ? n : 0; };
     if (!client || !(num(d.ttc) > 0)) { this.setState({ msg: { kind: 'error', text: 'Indiquez au moins le nom du client et un Montant TTC.' } }); return; }
-    const rec = { id: +d.id || this._payNextId(), num: (d.num || '').trim(), client, ttc: num(d.ttc), avoir: num(d.avoir), dateFac: d.dateFac || '', dateEch: d.dateEch || '', regle: num(d.regle), datePay: d.datePay || '', etat: d.etat || 'En attente' };
+    // État TOUJOURS recalculé ici (jamais une valeur choisie à la main) : c'est exactement ce
+    // paramètre qui rendait les états périmés — un paiement enregistré ne mettait pas à jour l'état
+    // en fonction de ce qui était réellement réglé/avoir. Même règle que _venteEtat/_etatAttendu.
+    const etat = this._paySuiviEtat(num(d.ttc), num(d.avoir), num(d.regle), d.dateEch || '', this._payTodayIso());
+    const rec = { id: +d.id || this._payNextId(), num: (d.num || '').trim(), client, ttc: num(d.ttc), avoir: num(d.avoir), dateFac: d.dateFac || '', dateEch: d.dateEch || '', regle: num(d.regle), datePay: d.datePay || '', etat };
     // Circuit A — le fichier Excel fait foi : la vue locale n'est alimentée qu'APRÈS une écriture
     // confirmée et vérifiée (voir _payAfterWrite). Si l'écriture n'est pas réglée/connectée, on
     // conserve l'ancien comportement purement local pour ne pas bloquer la saisie.
@@ -882,8 +899,6 @@ class Component {
       this.setState({ msg: { kind: 'error', text: `Préparation de l'écriture impossible : ${(e && e.message) || 'erreur'}. Le paiement n'a PAS été enregistré.` } });
     }
   }
-  askDeletePay(id) { const r = this.payTrackRows().find(x => String(x.id) === String(id)); if (r) this.setState({ payDelAsk: r }); }
-  deletePayRow() { const r = this.state.payDelAsk; if (!r) return; this.savePayTrack(this.payTrackRows().filter(x => String(x.id) !== String(r.id))); this.setState({ payDelAsk: null }); }
   // Confirmation d'un avoir (vente à montant total négatif) : on ferme la modale et on relance
   // l'enregistrement avec le drapeau, le brouillon étant inchangé.
   confirmVenteAvoir() { this.setState({ venteAvoirAsk: null }); this._venteAvoirConfirmed = true; try { this.commitVenteSaisie(); } finally { this._venteAvoirConfirmed = false; } }
@@ -2066,14 +2081,31 @@ class Component {
   achatWriteValues(rec) { const immediat = !!rec.paiementImmediat; return { ref: rec.num || '', annee: String(rec.date || '').slice(0, 4), date: rec.date || '', partner: rec.pecheur || '', amt: rec.total, cheque: rec.paiement === 'cheque' ? (rec.chequeNum || '') : (rec.paiement === 'autre' ? (rec.observation || '') : ''), paid: immediat ? rec.total : '', paidDate: immediat ? this._payTodayIso() : '', solde: immediat ? 0 : rec.total }; }
   // Le statut (colonne ETAT) part de la même clé « status » déjà mappée dans Paramètres → aucune
   // colonne codée en dur : une vente financée par Grenke est marquée « En attente paiement Grenke ».
-  // État d'une vente : financée Grenke, avoir créé (total négatif), soldée par un avoir consommé
-  // (avoir ≥ TTC), sinon en attente de règlement. Le montant TTC reste TOUJOURS le prix normal :
-  // l'avoir ne le diminue pas, il se déduit du solde.
+  // État d'une vente : financée Grenke, avoir créé (total négatif), soldée ENTIÈREMENT par un avoir
+  // consommé (avoir ≥ TTC) → même état « AVOIR » que la ligne d'avoir elle-même (vocabulaire unique,
+  // voir ETAT_AVOIR/ETAT_PAYEE), sinon en attente de règlement. Le montant TTC reste TOUJOURS le
+  // prix normal : l'avoir ne le diminue pas, il se déduit du solde.
   _venteEtat(rec, avoir) {
     if (rec.grenke) return Component.GRENKE_STATUT;
     if (rec.ttc < 0) return Component.ETAT_AVOIR;
-    if (avoir > 0 && avoir >= rec.ttc) return 'PAYÉE';
-    return 'EN ATTENTE';
+    if (avoir > 0 && avoir >= rec.ttc) return Component.ETAT_AVOIR;
+    return Component.ETAT_ATTENTE;
+  }
+  // État attendu d'une ligne « Suivi des paiements » saisie/mise à jour DEPUIS le tableau de bord
+  // (formulaire Paiement), à partir du TTC, de l'avoir appliqué, du montant réglé (espèces / chèque
+  // / virement) et de l'échéance. Utilisée par commitPay (calcule l'état au moment de la saisie) ET
+  // par applySuiviPaiements (affichage toujours à jour de la vue « Suivi de paiement », recalculé —
+  // jamais le texte Excel tel quel, qui peut être périmé). Même vocabulaire que _venteEtat et
+  // _etatAttendu (voir constantes ETAT_*) : les trois DOIVENT rester cohérents entre eux, sinon un
+  // paiement fraîchement enregistré ressort aussitôt comme « en écart » à la relecture suivante.
+  _paySuiviEtat(ttc, avoir, regle, dateEchIso, todayIso) {
+    const t = +ttc || 0, a = +avoir || 0, r = +regle || 0;
+    const solde = Math.round((t - a - r) * 100) / 100;
+    if (a > 0.005 && a >= t - 0.005) return Component.ETAT_AVOIR; // entièrement réglée par avoir
+    if (solde <= 0.005) return Component.ETAT_PAYEE; // soldée (espèces/chèque/virement, éventuellement combinés à un avoir partiel)
+    if (a > 0.005 || r > 0.005) return Component.ETAT_PARTIELLE; // un premier règlement (ou avoir partiel) est déjà enregistré
+    if (dateEchIso && todayIso && dateEchIso < todayIso) return Component.ETAT_RETARD;
+    return Component.ETAT_ATTENTE;
   }
   venteWriteValues(rec) { const delai = Math.max(0, Math.min(30, Math.round(this._vNum(rec.delai)))); return { idFacture: rec.idFacture || '', ref: rec.num || '', partner: rec.client || '', date: rec.date || '', ht: rec.ht, tvaIr: rec.tvaIrl, tvaFr: rec.tvaFr, grenke: rec.grenke ? rec.grenke.montant : '', ttc: rec.ttc, delai: delai ? (delai + ' jrs') : '', datePrev: rec.datePrev || '', status: this._venteEtat(rec, this._vNum(rec.avoir)) }; }
   // N° de facture sans son préfixe (« INV-5720 » → « 5720 ») — format attendu par l'onglet Grenke.
@@ -3459,12 +3491,17 @@ class Component {
     }
     return out;
   }
-  // État attendu d'une ligne du suivi des paiements, d'après son solde, son avoir et son échéance.
-  _etatAttendu(solde, avoir, dateEchIso, todayIso) {
-    if (avoir > 0) return Component.ETAT_AVOIR;
-    if (Math.abs(solde) <= 0.005) return 'PAYÉE';
-    if (dateEchIso && todayIso && dateEchIso < todayIso) return 'À RELANCER';
-    return 'EN ATTENTE';
+  // État attendu d'une ligne du suivi des paiements, d'après son TTC, son solde (colonne Excel,
+  // qui fait foi), son avoir et son échéance. Même vocabulaire que _venteEtat/_paySuiviEtat (voir
+  // constantes ETAT_*) — RÈGLE : « AVOIR » exige que l'avoir couvre la TOTALITÉ du TTC, pas
+  // seulement une partie ; un solde entamé mais non nul correspond à un premier règlement partiel.
+  _etatAttendu(ttc, solde, avoir, dateEchIso, todayIso) {
+    const t = +ttc || 0, s = +solde || 0, a = +avoir || 0;
+    if (a > 0.005 && a >= t - 0.005) return Component.ETAT_AVOIR;
+    if (Math.abs(s) <= 0.005) return Component.ETAT_PAYEE;
+    if (t > 0.005 && s < t - 0.005) return Component.ETAT_PARTIELLE;
+    if (dateEchIso && todayIso && dateEchIso < todayIso) return Component.ETAT_RETARD;
+    return Component.ETAT_ATTENTE;
   }
   // Écarts d'état dans « Suivi des paiements » : compare la colonne Etat à l'état attendu.
   _etatsEcarts(wb) {
@@ -3478,9 +3515,10 @@ class Component {
       if (!num && !client) continue; // ligne vide : rien à vérifier
       const solde = c.solde >= 0 ? (this._vNum(rr[c.solde]) || 0) : NaN;
       if (isNaN(solde)) continue; // sans solde exploitable, on ne présume rien
+      const ttc = c.ttc >= 0 ? (this._vNum(rr[c.ttc]) || 0) : 0;
       const avoir = c.avoir >= 0 ? (this._vNum(rr[c.avoir]) || 0) : 0;
       const ech = c.dateEch >= 0 ? this._cellToIso(rr[c.dateEch]) : '';
-      const attendu = this._etatAttendu(solde, avoir, ech, today);
+      const attendu = this._etatAttendu(ttc, solde, avoir, ech, today);
       const actuel = String(rr[c.etat] == null ? '' : rr[c.etat]).trim();
       if (this._norm(actuel) !== this._norm(attendu)) out.push({ sheetName: sloc.sheetName, rowIdx: r, col: c.etat, ref: num || client, actuel: actuel || '(vide)', attendu });
     }
@@ -4789,6 +4827,41 @@ class Component {
     this.saveJSON(Component.VEN_KEY, { name, rows: list });
     this._paymentReconcile = { matched, verify, sheet: sh.name };
   }
+  // ---------- Suivi de paiement : table UNIQUE adossée à Excel (remplace l'ancienne double vue) ----------
+  // Avant cette fonction, la vue « Suivi de paiement » (onglet Paiement) n'affichait QUE les
+  // paiements saisis depuis ce formulaire (état purement local dans le navigateur, perdu si
+  // l'ordinateur change et invisible pour tout ce qui existait déjà dans Excel) — une vue séparée
+  // de celle, en lecture seule, calculée pour les Factures/Relances. Ici, « le fichier Excel fait
+  // foi » (même principe que _payAfterWrite) : à chaque relecture, la table LOCALE payTrack est
+  // intégralement reconstruite depuis le contenu réel de la feuille « Suivi des paiements » — plus
+  // aucune double saisie, un seul tableau, modifiable via le crayon (édition), qui écrit dans Excel.
+  // L'État affiché est TOUJOURS recalculé (_paySuiviEtat), jamais lu tel quel dans la cellule : la
+  // relecture au démarrage (_etatsEcarts) propose séparément de corriger le texte de la cellule
+  // elle-même, mais l'affichage ici reste exact entre-temps, même si cette correction n'a pas
+  // encore été appliquée.
+  applySuiviPaiements(wb, name) {
+    const sloc = this._suiviLocate(wb); if (!sloc) return;
+    const sh = wb.find(s => s.name === sloc.sheetName); if (!sh) return;
+    const rows = sh.rows; const c = sloc.cols; const today = this._payTodayIso();
+    const list = [];
+    for (let r = sloc.dataStart; r < rows.length; r++) {
+      const rr = rows[r] || [];
+      const num = c.numero >= 0 ? String(rr[c.numero] == null ? '' : rr[c.numero]).trim() : '';
+      const client = c.client >= 0 ? String(rr[c.client] == null ? '' : rr[c.client]).trim() : '';
+      if (!num && !client) continue; // ligne vide : rien à afficher
+      const idRaw = c.idFacture >= 0 ? String(rr[c.idFacture] == null ? '' : rr[c.idFacture]).trim() : '';
+      const ttc = c.ttc >= 0 ? (this._vNum(rr[c.ttc]) || 0) : 0;
+      const avoir = c.avoir >= 0 ? (this._vNum(rr[c.avoir]) || 0) : 0;
+      const regle = c.regle >= 0 ? (this._vNum(rr[c.regle]) || 0) : 0;
+      const dateFac = c.dateFac >= 0 ? this._cellToIso(rr[c.dateFac]) : '';
+      const dateEch = c.dateEch >= 0 ? this._cellToIso(rr[c.dateEch]) : '';
+      const datePay = c.datePay >= 0 ? this._cellToIso(rr[c.datePay]) : '';
+      const etat = this._paySuiviEtat(ttc, avoir, regle, dateEch, today);
+      const id = idRaw || (num ? this.invoiceKey(num) : ('r' + r));
+      list.push({ id, num, client, ttc, avoir, dateFac, dateEch, regle, datePay, etat });
+    }
+    this.savePayTrack(list);
+  }
   mapBordereaux(text) {
     const { rows, find } = this.parseTable(text);
     const ci = { date: find('date'), ref: find('bordereau', 'bl', 'ref', 'numero', 'n°'), dest: find('destinataire', 'client', 'livraison', 'nom'), fac: find('facture', 'commande'), colis: find('colis', 'quantite', 'nb'), transp: find('transporteur', 'transport'), statut: find('statut', 'status', 'etat') };
@@ -5207,7 +5280,7 @@ class Component {
     if (tsv.indexOf('\n') < 0) return;
     this.saveMapping(p.kind, { sheetName: p.wb[p.sheetIdx].name, headerIdx: p.headerIdx, fields: p.fields, combine: p.combine });
     const imported = this.applyImport(p.kind, tsv, p.name);
-    if (p.kind === 'ventes') { this.applySalesPayments(p.wb, p.name, imported && imported.list); this.extractGrenke(p.wb, p.name); this.extractAvoirTotals(p.wb, p.name); }
+    if (p.kind === 'ventes') { this.applySalesPayments(p.wb, p.name, imported && imported.list); this.extractGrenke(p.wb, p.name); this.extractAvoirTotals(p.wb, p.name); this.applySuiviPaiements(p.wb, p.name); }
     if (p.kind === 'stock') this.applyStockEspeces(p.wb, p.name);
     if (p.handle) this.watch(p.kind, p.name, p.handle, p.lastMod);
     this.setState({ pending: null });
@@ -5279,7 +5352,7 @@ class Component {
     const tsv = this.emitTSV({ kind: it.kind, wb, sheetIdx, headerIdx, fields, combine: m ? m.combine : false, spec });
     if (tsv.indexOf('\n') < 0) return; // fichier momentanément vide : on garde les données déjà importées
     const imported = this.applyImport(it.kind, tsv, it.name, true);
-    if (it.kind === 'ventes') { this.applySalesPayments(wb, it.name, imported && imported.list); this.extractGrenke(wb, it.name); this.extractAvoirTotals(wb, it.name); }
+    if (it.kind === 'ventes') { this.applySalesPayments(wb, it.name, imported && imported.list); this.extractGrenke(wb, it.name); this.extractAvoirTotals(wb, it.name); this.applySuiviPaiements(wb, it.name); }
     if (it.kind === 'stock') this.applyStockEspeces(wb, it.name);
   }
   // ---------- STOCK : dossier lu en continu ----------
@@ -6727,7 +6800,10 @@ class Component {
     const clientsDue = F.filter(f => f.sens === 'Client' && f.reste > 0);
     const relanceRows = clientsDue.slice().sort((a, b) => this.days(a.dueO) - this.days(b.dueO)).map(f => { const em = this.pIso(f.d); const delaiJ = f.delai != null ? f.delai : Math.max(0, this.days(f.dueO) - this.days(em)); return { partner: f.partner, ref: f.ref, due: `${this.dd(f.dueO.d)}/${this.dd(f.dueO.m)}`, delaiTxt: `${delaiJ} j`, reste: this.fmt(f.reste), flag: f.status, flagStyle: statusStyle(f.status) }; });
 
-    // ---- Suivi de paiement (saisie manuelle : ID · N° facture · Client · TTC · Avoir · dates · réglé · solde · état) ----
+    // ---- Suivi de paiement : table UNIQUE adossée à Excel (voir applySuiviPaiements) — plus de
+    // double vue « saisie locale » vs « import Excel » : payTrack EST le contenu réel de la feuille
+    // « Suivi des paiements », rechargé à chaque relecture, modifiable via le crayon (édition), qui
+    // écrit dans Excel. Suppression retirée de l'interface (RÈGLE projet : redirige vers Excel).
     const isSuivi = view === 'Relance';
     const ptRows0 = this.payTrackRows();
     const ptSolde = r => Math.round(((+r.ttc || 0) - (+r.avoir || 0) - (+r.regle || 0)) * 100) / 100;
@@ -6735,7 +6811,7 @@ class Component {
     const ptEtatStyle = e => {
       const s = String(e || '').toLowerCase();
       if (s.includes('pay') || s.includes('sold')) return `${badge}background:#e7f5ec;color:${green}`;
-      if (s.includes('retard')) return `${badge}background:#fdeaea;color:${red}`;
+      if (s.includes('retard') || s.includes('relance')) return `${badge}background:#fdeaea;color:${red}`;
       if (s.includes('partiel')) return `${badge}background:#fef3c7;color:${amber}`;
       if (s.includes('avoir')) return `${badge}background:#eef1f5;color:${slate}`;
       return `${badge}background:${soft};color:${accent}`;
@@ -6748,13 +6824,13 @@ class Component {
       ttc: this.fmt(+r.ttc || 0), avoir: r.avoir ? this.fmt(+r.avoir) : '—',
       dateFac: ptFrDate(r.dateFac), dateEch: ptFrDate(r.dateEch),
       regle: r.regle ? this.fmt(+r.regle) : '—', solde: this.fmt(solde), soldeColor: solde <= 0.005 ? green : (r.regle ? amber : '#0e1b2e'),
-      datePay: ptFrDate(r.datePay), etat: r.etat || 'En attente', etatStyle: ptEtatStyle(r.etat),
-      onEdit: () => this.editPayRow(r.id), onDelete: () => this.askDeletePay(r.id),
+      datePay: ptFrDate(r.datePay), etat: r.etat || C.ETAT_ATTENTE, etatStyle: ptEtatStyle(r.etat),
+      onEdit: () => this.editPayRow(r.id),
     }; });
     // KPI de synthèse
     const ptTtcTot = sum(ptRows0, r => +r.ttc || 0), ptRegleTot = sum(ptRows0, r => +r.regle || 0);
     const ptSoldeTot = sum(ptRows0, r => Math.max(0, ptSolde(r)));
-    const ptRetard = sum(ptRows0.filter(r => String(r.etat).toLowerCase().includes('retard')), r => Math.max(0, ptSolde(r)));
+    const ptRetard = sum(ptRows0.filter(r => { const s = String(r.etat).toLowerCase(); return s.includes('retard') || s.includes('relance'); }), r => Math.max(0, ptSolde(r)));
     const paySummary = [
       card('Facturé (TTC)', this.fmt(ptTtcTot), '#0e1b2e', `${ptRows0.length} facture${ptRows0.length > 1 ? 's' : ''}`, accent),
       card('Encaissé', this.fmt(ptRegleTot), green, 'montants réglés', green),
@@ -6763,12 +6839,16 @@ class Component {
     ];
     // Carte de saisie (brouillon)
     const pd = this.state.payDraft || this.payDefault();
-    const payDraftSolde = this.fmt(Math.round((((parseFloat(String(pd.ttc).replace(',', '.')) || 0) - (parseFloat(String(pd.avoir).replace(',', '.')) || 0) - (parseFloat(String(pd.regle).replace(',', '.')) || 0))) * 100) / 100);
+    const pdTtcN = parseFloat(String(pd.ttc).replace(',', '.')) || 0, pdAvoirN = parseFloat(String(pd.avoir).replace(',', '.')) || 0, pdRegleN = parseFloat(String(pd.regle).replace(',', '.')) || 0;
+    const payDraftSolde = this.fmt(Math.round((pdTtcN - pdAvoirN - pdRegleN) * 100) / 100);
+    // État TOUJOURS calculé en direct depuis TTC/Avoir/Réglé/Échéance (plus un champ éditable à la
+    // main — c'est justement la saisie manuelle de l'état qui le rendait périmé) : voir _paySuiviEtat.
+    const payDraftEtat = this._paySuiviEtat(pdTtcN, pdAvoirN, pdRegleN, pd.dateEch || '', this._payTodayIso());
     const payDraft = {
       id: pd.id, num: pd.num || '', client: pd.client || '', ttc: pd.ttc === 0 ? '0' : (pd.ttc || ''), avoir: pd.avoir === 0 ? '' : (pd.avoir || ''),
-      dateFac: pd.dateFac || '', dateEch: pd.dateEch || '', regle: pd.regle === 0 ? '' : (pd.regle || ''), datePay: pd.datePay || '', etat: pd.etat || 'En attente',
+      dateFac: pd.dateFac || '', dateEch: pd.dateEch || '', regle: pd.regle === 0 ? '' : (pd.regle || ''), datePay: pd.datePay || '', etat: payDraftEtat,
     };
-    const payEtatOptions = ['En attente', 'Partiellement réglée', 'Payée', 'En retard', 'Avoir'].map(e => ({ value: e, label: e }));
+    const payDraftEtatStyle = ptEtatStyle(payDraftEtat);
     const payEditing = !!(this.state.payDraft && this.state.payDraft.editing);
     const onPayNum = e => this.setPayField('num', e.target.value);
     const onPayClient = e => this.setPayField('client', e.target.value);
@@ -6778,7 +6858,6 @@ class Component {
     const onPayDateEch = e => this.setPayField('dateEch', e.target.value);
     const onPayRegle = e => this.setPayField('regle', e.target.value);
     const onPayDatePay = e => this.setPayField('datePay', e.target.value);
-    const onPayEtat = e => this.setPayField('etat', e.target.value);
     const onPayCommit = () => this.commitPay();
     const onPayReset = () => this.resetPayDraft();
     const paySaveLabel = payEditing ? 'Mettre à jour' : '＋ Ajouter la facture';
@@ -6792,11 +6871,6 @@ class Component {
     const payResetStyle = `padding:9px 15px;border-radius:9px;font-size:13px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.3)};cursor:pointer;font-family:inherit`;
     const payRowBtnStyle = `padding:5px 9px;border-radius:7px;font-size:11.5px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.3)};cursor:pointer;font-family:inherit`;
     const payDelBtnStyle = 'padding:5px 8px;border-radius:7px;font-size:11.5px;color:#b91c1c;background:#fff;border:1px solid #f1d4d4;cursor:pointer;font-family:inherit';
-    const payDelAsk = this.state.payDelAsk;
-    const payDelOpen = !!payDelAsk;
-    const payDelName = payDelAsk ? `${payDelAsk.client} — ${this.fmt(+payDelAsk.ttc || 0)}` : '';
-    const onPayDelConfirm = () => this.deletePayRow();
-    const onPayDelCancel = () => this.setState({ payDelAsk: null });
     const venteAvoirAsk = this.state.venteAvoirAsk;
     const venteAvoirAskOpen = !!venteAvoirAsk;
     const venteAvoirAskText = venteAvoirAsk ? `Le montant total est négatif (${this.fmt(venteAvoirAsk.montant)}). Cela va créer un avoir pour ce client. Voulez-vous continuer ?` : '';
@@ -8857,10 +8931,9 @@ class Component {
       dashBody,
       facPager,
       relanceRows, creditSummary, creditRows, creditsEmpty,
-      isSuivi, payTrackList, paySummary, payEmpty, payListEmpty, payEmptyMsg, payDraft, payEtatOptions, payEditing, onPayCommit, onPayReset, paySaveLabel,
-      onPayNum, onPayClient, onPayTtc, onPayAvoir, onPayDateFac, onPayDateEch, onPayRegle, onPayDatePay, onPayEtat,
+      isSuivi, payTrackList, paySummary, payEmpty, payListEmpty, payEmptyMsg, payDraft, payDraftEtatStyle, payEditing, onPayCommit, onPayReset, paySaveLabel,
+      onPayNum, onPayClient, onPayTtc, onPayAvoir, onPayDateFac, onPayDateEch, onPayRegle, onPayDatePay,
       payInput, payInputN, payLbl, paySaveStyle, payResetStyle, payRowBtnStyle, payDelBtnStyle, payDraftSolde,
-      payDelOpen, payDelName, onPayDelConfirm, onPayDelCancel,
       venteAvoirAskOpen, venteAvoirAskText, onVenteAvoirConfirm, onVenteAvoirCancel,
       restartOpen, restartRunning, restartDone, restartTitle, restartSummary, restartRows, restartHasFixes, restartAllGood,
       onRestartDash, onRestartClose, onRestartApply,
