@@ -5799,13 +5799,31 @@ class Component {
     if (need) this.setState({ reconnectCount: need });
   }
   async reconnectHandles() {
-    const all = this._restored || await this.idbGetAll(); let ok = 0;
+    const all = this._restored || await this.idbGetAll(); let ok = 0; const failed = [];
     for (const { val } of all) {
       if (!val || !val.handle) continue;
       const mode = (val.role === 'backup' || val.role === 'suivi') ? 'readwrite' : 'read';
-      try { let p = val.handle.queryPermission ? await val.handle.queryPermission({ mode }) : 'granted'; if (p !== 'granted' && val.handle.requestPermission) p = await val.handle.requestPermission({ mode }); if (p === 'granted') { this._applyRestored(val); ok++; } } catch (e) {}
+      const label = val.name || val.role || 'fichier';
+      try {
+        let p = val.handle.queryPermission ? await val.handle.queryPermission({ mode }) : 'granted';
+        if (p !== 'granted' && val.handle.requestPermission) p = await val.handle.requestPermission({ mode });
+        if (p === 'granted') { this._applyRestored(val); ok++; } else failed.push(label);
+      } catch (e) { failed.push(label); }
     }
-    this.setState({ reconnectCount: 0 });
+    // RÈGLE 14 : ne jamais annoncer un succès silencieux. Avant, le bandeau « Reconnectez »
+    // disparaissait systématiquement (reconnectCount forcé à 0) même quand AUCUNE reconnexion
+    // n'avait réellement abouti — Faustine cliquait, le message disparaissait, mais rien ne se
+    // mettait vraiment à jour, sans qu'aucune erreur ne l'indique. Cause probable : certains
+    // navigateurs ne présentent qu'UNE fenêtre d'autorisation par clic, donc quand plusieurs
+    // fichiers/dossiers ont besoin d'être reconnectés, seul le premier passe et les suivants
+    // échouent silencieusement. Le bandeau reste maintenant affiché pour ce qui n'a pas abouti,
+    // avec le détail, et il faut recliquer « Reconnecter » (une fois par fichier restant).
+    this.setState({
+      reconnectCount: failed.length,
+      msg: failed.length
+        ? { kind: 'error', text: `${ok ? ok + ' reconnecté(s), ' : ''}${failed.length} non reconnecté(s) : ${failed.join(', ')}. Cliquez de nouveau sur « Reconnecter » — le navigateur ne demande parfois l'autorisation que pour un seul fichier à la fois.` }
+        : (ok ? { kind: 'ok', text: `${ok} fichier(s)/dossier(s) reconnecté(s) — mise à jour automatique reprise.` } : this.state.msg),
+    });
     if (ok) { this.startWatching(); await this.refreshAll(); }
   }
   async refreshFolders() {
