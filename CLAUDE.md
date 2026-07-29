@@ -84,6 +84,38 @@
   était manquant et cassait toutes les modales
 - Bascule HT/TTC : suit amountMode correctement
 - Numérotation : intègre les numéros du fichier Excel
+- Colonnes qui n'étaient JAMAIS remplies :
+  « Paiement » et « Date paiement » du fichier
+  fournisseurs (fournWriteValues les forçait à
+  vide, aucun autre circuit ne les remplissait) →
+  circuit requestPaiementFournPreview. Et le
+  Commentaire Grenke, qui n'avait aucune colonne
+  et était détruit au nettoyage de la fiche locale.
+- Détection de la colonne commentaire : ne JAMAIS
+  tester includes('com') — « customer » contient
+  aussi « com », le commentaire écraserait le nom
+  du client. Utiliser _isComHeader().
+- Marquage d'une ligne (annulé) : passer par
+  _markRowAnnule, qui ne réécrit QUE l'attribut de
+  style des cellules. Ne jamais le faire via
+  patchXlsxFile : il remplace la cellule entière et
+  détruirait les formules de la ligne (Solde…).
+- <strike/> dans une police : se place APRÈS <b/>
+  et <i/> et AVANT le reste (séquence CT_Font
+  d'ECMA-376). Un mauvais ordre déclenche la
+  réparation du fichier par Excel.
+- États du suivi de paiement : vocabulaire UNIQUE
+  (constantes ETAT_*) partagé par _venteEtat,
+  _paySuiviEtat et _etatAttendu. Si les trois
+  divergent, chaque paiement enregistré ressort
+  aussitôt « en écart » à la relecture.
+- Annulation : ne jamais vider la ligne ni stocker
+  les infos dans un commentaire Excel (zone la plus
+  fragile du classeur : perdue via
+  Google Sheets/LibreOffice, supprimée par une
+  réparation Excel, et accrochée à une cellule donc
+  décalée dès qu'on trie). La ligne reste intacte,
+  seulement barrée et grisée.
 
 ## Déploiement final (à faire en dernier)
 - Empaqueter avec Electron pour usage desktop Windows

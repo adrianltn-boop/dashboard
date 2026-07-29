@@ -1060,8 +1060,11 @@
                     <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:{{ f.resteColor }}">{{ f.reste }}</span>
                     <span><button style="{{ f.statusButtonStyle }}" onclick="{{ f.onResolve }}" title="{{ f.statusTitle }}">{{ f.status }}</button></span>
                     <span style="text-align:center;display:flex;gap:4px;justify-content:center;align-items:center">
+                      <sc-if value="{{ f.canPayFourn }}" hint-placeholder-val="{{ false }}">
+                        <button style="{{ f.payFournStyle }}" onclick="{{ f.onPayFourn }}" title="{{ f.payFournTitle }}">Payée</button>
+                      </sc-if>
                       <sc-if value="{{ f.notAnnulled }}" hint-placeholder-val="{{ true }}">
-                        <button style="{{ f.cancelStyle }}" onclick="{{ f.onCancel }}" title="Annuler cette ligne dans Excel (colonne dédiée)">⊘</button>
+                        <button style="{{ f.cancelStyle }}" onclick="{{ f.onCancel }}" title="Annuler cette ligne : elle est barrée et grisée dans Excel, aucune donnée n'est effacée">⊘</button>
                       </sc-if>
                       <sc-if value="{{ f.annulled }}" hint-placeholder-val="{{ false }}">
                         <span style="{{ f.annuleBadgeStyle }}">Annulé</span>

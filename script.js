@@ -1221,7 +1221,7 @@ class Component {
       for (let i = 0; i < Math.min(gs.rows.length, 10); i++) {
         const h = (gs.rows[i] || []).map(norm);
         const inv = h.findIndex(x => x.includes('invoice'));
-        if (inv >= 0) { hIdx = i; cols = { inv, cust: h.findIndex(x => x.includes('customer')), ttc: h.findIndex(x => x.includes('total ttc')), p1: h.findIndex(x => x.includes('1er')), p2: h.findIndex(x => x.includes('2e')), charge: h.findIndex(x => x.includes('charge')), statut: h.findIndex(x => x.includes('statut')) }; break; }
+        if (inv >= 0) { hIdx = i; cols = { inv, cust: h.findIndex(x => x.includes('customer')), ttc: h.findIndex(x => x.includes('total ttc')), p1: h.findIndex(x => x.includes('1er')), p2: h.findIndex(x => x.includes('2e')), charge: h.findIndex(x => x.includes('charge')), statut: h.findIndex(x => x.includes('statut')), com: h.findIndex(x => this._isComHeader(x)) }; break; }
       }
       if (!cols || cols.inv < 0) return;
       const key = this.gNumKey(rec.num);
@@ -1240,6 +1240,16 @@ class Component {
       put(cols.cust, rec.cust, 'Customer');
       put(cols.p1, rec.p1 || '', '1er paiement'); put(cols.p2, rec.p2 || '', '2e paiement');
       put(cols.charge, rec.charge || '', 'Charges'); put(cols.statut, rec.statut || '', 'Statut');
+      // Commentaire : écrit dans l'onglet Grenke comme les autres champs. Auparavant il n'existait
+      // AUCUNE colonne pour lui — il n'était donc ni écrit ni relu, et pire, il était détruit juste
+      // après l'écriture (la fiche locale est supprimée pour éviter un doublon, voir `after`).
+      put(cols.com, rec.com || '', 'Commentaire');
+      // Le commentaire est saisi mais la colonne manque dans le fichier : on le DIT, plutôt que de
+      // laisser Faustine croire qu'il a été enregistré (il serait perdu au nettoyage de la fiche).
+      if (rec.com && (cols.com == null || cols.com < 0)) {
+        this.setState({ msg: { kind: 'error', text: `Le commentaire n'a pas pu être enregistré : aucune colonne « Commentaire » dans l'onglet Grenke de « ${hi.name} ». Ajoutez cet en-tête à la suite de « Statut », puis réenregistrez le dossier.` } });
+        return; // on n'écrit rien : sinon la fiche locale (et son commentaire) serait supprimée
+      }
       if (!Object.keys(colVals).length) return;
       const after = async (pbuf) => {
         try {
@@ -1879,24 +1889,32 @@ class Component {
       const xfsM = stylesXml.match(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/);
       if (!fontsM || !xfsM) return null;
       const fontEls = fontsM[1].match(/<font\b[\s\S]*?<\/font>|<font\b[^>]*\/>/g) || [];
-      const blueFontXml = '<font><sz val="11"/><color rgb="FF0000FF"/><name val="Andale Mono"/></font>';
-      // Réutilise la police bleue Andale si elle existe déjà (écritures précédentes) → pas d'accumulation.
-      let blueFontId = fontEls.findIndex(f => /Andale Mono/i.test(f) && /FF0000FF/i.test(f));
-      const appendFont = blueFontId < 0; if (appendFont) blueFontId = fontEls.length;
-      // Style « AVOIR » : fond bleu #4472C4, texte noir. Même principe (clone du style d'origine,
-      // seuls la police et le remplissage changent) — police et remplissage réutilisés s'ils
-      // existent déjà. Nécessite une section <fills> ; sinon seul le marquage bleu s'applique.
       const fillsM = stylesXml.match(/<fills\b[^>]*>([\s\S]*?)<\/fills>/);
       const fillEls = fillsM ? (fillsM[1].match(/<fill\b[\s\S]*?<\/fill>|<fill\b[^>]*\/>/g) || []) : null;
-      const blackFontXml = '<font><sz val="11"/><color rgb="FF000000"/><name val="Andale Mono"/></font>';
-      const avoirFillXml = '<fill><patternFill patternType="solid"><fgColor rgb="FF4472C4"/><bgColor indexed="64"/></patternFill></fill>';
-      let blackFontId = fontEls.indexOf(blackFontXml);
-      const appendBlackFont = fillEls && blackFontId < 0; if (appendBlackFont) blackFontId = fontEls.length + (appendFont ? 1 : 0);
-      let avoirFillId = fillEls ? fillEls.indexOf(avoirFillXml) : -1;
-      const appendFill = fillEls && avoirFillId < 0; if (appendFill) avoirFillId = fillEls.length;
       const xfEls = xfsM[1].match(/<xf\b[^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g) || [];
       const baseXfCount = xfEls.length; if (!baseXfCount) return null;
-      const added = []; const cache = {}; const cacheAvoir = {}; const cacheDate = {};
+      // Polices et remplissages AJOUTÉS à la demande : le marquage « annulé » clone la police de
+      // CHAQUE cellule de la ligne pour y ajouter le barré, on ne peut donc pas connaître d'avance
+      // le nombre de polices à créer (d'où ces listes, au lieu des anciens drapeaux fixes).
+      const addedFonts = []; const addedFills = []; const added = [];
+      // Index d'une police / d'un remplissage : réutilise un élément identique déjà présent dans le
+      // fichier (ou déjà ajouté pendant cette écriture) → aucune accumulation d'un appel à l'autre.
+      const fontIdFor = xml => { const all = fontEls.concat(addedFonts); const i = all.indexOf(xml); return i >= 0 ? i : (fontEls.length + addedFonts.push(xml) - 1); };
+      const fillIdFor = xml => { if (!fillEls) return -1; const all = fillEls.concat(addedFills); const i = all.indexOf(xml); return i >= 0 ? i : (fillEls.length + addedFills.push(xml) - 1); };
+      // Résolution PARESSEUSE : une police/un remplissage n'est ajouté au fichier que s'il sert
+      // réellement (sinon une simple écriture bleue gonflerait styles.xml pour rien).
+      const memo = fn => { let v, done = false; return () => { if (!done) { v = fn(); done = true; } return v; }; };
+      const blueFontXml = '<font><sz val="11"/><color rgb="FF0000FF"/><name val="Andale Mono"/></font>';
+      // Réutilise la police bleue Andale déjà présente (écritures précédentes), même si son XML diffère un peu.
+      const blueFontId = memo(() => { const i = fontEls.findIndex(f => /Andale Mono/i.test(f) && /FF0000FF/i.test(f)); return i >= 0 ? i : fontIdFor(blueFontXml); });
+      // Style « AVOIR » : fond bleu #4472C4, texte noir. Nécessite une section <fills> ; sinon seul
+      // le marquage bleu s'applique.
+      const blackFontXml = '<font><sz val="11"/><color rgb="FF000000"/><name val="Andale Mono"/></font>';
+      const blackFontId = memo(() => fontIdFor(blackFontXml));
+      const avoirFillId = memo(() => fillIdFor('<fill><patternFill patternType="solid"><fgColor rgb="FF4472C4"/><bgColor indexed="64"/></patternFill></fill>'));
+      // Style « annulé » : fond gris clair #D9D9D9 (le barré vient de la police, voir withStrike).
+      const annuleFillId = memo(() => fillIdFor('<fill><patternFill patternType="solid"><fgColor rgb="FFD9D9D9"/><bgColor indexed="64"/></patternFill></fill>'));
+      const cache = {}; const cacheAvoir = {}; const cacheDate = {}; const cacheAnnule = {}; const cacheRestore = {};
       // Dérive un style à partir de celui d'origine ; `extra` applique les attributs supplémentaires.
       const derive = (origIdx, store, extra) => {
         const oi = (origIdx >= 0 && origIdx < baseXfCount) ? origIdx : 0;
@@ -1909,25 +1927,54 @@ class Component {
         store[oi] = idx; return idx;
       };
       const setAttr = (xf, name, val) => (new RegExp(`\\b${name}="[^"]*"`).test(xf) ? xf.replace(new RegExp(`\\b${name}="[^"]*"`), `${name}="${val}"`) : xf.replace(/<xf\b/, `<xf ${name}="${val}"`));
-      const mapStyle = (origIdx) => derive(origIdx, cache, xf => setAttr(setAttr(xf, 'fontId', blueFontId), 'applyFont', '1'));
+      const mapStyle = (origIdx) => derive(origIdx, cache, xf => setAttr(setAttr(xf, 'fontId', blueFontId()), 'applyFont', '1'));
       // Style « date » : marquage bleu + format de date court intégré (numFmtId 14 → JJ/MM/AAAA en
       // Excel français). Indispensable pour les cellules NEUVES (ligne créée par le dashboard, donc
       // sans format hérité) : sans lui, la série Excel s'afficherait en nombre brut (ex. 46231).
-      const mapDateStyle = (origIdx) => derive(origIdx, cacheDate, xf => setAttr(setAttr(setAttr(setAttr(xf, 'fontId', blueFontId), 'applyFont', '1'), 'numFmtId', '14'), 'applyNumberFormat', '1'));
+      const mapDateStyle = (origIdx) => derive(origIdx, cacheDate, xf => setAttr(setAttr(setAttr(setAttr(xf, 'fontId', blueFontId()), 'applyFont', '1'), 'numFmtId', '14'), 'applyNumberFormat', '1'));
       const mapAvoirStyle = (origIdx) => {
         if (!fillEls) return mapStyle(origIdx); // pas de <fills> exploitable : on garde le marquage standard
-        return derive(origIdx, cacheAvoir, xf => setAttr(setAttr(setAttr(setAttr(xf, 'fontId', blackFontId), 'applyFont', '1'), 'fillId', avoirFillId), 'applyFill', '1'));
+        return derive(origIdx, cacheAvoir, xf => setAttr(setAttr(setAttr(setAttr(xf, 'fontId', blackFontId()), 'applyFont', '1'), 'fillId', avoirFillId()), 'applyFill', '1'));
       };
+      // ---- Marquage « ligne annulée » : barré + fond gris, RÉVERSIBLE ----
+      // Le barré est obtenu en clonant la police EXISTANTE de la cellule et en y ajoutant <strike/>,
+      // et non en imposant une police à nous : la ligne garde donc sa taille, sa couleur et son
+      // nom de police. Conséquence directe : le retour à la normale est EXACT pour la police, il
+      // suffit de retirer <strike/> pour retrouver la police d'origine, à l'identique.
+      const fontIdOfXf = xf => { const m = xf.match(/\bfontId="(\d+)"/); return m ? Number(m[1]) : 0; };
+      const fontXmlAt = id => fontEls.concat(addedFonts)[id] || '<font/>';
+      // <strike/> doit se placer APRÈS <b/> et <i/> et AVANT tout le reste : la séquence des enfants
+      // de <font> est imposée par ECMA-376. Un ordre incorrect fait afficher à Excel « nous avons
+      // trouvé un problème avec certains contenus » et déclenche une réparation du fichier.
+      const withStrike = xml => {
+        if (/<strike\b/.test(xml)) return xml; // déjà barré
+        if (/^<font\s*\/>$/.test(xml)) return '<font><strike/></font>';
+        const m = xml.match(/^(<font\b[^>]*>)((?:\s*<(?:b|i)\b[^>]*\/>)*)/);
+        return m ? m[1] + m[2] + '<strike/>' + xml.slice(m[0].length) : xml;
+      };
+      const withoutStrike = xml => xml.replace(/<strike\b[^>]*\/>/g, '').replace(/<strike\b[^>]*>[\s\S]*?<\/strike>/g, '');
+      const mapAnnuleStyle = (origIdx) => derive(origIdx, cacheAnnule, xf => {
+        let out = setAttr(setAttr(xf, 'fontId', fontIdFor(withStrike(fontXmlAt(fontIdOfXf(xf))))), 'applyFont', '1');
+        const fid = annuleFillId();
+        if (fid >= 0) out = setAttr(setAttr(out, 'fillId', fid), 'applyFill', '1');
+        return out;
+      });
+      // Retour à la normale : on retire le barré (police d'origine retrouvée à l'identique) et on
+      // remet le remplissage à « aucun » (fillId 0, toujours patternType="none" dans un xlsx valide).
+      // Le format de nombre, les bordures et l'alignement n'ont jamais été touchés.
+      const mapRestoreStyle = (curIdx) => derive(curIdx, cacheRestore, xf => {
+        let out = setAttr(setAttr(xf, 'fontId', fontIdFor(withoutStrike(fontXmlAt(fontIdOfXf(xf))))), 'applyFont', '1');
+        if (fillEls) out = setAttr(setAttr(out, 'fillId', '0'), 'applyFill', '1');
+        return out;
+      });
       const finalize = () => {
         let out = stylesXml;
-        const newFonts = (appendFont ? blueFontXml : '') + (appendBlackFont ? blackFontXml : '');
-        const nAdded = (appendFont ? 1 : 0) + (appendBlackFont ? 1 : 0);
-        if (nAdded) out = out.replace(/<fonts\b[^>]*>([\s\S]*?)<\/fonts>/, (m, inner) => `<fonts count="${fontEls.length + nAdded}">${inner}${newFonts}</fonts>`);
-        if (appendFill) out = out.replace(/<fills\b[^>]*>([\s\S]*?)<\/fills>/, (m, inner) => `<fills count="${fillEls.length + 1}">${inner}${avoirFillXml}</fills>`);
+        if (addedFonts.length) out = out.replace(/<fonts\b[^>]*>([\s\S]*?)<\/fonts>/, (m, inner) => `<fonts count="${fontEls.length + addedFonts.length}">${inner}${addedFonts.join('')}</fonts>`);
+        if (addedFills.length) out = out.replace(/<fills\b[^>]*>([\s\S]*?)<\/fills>/, (m, inner) => `<fills count="${fillEls.length + addedFills.length}">${inner}${addedFills.join('')}</fills>`);
         if (added.length) out = out.replace(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/, (m, inner) => `<cellXfs count="${baseXfCount + added.length}">${inner}${added.join('')}</cellXfs>`);
         return out;
       };
-      return { mapStyle, mapAvoirStyle, mapDateStyle, finalize };
+      return { mapStyle, mapAvoirStyle, mapDateStyle, mapAnnuleStyle, mapRestoreStyle, finalize };
     } catch (e) { return null; }
   }
   async patchXlsxFile(origBuf, editsBySheetName, opts) {
@@ -2301,6 +2348,47 @@ class Component {
     const entries = Object.keys(files).map(name => ({ name, bytes: files[name] }));
     return this.zipBuild(entries, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   }
+  // Marque (ou démarque) TOUTE une ligne comme annulée : texte barré + fond gris clair.
+  //
+  // POURQUOI une méthode dédiée plutôt que patchXlsxFile : patchXlsxFile réécrit la cellule
+  // ENTIÈRE (balise + contenu) à partir d'une valeur fournie. L'utiliser ici détruirait les
+  // formules de la ligne (Solde, TTC…) — ou, avec la garde anti-formule, sauterait justement ces
+  // cellules, qui ne seraient donc pas barrées. Ici on réécrit UNIQUEMENT l'attribut `s` de la
+  // balise ouvrante <c …> : valeurs, formules et chaînes partagées ne sont jamais touchées.
+  // C'est ce qui rend l'opération sûre sur une ligne comptable réelle, et exactement réversible.
+  async _markRowAnnule(buf, sheetName, previewIdx, restore) {
+    const files = await this.unzipAll(buf); const dec = new TextDecoder(); const enc = new TextEncoder();
+    const wbXml = dec.decode(files['xl/workbook.xml'] || new Uint8Array());
+    const relsXml = dec.decode(files['xl/_rels/workbook.xml.rels'] || new Uint8Array());
+    const relMap = this._relMapOf(relsXml);
+    const targetByName = {}; [...wbXml.matchAll(/<sheet[^>]*name="([^"]*)"[^>]*r:id="(rId\d+)"/g)].forEach(m => { targetByName[this.unxml(m[1])] = relMap[m[2]]; });
+    const target = targetByName[sheetName];
+    if (!target || !files[target]) throw new Error(`feuille « ${sheetName} » introuvable — marquage annulé`);
+    const _mark = this._buildMarkStyler(dec.decode(files['xl/styles.xml'] || new Uint8Array()));
+    if (!_mark) return null; // styles.xml illisible : on n'insiste pas, le texte « Annulé par utilisateur » suffit
+    let xml = dec.decode(files[target]);
+    let rowIdx = -1; let touched = 0;
+    // MÊME découpage que readWorkbook et patchXlsxFile (une ligne auto-fermée est avalée dans le
+    // segment de la ligne suivante) pour que previewIdx retombe exactement sur le bon segment.
+    xml = xml.replace(/<row[^>]*>[\s\S]*?<\/row>/g, rowFull => {
+      rowIdx++;
+      if (rowIdx !== previewIdx) return rowFull;
+      // `<c\b` ne peut pas attraper `<col …>` (le `o` empêche la limite de mot) ni `</c>`, et le
+      // texte des cellules est échappé (&lt;) donc ne contient jamais de balise brute.
+      return rowFull.replace(/<c\b[^>]*?\/?>/g, cTag => {
+        const sm = cTag.match(/\ss="(\d+)"/);
+        const cur = sm ? Number(sm[1]) : 0; // pas d'attribut de style = style 0
+        const next = restore ? _mark.mapRestoreStyle(cur) : _mark.mapAnnuleStyle(cur);
+        touched++;
+        return sm ? cTag.replace(/\ss="\d+"/, ` s="${next}"`) : cTag.replace(/<c\b/, `<c s="${next}"`);
+      });
+    });
+    if (!touched) return null; // ligne vide ou introuvable : rien à marquer
+    files[target] = enc.encode(xml);
+    const ns = _mark.finalize(); if (ns) files['xl/styles.xml'] = enc.encode(ns);
+    const entries = Object.keys(files).map(name => ({ name, bytes: files[name] }));
+    return this.zipBuild(entries, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  }
 
   // Prépare l'aperçu d'écriture d'une saisie (ne WRIT PAS encore — attend la confirmation).
   async requestAppendPreview(kind, valsByField, opts) {
@@ -2574,26 +2662,38 @@ class Component {
     }
     return null;
   }
-  // Annulation visible (ou rétablissement) d'une ligne déjà enregistrée : on n'efface rien,
-  // on écrit "Annulé" (ou une case vide, pour rétablir) dans la colonne dédiée réglée comme
-  // les autres colonnes d'écriture. Réutilise exactement la même modale/sauvegarde/écriture
-  // que l'ajout d'une ligne (confirmAppendWrite gère la sauvegarde datée + le disque + le verrou).
-  async requestCancelPreview(kind, ref, opts) {
+  // Feuille + colonnes + première ligne de données visées par une écriture : pour le fichier
+  // fournisseurs (12 feuilles mensuelles × 2 tableaux côte à côte) la cible dépend du mois et du
+  // bloc ; pour les autres sources c'est la feuille unique réglée. Renvoie null et signale l'erreur
+  // si la cible n'existe pas. Partagé par l'annulation et le paiement fournisseur — RÈGLE projet :
+  // pas de fonction en double, une seule résolution de cible pour tout le monde.
+  _writeTargetFor(kind, cfg, opts) {
     opts = opts || {};
-    const cfg = this.writeMapFor(kind);
-    if (!cfg || !cfg.enabled) { this.setState({ msg: { kind: 'error', text: `Écriture non réglée pour « ${this.writeSourceLabel(kind)} » — réglez-la dans Paramètres avant d'annuler une ligne dans Excel.` } }); return; }
-    let sheetName, colsMap, firstDataIdx = cfg.firstDataIdx || 0;
     if (kind === 'factures' && (cfg.months || cfg.blocks)) {
       const m = Math.max(1, Math.min(12, opts.month || 1));
       const block = opts.block === 'crustace' ? 'crustace' : 'normal';
       const mc = cfg.months && cfg.months[m];
-      if (mc) { sheetName = mc.sheetName; colsMap = (mc.blocks[block] || {}).cols || {}; firstDataIdx = mc.firstDataIdx; }
-      else { sheetName = (cfg.monthSheets || [])[m - 1]; colsMap = ((cfg.blocks && cfg.blocks[block]) || {}).cols || {}; firstDataIdx = cfg.firstDataIdx || 0; }
-      if (!sheetName) { this.setState({ msg: { kind: 'error', text: `Annulation impossible : la feuille du mois de ${Component.MONTHS[m]} n'existe pas dans « ${cfg.fileName} ».` } }); return; }
-    } else {
-      if (!cfg.cols) return;
-      sheetName = cfg.sheetName; colsMap = cfg.cols;
+      const sheetName = mc ? mc.sheetName : (cfg.monthSheets || [])[m - 1];
+      const colsMap = mc ? ((mc.blocks[block] || {}).cols || {}) : (((cfg.blocks && cfg.blocks[block]) || {}).cols || {});
+      const firstDataIdx = mc ? mc.firstDataIdx : (cfg.firstDataIdx || 0);
+      if (!sheetName) { this.setState({ msg: { kind: 'error', text: `Écriture impossible : la feuille du mois de ${Component.MONTHS[m]} n'existe pas dans « ${cfg.fileName} ».` } }); return null; }
+      return { sheetName, colsMap, firstDataIdx };
     }
+    if (!cfg.cols) return null;
+    return { sheetName: cfg.sheetName, colsMap: cfg.cols, firstDataIdx: cfg.firstDataIdx || 0 };
+  }
+  // Annulation visible (ou rétablissement) d'une ligne déjà enregistrée. On n'efface JAMAIS rien :
+  // la ligne est barrée et grisée sur toute sa largeur (voir _markRowAnnule) et la colonne dédiée
+  // reçoit « Annulé par utilisateur » avec la date. Le rétablissement retire simplement ce
+  // marquage — comme rien n'a été supprimé, il n'y a rien à reconstruire, donc aucune fausse manip
+  // ne peut faire perdre les données de la facture. Réutilise exactement la même
+  // modale/sauvegarde/écriture que l'ajout d'une ligne (confirmAppendWrite).
+  async requestCancelPreview(kind, ref, opts) {
+    opts = opts || {};
+    const cfg = this.writeMapFor(kind);
+    if (!cfg || !cfg.enabled) { this.setState({ msg: { kind: 'error', text: `Écriture non réglée pour « ${this.writeSourceLabel(kind)} » — réglez-la dans Paramètres avant d'annuler une ligne dans Excel.` } }); return; }
+    const target = this._writeTargetFor(kind, cfg, opts); if (!target) return;
+    const sheetName = target.sheetName, colsMap = target.colsMap, firstDataIdx = target.firstDataIdx;
     const annuleCol = colsMap.annule;
     if (annuleCol == null || annuleCol < 0) { this.setState({ msg: { kind: 'error', text: `Aucune colonne « Annulé » réglée pour « ${this.writeSourceLabel(kind)} » — ajoutez-la dans Paramètres → Régler l'écriture.` } }); return; }
     const refCol = colsMap.ref;
@@ -2608,11 +2708,71 @@ class Component {
       const buf = await file.arrayBuffer();
       const loc = await this._locateRowByRef(buf, sheetName, refCol, ref, firstDataIdx);
       if (!loc) { this.setState({ msg: { kind: 'error', text: `Ligne « ${ref} » introuvable dans « ${sheetName} » — le fichier a peut-être changé. Actualisez puis réessayez.` } }); return; }
-      const colVals = { [annuleCol]: opts.restore ? '' : 'Annulé' };
-      this._pendingWrite = { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: 'patch', colVals, refuseFormula: true, after: () => this.confirmAnnuleAfterWrite(kind, ref, !!opts.restore, { month: opts.month, block: opts.block }) };
-      this.setState({ writePreview: { kind: 'annule', fileName: hi.name, sheetName, excelRow: loc.excelRow, rows: [{ label: 'Annulé', col: this._colLetter(annuleCol + 1), value: opts.restore ? '(case vidée)' : 'Annulé' }], status: null, restore: !!opts.restore, refLabel: ref } });
+      // Texte daté, écrit en clair dans une VRAIE cellule (et non dans un commentaire Excel, qui est
+      // la zone la plus fragile d'un classeur : perdue via Google Sheets/LibreOffice, première
+      // supprimée si Excel « répare » le fichier, et accrochée à une cellule et non à une ligne —
+      // donc décalée dès que le tableau est trié). Ici l'information survit à tout.
+      const marque = `Annulé par utilisateur — ${this._isoToFr(this._payTodayIso())}`;
+      const colVals = { [annuleCol]: opts.restore ? '' : marque };
+      // La LIGNE N'EST JAMAIS VIDÉE (RÈGLE projet : pas de suppression d'écriture depuis
+      // l'interface). Elle est seulement barrée et grisée sur toute sa largeur, et le retour à la
+      // normale retire ce marquage : comme rien n'a été effacé, il n'y a rien à reconstruire —
+      // donc aucune fausse manip ne peut faire perdre les données de la facture.
+      this._pendingWrite = { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: 'patch', colVals, refuseFormula: true, rowMark: { sheetName, previewIdx: loc.previewIdx, restore: !!opts.restore }, after: () => this.confirmAnnuleAfterWrite(kind, ref, !!opts.restore, { month: opts.month, block: opts.block }) };
+      this.setState({ writePreview: { kind: 'annule', fileName: hi.name, sheetName, excelRow: loc.excelRow, rows: [
+        { label: 'Annulé', col: this._colLetter(annuleCol + 1), value: opts.restore ? '(case vidée)' : marque },
+        { label: 'Ligne entière', col: `ligne ${loc.excelRow}`, value: opts.restore ? 'marquage retiré (ni barré ni gris)' : 'barrée + fond gris — aucune donnée effacée' },
+      ], status: null, restore: !!opts.restore, refLabel: ref } });
     } catch (e) {
       this.setState({ msg: { kind: 'error', text: `Préparation de l'annulation impossible : ${(e && e.message) || 'erreur'}. Rien n'a été modifié.` } });
+    }
+  }
+  // Marque une facture FOURNISSEUR comme payée : remplit les colonnes « Paiement » et « Date
+  // paiement » du fichier fournisseurs. Ces deux colonnes étaient les SEULES colonnes réglables que
+  // le tableau de bord n'écrivait jamais : fournWriteValues les forçait à vide et aucun autre
+  // circuit ne les remplissait — toute facture fournisseur saisie ici restait donc éternellement
+  // « non payée », sans aucun moyen de la solder autrement qu'à la main dans Excel.
+  // Même pipeline que toutes les autres écritures : aperçu → confirmation → sauvegarde datée →
+  // écriture → relecture de contrôle (confirmAppendWrite).
+  async requestPaiementFournPreview(ref, montant, opts) {
+    opts = opts || {};
+    const kind = 'factures';
+    const cfg = this.writeMapFor(kind);
+    if (!cfg || !cfg.enabled) { this.setState({ msg: { kind: 'error', text: `Écriture non réglée pour « ${this.writeSourceLabel(kind)} » — réglez-la dans Paramètres avant d'enregistrer un paiement fournisseur.` } }); return; }
+    const target = this._writeTargetFor(kind, cfg, opts); if (!target) return;
+    const sheetName = target.sheetName, colsMap = target.colsMap, firstDataIdx = target.firstDataIdx;
+    const refCol = colsMap.ref;
+    if (refCol == null || refCol < 0) { this.setState({ msg: { kind: 'error', text: `Colonne « N° de facture » non réglée pour « ${this.writeSourceLabel(kind)} » — impossible de retrouver la ligne.` } }); return; }
+    const payeCol = colsMap.paye, datePaieCol = colsMap.datePaie;
+    const hasPaye = payeCol != null && payeCol >= 0, hasDate = datePaieCol != null && datePaieCol >= 0;
+    if (!hasPaye && !hasDate) { this.setState({ msg: { kind: 'error', text: `Aucune colonne « Paiement » ni « Date paiement » réglée pour « ${this.writeSourceLabel(kind)} » — ajoutez-les dans Paramètres → Régler l'écriture.` } }); return; }
+    const hi = this._writableHandleFor(kind);
+    if (!hi || !hi.handle) { this.setState({ msg: { kind: 'error', text: `Fichier « ${cfg.fileName || this.writeSourceLabel(kind)} » non connecté. Reconnectez-le dans Paramètres.` } }); return; }
+    try {
+      const okPerm = await this._ensureWritePermission(hi.handle);
+      if (!okPerm) { this.setState({ msg: { kind: 'error', text: `Autorisation d'écriture refusée sur « ${hi.name} ». Rien n'a été modifié.` } }); return; }
+      const file = await hi.handle.getFile();
+      const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
+      const buf = await file.arrayBuffer();
+      const loc = await this._locateRowByRef(buf, sheetName, refCol, ref, firstDataIdx);
+      if (!loc) { this.setState({ msg: { kind: 'error', text: `Ligne « ${ref} » introuvable dans « ${sheetName} » — le fichier a peut-être changé. Actualisez puis réessayez.` } }); return; }
+      const iso = opts.dateIso || this._payTodayIso();
+      const colVals = {}; const preview = []; const dateCols = {};
+      if (hasPaye) { colVals[payeCol] = montant; preview.push({ label: 'Paiement', col: this._colLetter(payeCol + 1), value: this.fmt(montant) }); }
+      if (hasDate) {
+        // Date en SÉRIE Excel + colonne déclarée dans dateCols (RÈGLE « Dates Excel ») : sur une
+        // ligne dont la case Date paiement n'a jamais servi, sans ça la série s'afficherait en
+        // nombre brut (ex. 46261) au lieu d'une date JJ/MM/AAAA.
+        const serial = this._excelSerial(iso);
+        if (serial != null) { colVals[datePaieCol] = serial; (dateCols[sheetName] = dateCols[sheetName] || new Set()).add(Number(datePaieCol)); preview.push({ label: 'Date paiement', col: this._colLetter(datePaieCol + 1), value: this._isoToFr(iso) }); }
+      }
+      if (!Object.keys(colVals).length) { this.setState({ msg: { kind: 'error', text: 'Rien à écrire : vérifiez le réglage des colonnes « Paiement » et « Date paiement ».' } }); return; }
+      // Pas de callback `after` : confirmAppendWrite affiche déjà son message de succès détaillé
+      // (fichier, feuille, ligne, relecture vérifiée, nom de la sauvegarde), qui écraserait le nôtre.
+      this._pendingWrite = { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: 'patch', colVals, dateCols, refuseFormula: true };
+      this.setState({ writePreview: { kind: 'paiementFourn', fileName: hi.name, sheetName, excelRow: loc.excelRow, rows: preview, status: null, refLabel: ref } });
+    } catch (e) {
+      this.setState({ msg: { kind: 'error', text: `Préparation du paiement impossible : ${(e && e.message) || 'erreur'}. Rien n'a été modifié.` } });
     }
   }
   confirmAnnuleAfterWrite(kind, ref, restore, meta) {
@@ -3948,7 +4108,7 @@ class Component {
       out.onSraClose = () => this.closeStockRoomAlert();
     }
     if (wp) {
-      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'verif' ? `Appliquer les corrections dans « ${wp.fileName} » ?` : wp.kind === 'paiementClient' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'avoirManuel' ? `Créer un avoir pour « ${wp.refLabel} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
+      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'verif' ? `Appliquer les corrections dans « ${wp.fileName} » ?` : wp.kind === 'paiementClient' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiementFourn' ? `Marquer la facture fournisseur « ${wp.refLabel} » comme payée ?` : wp.kind === 'avoirManuel' ? `Créer un avoir pour « ${wp.refLabel} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
       out.wpSubText = wp.kind === 'stock'
         ? `${wp.title || ''} — je remplis le poids et le prix par espèce/calibre. Le prix moyen se recalcule tout seul (formule non touchée). Sauvegarde datée avant l'écriture.`
         : wp.kind === 'verif'
@@ -3977,7 +4137,7 @@ class Component {
       out.wpFileName = wp.fileName; out.wpSheetName = wp.sheetName; out.wpExcelRow = wp.excelRow;
       out.wpRows = (wp.rows || []).map(r => ({ label: r.label, col: r.col, value: r.value }));
       out.wpStatus = wp.status || ''; out.wpError = wp.error || ''; out.wpBusy = wp.status === 'writing';
-      out.wpBtnLabel = wp.status === 'writing' ? 'Écriture…' : (wpLocked ? '↻ Réessayer' : wp.kind === 'annule' ? (wp.restore ? 'Confirmer le rétablissement' : "Confirmer l'annulation") : wp.kind === 'encaisse' ? 'Confirmer « Encaissé »' : wp.kind === 'chqannule' ? "Confirmer l'annulation" : wp.kind === 'chqmodif' ? 'Confirmer la modification' : wp.kind === 'paiement' ? 'Confirmer le paiement' : 'Confirmer et écrire');
+      out.wpBtnLabel = wp.status === 'writing' ? 'Écriture…' : (wpLocked ? '↻ Réessayer' : wp.kind === 'annule' ? (wp.restore ? 'Confirmer le rétablissement' : "Confirmer l'annulation") : wp.kind === 'encaisse' ? 'Confirmer « Encaissé »' : wp.kind === 'chqannule' ? "Confirmer l'annulation" : wp.kind === 'chqmodif' ? 'Confirmer la modification' : wp.kind === 'paiement' || wp.kind === 'paiementFourn' ? 'Confirmer le paiement' : 'Confirmer et écrire');
       out.wpConfirmStyle = wp.status === 'writing'
         ? "padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#8ab89a;border:none;font-family:inherit;cursor:wait"
         : "padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#15803d;border:none;cursor:pointer;font-family:inherit";
@@ -4107,11 +4267,21 @@ class Component {
       if (pw.editsBySheet) patched = await this.patchXlsxFile(buf, pw.editsBySheet, { refuseFormula: pw.refuseFormula, markStyle: true, allowFormulaCols: pw.allowFormulaCols, dateCols: pw.dateCols }); // écriture multi-feuilles (stock)
       else if (pw.mode === 'append') patched = await this._appendXlsxRow(buf, pw.sheetName, pw.excelRow, pw.colVals, pw.dateCols && pw.dateCols[pw.sheetName]);
       else { const edits = {}; edits[pw.sheetName] = {}; Object.keys(pw.colVals).forEach(ci => { edits[pw.sheetName][pw.previewIdx + ':' + ci] = pw.colVals[ci]; }); patched = await this.patchXlsxFile(buf, edits, { refuseFormula: pw.refuseFormula, markStyle: true, allowFormulaCols: pw.allowFormulaCols, dateCols: pw.dateCols }); }
-      const patchedBuf = await patched.arrayBuffer();
+      let patchedBuf = await patched.arrayBuffer();
+      const skippedCols = patched._skippedFormulaCols || {}; // colonnes ignorées (formule) : exclues de la vérification
+      // 3 bis) MARQUAGE DE LA LIGNE ENTIÈRE (annulation / retour à la normale) : barré + fond gris.
+      // Appliqué APRÈS l'écriture de la case « Annulé », sur le fichier déjà patché. Non bloquant :
+      // si le marquage échoue, le texte « Annulé par utilisateur » est déjà écrit, donc l'annulation
+      // reste lisible — on ne perd jamais l'information pour un simple problème de style.
+      if (pw.rowMark) {
+        try {
+          const marked = await this._markRowAnnule(patchedBuf.slice(0), pw.rowMark.sheetName, pw.rowMark.previewIdx, !!pw.rowMark.restore);
+          if (marked) { patched = marked; patchedBuf = await marked.arrayBuffer(); }
+        } catch (e) { console.error('Marquage de la ligne annulée impossible (non bloquant) :', e); }
+      }
       // 4) RELECTURE DE CONTRÔLE (avant même d'écrire le disque : on vérifie le blob produit)
       const wbChk = await this.readWorkbook(patchedBuf.slice(0));
       const mismatches = [];
-      const skippedCols = patched._skippedFormulaCols || {}; // colonnes ignorées (formule) : exclues de la vérification
       if (pw.editsBySheet) {
         (pw.verifyTargets || []).forEach(t => { if (skippedCols[t.sheetName] && skippedCols[t.sheetName].has(t.col)) return; const sh = wbChk.find(s => s.name === t.sheetName); const got = (sh && sh.rows[t.rowIdx]) ? sh.rows[t.rowIdx][t.col] : ''; const exp = String(t.val); const g = String(got == null ? '' : got); if (exp !== g && !(this._vNum(exp) === this._vNum(g) && exp !== '' && g !== '')) mismatches.push(`${t.sheetName}!${this._colLetter(t.col + 1)}${t.rowIdx + 1} attendu ${exp} ≠ lu ${g}`); });
       } else {
@@ -5060,6 +5230,10 @@ class Component {
     return { title: kind, headers: [], fields: [], emit: () => null };
   }
   _norm(s) { return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim(); }
+  // En-t\u00eate d'une colonne \u00ab commentaire \u00bb (onglet Grenke). PI\u00c8GE \u00c0 NE PAS R\u00c9INTRODUIRE : ne jamais
+  // tester includes('com') \u2014 \u00ab customer \u00bb contient aussi \u00ab com \u00bb, la d\u00e9tection viserait alors la
+  // colonne Client et le commentaire \u00e9craserait le nom du client.
+  _isComHeader(h) { const x = this._norm(h); return x.includes('commentaire') || x.includes('observation') || x === 'com' || x === 'com.'; }
   // ---------- \u00e9tat "donn\u00e9e manquante" r\u00e9utilisable (cartes esp\u00e8ces Stock ET cat\u00e9gories bancaires) ----------
   // items: [{ key, label, reason }] d\u00e9j\u00e0 identifi\u00e9s comme manquants/invalides par l'appelant.
   buildMissingState(items) {
@@ -5318,7 +5492,7 @@ class Component {
     if (hi < 0) return;
     const H = (rows[hi] || []).map(c => this._norm(c));
     const col = (...ks) => { for (const k of ks) { const idx = H.findIndex(h => h.includes(this._norm(k))); if (idx >= 0) return idx; } return -1; };
-    const ci = { ref: col('invoice number', 'invoice', 'numero', 'facture'), cust: col('customer', 'client', 'nom'), ttc: col('total ttc', 'ttc'), p1: col('1er payment', '1st payment', 'premier', 'paiement 1', 'payment 1'), p2: col('2e payment', '2nd payment', 'deuxieme', 'paiement 2', 'payment 2'), rem: col('remains', 'restant', 'reste'), charge: col('charges', 'charge', 'fee'), recv: col('total received', 'received', 'recu'), st: col('statut', 'status') };
+    const ci = { ref: col('invoice number', 'invoice', 'numero', 'facture'), cust: col('customer', 'client', 'nom'), ttc: col('total ttc', 'ttc'), p1: col('1er payment', '1st payment', 'premier', 'paiement 1', 'payment 1'), p2: col('2e payment', '2nd payment', 'deuxieme', 'paiement 2', 'payment 2'), rem: col('remains', 'restant', 'reste'), charge: col('charges', 'charge', 'fee'), recv: col('total received', 'received', 'recu'), st: col('statut', 'status'), com: H.findIndex(h => this._isComHeader(h)) };
     if (ci.ref < 0 && ci.ttc < 0) return;
     const list = [];
     rows.slice(hi + 1).forEach(r => {
@@ -5333,7 +5507,8 @@ class Component {
       const remRaw = ci.rem >= 0 ? this.parseAmount(r[ci.rem]) : null;
       const rem = remRaw != null ? remRaw : Math.round((ttc - p1 - p2 - charge) * 100) / 100;
       const statut = ci.st >= 0 ? String(r[ci.st] || '').trim() : '';
-      list.push({ ref, cust: ci.cust >= 0 ? String(r[ci.cust] || '').trim() : '', ttc, p1, p2, recv, rem, charge, statut });
+      const com = ci.com >= 0 ? String(r[ci.com] || '').trim() : '';
+      list.push({ ref, cust: ci.cust >= 0 ? String(r[ci.cust] || '').trim() : '', ttc, p1, p2, recv, rem, charge, statut, com });
     });
     if (!list.length) return;
     this.setState({ grenke: list, grenkeName: name });
@@ -6774,6 +6949,13 @@ class Component {
         annulled, notAnnulled: !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none',
         onCancel: () => this.requestCancelPreview('factures', f.ref, { month: f.em.m }), cancelStyle: cancelBtnStyle,
         onRestore: () => this.requestCancelPreview('factures', f.ref, { restore: true, month: f.em.m }), restoreStyle: restoreBtnStyle, annuleBadgeStyle,
+        // « Payée » : uniquement pour une facture FOURNISSEUR encore due et non annulée — c'est le
+        // circuit qui remplit enfin les colonnes Paiement / Date paiement du fichier fournisseurs.
+        // Les factures clients se soldent par le Suivi de paiement, pas ici.
+        canPayFourn: f.sens === 'Fournisseur' && f.reste > 0.005 && !annulled,
+        onPayFourn: () => this.requestPaiementFournPreview(f.ref, f.reste, { month: f.em.m }),
+        payFournStyle: `padding:4px 9px;border-radius:7px;font-size:11px;font-weight:600;color:${green};background:#fff;border:1px solid #bfe3cd;cursor:pointer;font-family:inherit`,
+        payFournTitle: `Marquer cette facture fournisseur comme payée (${this.fmt(f.reste)}) dans Excel`,
       };
     });
 
