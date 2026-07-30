@@ -999,7 +999,11 @@ class Component {
   _addDaysIso(iso, days) { if (!iso) return ''; const p = String(iso).split('-').map(Number); const d = new Date(p[0], (p[1] || 1) - 1, p[2] || 1); d.setDate(d.getDate() + (+days || 0)); return d.getFullYear() + '-' + this.dd(d.getMonth() + 1) + '-' + this.dd(d.getDate()); }
   _venteNextId() { const fromFile = (this.state.ventes || []).map(r => +String(r.ref || '').replace(/\D/g, '') || 0); const ids = [...fromFile, ...this.venteSaisieRows().map(r => +r.id || 0), ...this.payTrackRows().map(r => +r.id || 0)]; return (ids.length ? Math.max(...ids) : 0) + 1; }
   compEmptyLigne() { const e = Object.keys(Component.ESP)[0]; return { espece: e, calibre: (Component.ESP[e] || ['Standard'])[0], poids: '', prixKg: '' }; }
-  openCompForm(mode) { this.setState({ compTab: mode, compFan: null }); if (mode === 'Achat') { this.resetAchatDraft(); this.refreshAchatInvoiceNumber(); this._refreshChequiersLive(); } else if (mode === 'Fournisseur') this.resetFournDraft(); else if (mode === 'Paiement') { this.setState({ paiementDraft: null }); this._refreshChequiersLive(); } else { this.resetVenteDraft(); this.refreshVenteInvoiceNumber(); this.refreshVenteIdFacture(); } }
+  // Le compte rendu de la dernière écriture (compFan) n'est PLUS effacé quand on revient sur le même
+  // formulaire : il disparaissait dès qu'on quittait l'écran et qu'on y revenait, alors que c'est
+  // justement le récapitulatif qu'on veut relire pour vérifier que tout est passé. Il ne s'efface
+  // qu'en changeant de type de saisie, ou par sa croix de fermeture.
+  openCompForm(mode) { this.setState({ compTab: mode, ...(mode === this.state.compTab ? {} : { compFan: null }) }); if (mode === 'Achat') { this.resetAchatDraft(); this.refreshAchatInvoiceNumber(); this._refreshChequiersLive(); } else if (mode === 'Fournisseur') this.resetFournDraft(); else if (mode === 'Paiement') { this.setState({ paiementDraft: null }); this._refreshChequiersLive(); } else { this.resetVenteDraft(); this.refreshVenteInvoiceNumber(); this.refreshVenteIdFacture(); } }
   // RÈGLE 5 (achat pêcheur) : lit le n° de facture pré-imprimé de la prochaine ligne à remplir
   // (colonne « N° de facture ») et le propose, modifiable. Non bloquant si non réglé/connecté.
   async refreshAchatInvoiceNumber() {
@@ -2478,9 +2482,38 @@ class Component {
     const colName = n => { let s = '', m = n; while (m > 0) { const r = (m - 1) % 26; s = String.fromCharCode(65 + r) + s; m = Math.floor((m - 1) / 26); } return s; };
     const dateSet = dateColIdxs || new Set();
     const _mark = dateSet.size ? this._buildMarkStyler(dec.decode(files['xl/styles.xml'] || new Uint8Array())) : null;
+    // La ligne créée hérite du STYLE de la dernière ligne remplie du tableau (bordures, format
+    // monétaire, police). Sans ça, une ligne ajoutée quand le tableau est plein arrivait toute nue :
+    // ni bordure ni format €, visiblement différente des autres et pénible à corriger à la main.
+    const styleParCol = {};
+    try {
+      const prev = [...xml.matchAll(/<row[^>]*>[\s\S]*?<\/row>/g)].map(m => m[0]).filter(rw => {
+        const n = Number((rw.match(/<row\b[^>]*?\br="(\d+)"/) || [, 0])[1]);
+        return n > 0 && n < excelRow && /<v>|<is>/.test(rw); // ligne réellement remplie, avant la nôtre
+      }).pop();
+      if (prev) {
+        const cr = /<c\b([^>]*?)(?:\/>|>[\s\S]*?<\/c>)/g; let cm;
+        while (cm = cr.exec(prev)) {
+          const rf = (cm[1].match(/\br="([A-Z]+)\d+"/) || [, ''])[1]; if (!rf) continue;
+          const sm = cm[1].match(/\ss="(\d+)"/); if (!sm) continue;
+          let v = 0; for (const ch of rf) v = v * 26 + (ch.charCodeAt(0) - 64);
+          styleParCol[v - 1] = sm[1];
+        }
+      }
+    } catch (e) { /* modèle de ligne illisible : on écrit sans style hérité, jamais bloquant */ }
     const cols = Object.keys(colVals).map(Number).sort((a, b) => a - b);
     let cellsXml = '';
-    cols.forEach(ci => { const ref = colName(ci + 1) + excelRow; const v = colVals[ci]; const s = String(v == null ? '' : v).trim(); if (s === '') return; const num = this._editNumeric(s); const styleAttr = (_mark && dateSet.has(ci)) ? ` s="${_mark.mapDateStyle(0)}"` : ''; cellsXml += num != null ? `<c r="${ref}"${styleAttr}><v>${num}</v></c>` : `<c r="${ref}"${styleAttr} t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`; });
+    cols.forEach(ci => {
+      const ref = colName(ci + 1) + excelRow; const v = colVals[ci];
+      const s = String(v == null ? '' : v).trim(); if (s === '') return;
+      const num = this._editNumeric(s);
+      const herite = styleParCol[ci]; // style de la même colonne sur la dernière ligne remplie
+      // Une colonne de date part du style hérité, auquel on ajoute le format de date : sinon la
+      // série Excel s'afficherait en nombre brut (RÈGLE « Dates Excel »).
+      const styleAttr = (_mark && dateSet.has(ci)) ? ` s="${_mark.mapDateStyle(herite != null ? Number(herite) : 0)}"`
+        : (herite != null ? ` s="${herite}"` : '');
+      cellsXml += num != null ? `<c r="${ref}"${styleAttr}><v>${num}</v></c>` : `<c r="${ref}"${styleAttr} t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`;
+    });
     const rowXml = `<row r="${excelRow}">${cellsXml}</row>`;
     if (/<\/sheetData>/.test(xml)) xml = xml.replace('</sheetData>', rowXml + '</sheetData>');
     else if (/<sheetData\/>/.test(xml)) xml = xml.replace('<sheetData/>', `<sheetData>${rowXml}</sheetData>`);
@@ -3575,7 +3608,21 @@ class Component {
     if (this._norm(hdr[prixCol]).indexOf('prix') < 0) { for (let c = poidsCol + 1; c < Math.min(hdr.length, poidsCol + 3); c++) { if (this._norm(hdr[c]).indexOf('prix') >= 0) { prixCol = c; break; } } }
     let clientCol = -1; for (let c = 0; c < hdr.length; c++) { if (this._norm(hdr[c]).indexOf('client') >= 0) { clientCol = c; break; } }
     if (clientCol < 0) clientCol = 4; // repli si l'en-tête « Clients » n'est pas détecté
-    return { sheetName: sh.name, headerIdx: sec.headerIdx, dataStart: sec.dataStart, totalRow: sec.totalRow, poidsCol, prixCol, clientCol };
+    // Colonne « Observation » : reçoit le N° de la facture d'achat ou de vente à l'origine du
+    // mouvement. C'est elle qui rattache DURABLEMENT une ligne de stock à son document — sans elle,
+    // le rapprochement ne peut se faire que par nom de pêcheur et semaine, donc par approximation.
+    const obsCol = this._stockObsCol(hdr);
+    return { sheetName: sh.name, headerIdx: sec.headerIdx, dataStart: sec.dataStart, totalRow: sec.totalRow, poidsCol, prixCol, clientCol, obsCol };
+  }
+  // Colonne « Observation » d'un en-tête de section stock (-1 si absente). PIÈGE À ÉVITER :
+  // ne pas confondre avec « OBS » d'un chéquier, et ne jamais tester includes('obs') sur un en-tête
+  // qui pourrait contenir autre chose — on reste sur des libellés explicites.
+  _stockObsCol(hdr) {
+    for (let c = 0; c < (hdr || []).length; c++) {
+      const h = this._norm(hdr[c]);
+      if (h === 'obs' || h === 'obs.' || h.indexOf('observation') >= 0 || h.indexOf('n° facture') >= 0 || h === 'facture') return c;
+    }
+    return -1;
   }
   // Numéro de semaine porté par le nom d'un fichier de stock. On ne PARSE pas le nom (trop
   // hasardeux) : on teste les 53 semaines avec la même expression que _stockWeeklyHandle et on
@@ -3600,6 +3647,7 @@ class Component {
       const hdr = rows[sec.headerIdx] || [];
       let clientCol = -1; for (let c = 0; c < hdr.length; c++) { if (this._norm(hdr[c]).indexOf('client') >= 0) { clientCol = c; break; } }
       if (clientCol < 0) clientCol = 4; // même repli que _stockResolve
+      const obsCol = this._stockObsCol(hdr);
       // Colonne de calibre = colonne d'en-tête suivie d'une colonne « PRIX » (motif universel du fichier).
       const cals = [];
       for (let c = 0; c < hdr.length; c++) {
@@ -3613,7 +3661,8 @@ class Component {
         const client = String(rr[clientCol] == null ? '' : rr[clientCol]).trim(); if (!client) continue;
         cals.forEach(cal => {
           const poids = this._vNum(rr[cal.poidsCol]); if (!(poids > 0)) return;
-          out.push({ file: fileName, sheet: sh.name, espece, calibre: cal.label, client, poids, prix: this._vNum(rr[cal.prixCol]), excelRow: r + 1 });
+          const obs = obsCol >= 0 ? String(rr[obsCol] == null ? '' : rr[obsCol]).trim() : '';
+          out.push({ file: fileName, sheet: sh.name, espece, calibre: cal.label, client, poids, prix: this._vNum(rr[cal.prixCol]), obs, excelRow: r + 1 });
         });
       }
     });
@@ -3631,7 +3680,16 @@ class Component {
     ];
     const parPecheur = new Set(achats.map(a => a.p).filter(Boolean));
     const parSemaine = new Set(achats.filter(a => a.w != null).map(a => a.p + '|' + a.w));
+    // Numéros de facture d'achat connus : le rapprochement EXACT, quand la colonne Observation du
+    // stock porte le n° de la facture. Il prime sur le rapprochement par nom et semaine, qui n'est
+    // qu'une approximation.
+    const numsConnus = new Set([
+      ...((this.state.ops || []).filter(r => r.type === 'Achat').map(r => this.nrm(r.ref))),
+      ...this.achatSaisieRows().map(a => this.nrm(a.num)),
+    ].filter(Boolean));
     return lines.filter(l => {
+      const obs = this.nrm(l.obs || '');
+      if (obs) return !numsConnus.has(obs); // lien explicite : on s'y fie entièrement
       const p = this.nrm(l.client); if (!p) return false;
       const w = this._stockWeekOfFile(l.file);
       return w != null ? !parSemaine.has(p + '|' + w) : !parPecheur.has(p);
@@ -3702,6 +3760,9 @@ class Component {
         let rowIdx = -1; for (let r = g.t.dataStart; r < maxRow; r++) { const rr = rows[r] || []; const clientEmpty = (rr[g.t.clientCol] == null || String(rr[g.t.clientCol]).trim() === ''); const cellsEmpty = poidsCols.every(pc => rr[pc] == null || String(rr[pc]).trim() === ''); const fset = fmap[r] || new Set(); const hasFormulaHere = fset.has(g.t.clientCol) || targetCols.some(ci => fset.has(ci)); if (clientEmpty && cellsEmpty && !hasFormulaHere) { rowIdx = r; break; } }
         if (rowIdx < 0) { unresolved.push(`${sn} (pas de ligne libre)`); return; }
         editsBySheet[sn] = {}; editsBySheet[sn][rowIdx + ':' + g.t.clientCol] = rec.pecheur || rec.client || '';
+        // N° de la facture à l'origine du mouvement, écrit dans « Observation » : c'est le lien
+        // durable entre la ligne de stock et son document d'achat ou de vente.
+        if (g.t.obsCol != null && g.t.obsCol >= 0 && rec.num) editsBySheet[sn][rowIdx + ':' + g.t.obsCol] = rec.num;
         g.cals.forEach(c => { editsBySheet[sn][rowIdx + ':' + c.poidsCol] = c.poids; editsBySheet[sn][rowIdx + ':' + c.prixCol] = c.prix;
           preview.push({ label: `${sn} · ${c.label}`, col: `${this._colLetter(c.poidsCol + 1)}${rowIdx + 1}`, value: `${c.poids} kg @ ${this.fmt(c.prix)}/kg` });
           verifyTargets.push({ sheetName: sn, rowIdx, col: c.poidsCol, val: c.poids }, { sheetName: sn, rowIdx, col: c.prixCol, val: c.prix }); }); });
