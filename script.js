@@ -223,7 +223,7 @@ class Component {
     restartRun: null, verifPending: null, extChanges: null, venteAvoirAsk: null, venteAvoirDispo: null, avoirManuel: null,
     ventesSaisie: [], venteDraft: null,
     grenkeMan: [], grkDraft: null, grkDelAsk: null,
-    achatsSaisie: [], achatDraft: null, chequiersLive: [], compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null, chqEditDraft: null, stockRoomAlert: null, avoirTotals: {}, stockLines: [], stockPick: false,
+    achatsSaisie: [], achatDraft: null, chequiersLive: [], compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null, chqEditDraft: null, stockRoomAlert: null, avoirTotals: {}, stockLines: [], stockPick: false, chequierLines: [],
     paiementFilters: [], paiementSort: null, chqAnnuleConfirm: null, chqAnnuleReplaceAsk: null, chqAddDraft: null, chqLiveStatus: null,
     fournSaisie: [], fournDraft: null,
     backupFolderName: null, backupStatus: null, backupLast: null, backupError: null, restoreStatus: null, restorePreview: null,
@@ -275,6 +275,31 @@ class Component {
       key: r => r.ref || '',
       fields: [['amt', 'Montant', '€'], ['paid', 'Total payé', '€'], ['reste', 'Solde', '€'],
                ['status', 'Statut', ''], ['chq', 'Chèque / observation', ''], ['partner', 'Pêcheur', '']] },
+    { src: 'chequierLines', label: 'Chéquier', kind: 'operations', name: r => r.desc || '',
+      key: r => `${r.chequier}/${r.num}`,
+      fields: [['date', 'Date', ''], ['desc', 'Description', ''], ['mont', 'Montant', '€'],
+               ['paie', 'Paiement', ''], ['etat', 'État', ''], ['obs', 'Observation', '']] },
+    // ---- Fichiers en LECTURE SEULE ----
+    // `ignoreAdds` : sur ces fichiers, l'ajout de lignes est NORMAL (nouveau relevé bancaire chaque
+    // mois, nouvelles livraisons chaque semaine). Les signaler noierait le journal sous des alertes
+    // attendues, et on cesserait de le lire. En revanche, une ligne PASSÉE modifiée ou supprimée
+    // reste anormale : c'est elle qui trahit une fausse manip, et c'est elle qu'on signale.
+    { src: 'banque', label: 'Relevé bancaire', kind: 'banque', ignoreAdds: true, name: r => r.label || '',
+      // Le montant NE DOIT PAS entrer dans la clé : sinon le corriger ferait disparaître une ligne
+      // et en apparaître une autre, au lieu d'être vu comme la modification que c'est.
+      key: r => `${r.y}-${r.m}-${r.d}|${String(r.label || '').toUpperCase().replace(/\s+/g, '')}`,
+      fields: [['label', 'Libellé', ''], ['amt', 'Montant', '€'], ['solde', 'Solde', '€']] },
+    { src: 'bordereaux', label: 'Bordereaux de livraison', kind: 'bordereaux', ignoreAdds: true, name: r => r.dest || '',
+      key: r => r.ref || '',
+      fields: [['d', 'Date', ''], ['dest', 'Destinataire', ''], ['fac', 'Facture liée', ''],
+               ['colis', 'Colis', ''], ['transp', 'Transporteur', ''], ['statut', 'Statut', '']] },
+    { src: 'credits', label: 'Crédits & assurances', kind: 'credits', ignoreAdds: true, name: r => r.ent || '',
+      key: r => String(r.label || '').toUpperCase().replace(/\s+/g, ''),
+      fields: [['label', 'Dénomination', ''], ['ent', 'Organisme', ''], ['type', 'Type', ''],
+               ['mens', 'Mensualité', '€'], ['total', 'Montant total', '€'], ['paid', 'Déjà remboursé', '€'], ['rest', 'Restant dû', '€']] },
+    { src: 'comptable', label: 'Export comptable', kind: 'comptable', ignoreAdds: true, name: r => r.partner || '',
+      key: r => r.ref || '',
+      fields: [['partner', 'Tiers', ''], ['amount', 'Montant', '€'], ['d', 'Date', '']] },
   ];
   static EMPDOCS_KEY = 'avEmpDocs';
   static AGENDA_KEY = 'avAgenda';
@@ -1333,6 +1358,53 @@ class Component {
   // Chéquiers lus automatiquement depuis les onglets du fichier operations (plus de saisie manuelle).
   chequierRows() { return Array.isArray(this.state.chequiersLive) ? this.state.chequiersLive : []; }
   // Dernier numéro utilisé sur un onglet chéquier : dernière ligne dont MONTANT est rempli et ≠ CANCELLED.
+  // Zones d'un chéquier : la feuille en contient plusieurs côte à côte, chacune ouverte par une
+  // colonne « NUMERO » et suivie de ses colonnes DATE / DESCRIPTION / MONTANT / PAIEMENT / ETAT /
+  // OBS jusqu'au prochain « NUMERO ». Repérage unique, partagé par le scan du dernier numéro
+  // utilisé, la recherche d'une ligne de chèque et l'extraction pour le journal des modifications.
+  _chequierZonesOf(rows) {
+    const U = c => String(c == null ? '' : c).trim().toUpperCase();
+    let hi = -1; for (let r = 0; r < Math.min(rows.length, 10); r++) { if ((rows[r] || []).some(c => U(c) === 'NUMERO')) { hi = r; break; } }
+    if (hi < 0) return { hi: -1, zones: [] };
+    const hdr = rows[hi] || []; const zones = [];
+    for (let c = 0; c < hdr.length; c++) {
+      if (U(hdr[c]) !== 'NUMERO') continue;
+      const z = { num: c, date: -1, desc: -1, mont: -1, paie: -1, etat: -1, obs: -1 };
+      for (let k = c + 1; k < hdr.length; k++) {
+        const l = U(hdr[k]); if (l === 'NUMERO') break;
+        if (l === 'DATE' && z.date < 0) z.date = k;
+        else if (l === 'DESCRIPTION' && z.desc < 0) z.desc = k;
+        else if (l === 'MONTANT' && z.mont < 0) z.mont = k;
+        else if (l === 'PAIEMENT' && z.paie < 0) z.paie = k;
+        else if (l === 'ETAT' && z.etat < 0) z.etat = k;
+        else if (l === 'OBS' && z.obs < 0) z.obs = k;
+      }
+      zones.push(z);
+    }
+    return { hi, zones };
+  }
+  // Lignes de chéquier réellement utilisées, tous carnets confondus (les feuilles du fichier
+  // pêcheur dont le nom est un nombre). Alimente le journal des modifications : sans ça, une ligne
+  // de chèque corrigée à la main dans Excel ne déclenchait aucune alerte.
+  chequierLines(wb) {
+    const out = [];
+    (wb || []).filter(s => /^\d+$/.test(String(s.name || '').trim())).forEach(sh => {
+      const rows = sh.rows || [];
+      const { hi, zones } = this._chequierZonesOf(rows);
+      if (hi < 0 || !zones.length) return;
+      for (let r = hi + 1; r < rows.length; r++) {
+        for (const z of zones) {
+          const numRaw = (rows[r] || [])[z.num];
+          if (numRaw === '' || numRaw == null) continue;
+          const g = ci => (ci >= 0 && (rows[r] || [])[ci] != null) ? String((rows[r] || [])[ci]).trim() : '';
+          const mont = g(z.mont);
+          if (!mont && !g(z.desc)) continue; // numéro pré-imprimé jamais utilisé
+          out.push({ chequier: String(sh.name).trim(), num: String(numRaw).trim(), date: g(z.date), desc: g(z.desc), mont, paie: g(z.paie), etat: g(z.etat), obs: g(z.obs) });
+        }
+      }
+    });
+    return out;
+  }
   _scanChequierSheet(sh) {
     const rows = sh.rows; const U = c => String(c == null ? '' : c).trim().toUpperCase();
     let hi = -1; for (let r = 0; r < Math.min(rows.length, 10); r++) { if ((rows[r] || []).some(c => U(c) === 'NUMERO')) { hi = r; break; } }
@@ -1364,8 +1436,9 @@ class Component {
         .filter(s => /^\d+$/.test(String(s.name || '').trim()))
         .map(s => { const last = this._scanChequierSheet(s); return { nom: String(s.name).trim(), next: (last || 0) + 1 }; })
         .sort((a, b) => (parseInt(a.nom, 10) || 0) - (parseInt(b.nom, 10) || 0));
-      this.setState({ chequiersLive: list });
-    } catch (e) { this.setState({ chequiersLive: [] }); }
+      // Détail des lignes : surveillé par le journal des modifications (voir CHANGEWATCH).
+      this.setState({ chequiersLive: list, chequierLines: this.chequierLines(wb) });
+    } catch (e) { this.setState({ chequiersLive: [], chequierLines: [] }); }
   }
   _achatNextId() { const fromFile = (this.state.ops || []).map(r => +String(r.ref || '').replace(/\D/g, '') || 0); const ids = [...fromFile, ...this.achatSaisieRows().map(r => +r.id || 0)]; return (ids.length ? Math.max(...ids) : 0) + 1; }
   achatDefault() { return { id: this._achatNextId(), num: '', pecheur: '', date: this._payTodayIso(), lignes: [this.compEmptyLigne()], paiement: 'virement', chequier: '', chequeNum: '', observation: '', paiementImmediat: false, editing: false }; }
@@ -6548,7 +6621,10 @@ class Component {
       if (!Array.isArray(rows)) return; // source jamais lue : on ne l'inscrit pas (évite un faux « tout supprimé »)
       const m = {};
       rows.forEach(r => {
-        const k = String(spec.key(r) || '').trim(); if (!k) return;
+        let k = String(spec.key(r) || '').trim(); if (!k) return;
+        // Clé déjà prise (lignes bancaires de même date et même libellé, par exemple) : on suffixe
+        // par rang d'apparition, pour que chaque ligne garde une identité stable d'une photo à l'autre.
+        if (m[k]) { let n = 2; while (m[k + '#' + n]) n++; k = k + '#' + n; }
         const e = { __name: spec.name(r) };
         spec.fields.forEach(([f]) => { e[f] = this._cwVal(r[f]); });
         m[k] = e;
@@ -6590,7 +6666,8 @@ class Component {
       if (!a || !b || !Object.keys(a).length) return; // pas de point de comparaison fiable
       const items = [];
       Object.keys(b).forEach(k => {
-        if (!a[k]) { items.push({ type: 'ajout', ref: k, name: b[k].__name || '', changes: [], links: [] }); return; }
+        // Sur un fichier en lecture seule, une ligne EN PLUS est attendue : on ne la signale pas.
+        if (!a[k]) { if (!spec.ignoreAdds) items.push({ type: 'ajout', ref: k, name: b[k].__name || '', changes: [], links: [] }); return; }
         const ch = [];
         spec.fields.forEach(([f, lbl, unit]) => {
           const x = a[k][f] == null ? '' : a[k][f], y = b[k][f] == null ? '' : b[k][f];
