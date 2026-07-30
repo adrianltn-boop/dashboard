@@ -2231,6 +2231,52 @@
           <button style="padding:10px 18px;border-radius:10px;font-size:13px;font-weight:700;color:#fff;background:{{ accentColor }};border:none;cursor:pointer;font-family:inherit;white-space:nowrap" onclick="{{ onHealthOpen }}">Lancer le bilan</button>
         </div>
 
+        <!-- ============ INVENTAIRE DES FORMULES ============
+             Lecture seule. Sert à décider quelles formules le tableau de bord peut reprendre à son
+             compte : une formule remplacée par sa valeur devient figée, plus rien ne la recalcule. -->
+        <div style="background:#fff;border:1px solid #e9edf4;border-radius:14px;box-shadow:0 1px 2px rgba(16,32,54,.04);padding:20px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
+            <div style="min-width:0">
+              <div style="font-size:14px;font-weight:600;color:#0e1b2e;margin-bottom:4px">🧮 Inventaire des formules</div>
+              <div style="font-size:12.5px;color:#8291a5">Liste où se trouvent les formules de vos fichiers et lesquelles le tableau de bord saurait recalculer lui-même. Rien n'est modifié : c'est un état des lieux avant de décider.</div>
+            </div>
+            <button style="padding:10px 18px;border-radius:10px;font-size:13px;font-weight:700;color:#fff;background:{{ accentColor }};border:none;cursor:pointer;font-family:inherit;white-space:nowrap" onclick="{{ onFormulaScan }}">{{ fsBtnLabel }}</button>
+          </div>
+          <sc-if value="{{ fsDone }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:14px;padding:11px 13px;border-radius:10px;background:#f8fafc;border:1px solid #eef1f6;font-size:12.5px;color:#3a4a5e;line-height:1.55">{{ fsResume }}</div>
+            <sc-for list="{{ fsFiles }}" as="f" hint-placeholder-count="3">
+              <div style="margin-top:14px;border:1px solid #eef1f6;border-radius:12px;overflow:hidden">
+                <div style="padding:10px 14px;background:#f8fafc;border-bottom:1px solid #eef1f6">
+                  <span style="font-size:13px;font-weight:700;color:#0e1b2e">{{ f.label }}</span>
+                  <span style="font-size:12px;color:#8291a5;margin-left:8px">{{ f.name }}</span>
+                </div>
+                <sc-if value="{{ f.vide }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding:12px 14px;font-size:12.5px;color:#9aa7b8">{{ f.videTxt }}</div>
+                </sc-if>
+                <sc-for list="{{ f.sheets }}" as="s" hint-placeholder-count="2">
+                  <div style="padding:10px 14px;border-top:1px solid #f4f6fa">
+                    <div style="font-size:12.5px;font-weight:600;color:#3a4a5e;margin-bottom:6px">Feuille « {{ s.sheet }} »</div>
+                    <sc-for list="{{ s.cols }}" as="c" hint-placeholder-count="3">
+                      <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;padding:5px 0;border-top:1px solid #f8fafc">
+                        <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;font-weight:700;color:#0e1b2e;min-width:28px">{{ c.col }}</span>
+                        <span style="{{ c.verdictStyle }}">{{ c.verdict }}</span>
+                        <span style="font-size:11.5px;color:#8291a5">{{ c.n }} · lignes {{ c.plage }}</span>
+                        <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#5b6b7f">{{ c.sample }}</span>
+                        <sc-if value="{{ c.connue }}" hint-placeholder-val="{{ false }}">
+                          <span style="font-size:11.5px;color:#15803d">→ {{ c.regle }}</span>
+                        </sc-if>
+                        <sc-if value="{{ c.casse }}" hint-placeholder-val="{{ false }}">
+                          <span style="font-size:11.5px;font-weight:700;color:#b91c1c">{{ c.casseTxt }}</span>
+                        </sc-if>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-for>
+          </sc-if>
+        </div>
+
         <div style="background:#fff;border:1px solid #e9edf4;border-radius:14px;box-shadow:0 1px 2px rgba(16,32,54,.04);padding:20px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
           <div style="min-width:0">
             <div style="font-size:14px;font-weight:600;color:#0e1b2e;margin-bottom:4px">🔄 Redémarrer le tableau de bord</div>

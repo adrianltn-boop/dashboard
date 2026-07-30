@@ -3822,6 +3822,45 @@ class Component {
     if (!isNaN(n) && n > 1) { const d = new Date(Date.UTC(1899, 11, 30) + Math.round(n) * 86400000); return d.getUTCFullYear() + '-' + this.dd(d.getUTCMonth() + 1) + '-' + this.dd(d.getUTCDate()); }
     return '';
   }
+  // ---------- Inventaire des formules (LECTURE SEULE, aucune écriture) ----------
+  // Préalable indispensable avant de remplacer des formules par leur valeur : une formule dévaluée
+  // devient FIGÉE — Excel ne la recalcule plus, et le tableau de bord ne la recalculera que s'il
+  // connaît sa règle. Il faut donc savoir, fichier par fichier, lesquelles il sait reprendre à son
+  // compte et lesquelles doivent rester des formules.
+  async scanFormulasIn(buf) {
+    const files = await this.unzipAll(buf); const dec = new TextDecoder();
+    const wbXml = dec.decode(files['xl/workbook.xml'] || new Uint8Array());
+    const relsXml = dec.decode(files['xl/_rels/workbook.xml.rels'] || new Uint8Array());
+    const relMap = this._relMapOf(relsXml);
+    const sheets = [...wbXml.matchAll(/<sheet[^>]*name="([^"]*)"[^>]*r:id="(rId\d+)"/g)].map(m => ({ name: this.unxml(m[1]), target: relMap[m[2]] }));
+    const colLetter = ref => (ref.match(/^([A-Z]+)/) || [, ''])[1];
+    const out = [];
+    for (const sh of sheets) {
+      if (!sh.target || !files[sh.target]) continue;
+      const xml = dec.decode(files[sh.target]);
+      const parCol = {}; // colonne → { n, first, last, sample, valeur, casse }
+      const rowsRe = /<row[^>]*>[\s\S]*?<\/row>/g; let rm;
+      while (rm = rowsRe.exec(xml)) {
+        const rowNum = (rm[0].match(/<row\b[^>]*?\br="(\d+)"/) || [, '?'])[1];
+        const cr = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g; let cm;
+        while (cm = cr.exec(xml.slice(rm.index, rm.index + rm[0].length))) {
+          const body = cm[2] || ''; if (!/<f[\s>/]/.test(body)) continue;
+          const ref = (cm[1].match(/\br="([A-Z]+\d+)"/) || [, ''])[1]; if (!ref) continue;
+          const col = colLetter(ref);
+          const f = (body.match(/<f[^>]*>([\s\S]*?)<\/f>/) || [, ''])[1];
+          const v = (body.match(/<v>([\s\S]*?)<\/v>/) || [, ''])[1];
+          const e = parCol[col] || (parCol[col] = { col, n: 0, first: rowNum, last: rowNum, sample: '', valeur: '', casse: 0 });
+          e.n++; e.last = rowNum;
+          if (!e.sample && f) { e.sample = '=' + this.unxml(f); e.valeur = v; }
+          // Une formule cassée (#REF!, #VALEUR!…) ne produit plus rien d'exploitable : à signaler en priorité.
+          if (/#(REF|VALEUR|VALUE|DIV\/0|N\/A|NOM|NAME|NUL|NULL|NOMBRE|NUM)!?/i.test(f) || /#(REF|VALEUR|VALUE|DIV\/0|N\/A)/i.test(v)) e.casse++;
+        }
+      }
+      const cols = Object.keys(parCol).map(c => parCol[c]);
+      if (cols.length) out.push({ sheet: sh.name, cols: cols.sort((a, b) => a.col.length - b.col.length || (a.col < b.col ? -1 : 1)) });
+    }
+    return out;
+  }
   // Colonnes (index 0-based) portant une formule <f> sur chaque ligne séquentielle de la feuille,
   // lues directement du XML — readWorkbook ne restitue que les valeurs, pas la présence de formule.
   async _sheetFormulaCols(buf, sheetName) {
@@ -6398,6 +6437,49 @@ class Component {
     if (groups.length) this.setState({ extChanges: { groups, total: groups.reduce((s, g) => s + g.items.length, 0) } });
   }
   ackExternalChanges() { this.setState({ extChanges: null }); }
+  // Lance l'inventaire des formules sur les fichiers connectés. AUCUNE écriture : c'est un état des
+  // lieux, destiné à décider quelles formules le tableau de bord peut reprendre à son compte.
+  async runFormulaScan() {
+    this.setState({ formulaScan: { running: true, done: false, files: [], total: 0, casse: 0, connues: 0 } });
+    const res = []; let total = 0, casse = 0, connues = 0;
+    try {
+      for (const kind of this.writeableKinds()) {
+        const hi = this._writableHandleFor(kind);
+        if (!hi || !hi.handle) { res.push({ kind, label: this.writeSourceLabel(kind), name: '—', absent: true, sheets: [] }); continue; }
+        try {
+          const file = await hi.handle.getFile();
+          const sheets = await this.scanFormulasIn(await file.arrayBuffer());
+          sheets.forEach(s => s.cols.forEach(c => {
+            total += c.n; casse += c.casse;
+            c.regle = this._formulaRule(kind, s.sheet, c);
+            if (c.regle) connues += c.n;
+          }));
+          res.push({ kind, label: this.writeSourceLabel(kind), name: hi.name, absent: false, sheets });
+        } catch (e) {
+          res.push({ kind, label: this.writeSourceLabel(kind), name: hi.name, absent: false, erreur: (e && e.message) || 'lecture impossible', sheets: [] });
+        }
+      }
+      this.setState({ formulaScan: { running: false, done: true, files: res, total, casse, connues } });
+    } catch (e) {
+      this.setState({ formulaScan: { running: false, done: true, files: res, total, casse, connues, erreur: (e && e.message) || 'erreur' } });
+    }
+  }
+  // Le tableau de bord sait-il recalculer cette colonne par lui-même ? Seules ces formules-là
+  // pourront un jour être remplacées par leur valeur sans que la cellule ne se fige : la règle est
+  // déjà écrite dans le code et rejouée à chaque écriture.
+  _formulaRule(kind, sheetName, col) {
+    const f = this._norm(col.sample);
+    const nSheet = this._norm(sheetName);
+    if (nSheet.indexOf('grenke') >= 0) {
+      if (col.col === 'G') return 'Restant = Total TTC − 1er paiement − 2e paiement − charges';
+      if (col.col === 'I') return 'Total reçu = 1er paiement + 2e paiement';
+    }
+    if (nSheet.indexOf('avoir') >= 0 && /somme|sum/.test(f)) return 'Total des avoirs du client = somme du journal du bloc';
+    // Solde d'une ligne : Montant − Total payé. Règle déjà tenue par le tableau de bord.
+    if (/^=(sierreur|sierror|iferror)?\(?[a-z]+\d+ *- *[a-z]+\d+/.test(f)) return 'Solde = Montant − Total payé';
+    if (/^=somme\([a-z]+\d+:[a-z]+\d+\)$|^=sum\([a-z]+\d+:[a-z]+\d+\)$/.test(f)) return null; // somme de plage : dépend de lignes que le tableau de bord ne maîtrise pas
+    return null;
+  }
   async checkVerifsAtStartup() {
     try {
       this.refreshPayIdFacture(); // ID Facture du suivi de paiement : lu du fichier dès qu'il est connecté
@@ -7339,6 +7421,33 @@ class Component {
       })),
     }));
     const onExtAck = () => this.ackExternalChanges();
+    // ---- Inventaire des formules (Paramètres) : état des lieux avant toute dévaluation ----
+    const fs2 = this.state.formulaScan;
+    const fsRunning = !!(fs2 && fs2.running);
+    const fsDone = !!(fs2 && fs2.done);
+    const fsBtnLabel = fsRunning ? 'Analyse en cours…' : (fsDone ? '↻ Relancer l\'inventaire' : "Lancer l'inventaire");
+    const onFormulaScan = () => this.runFormulaScan();
+    const fsTotal = fs2 ? fs2.total : 0, fsCasse = fs2 ? fs2.casse : 0, fsConnues = fs2 ? fs2.connues : 0;
+    const fsResume = !fsDone ? '' : fsTotal === 0
+      ? 'Aucune formule trouvée dans les fichiers connectés.'
+      : `${fsTotal} cellule(s) en formule — ${fsConnues} que le tableau de bord sait déjà recalculer, ${fsTotal - fsConnues} dont la règle lui est inconnue${fsCasse ? `, dont ${fsCasse} cassée(s) (#REF!)` : ''}.`;
+    const fsFiles = (fs2 && fs2.files ? fs2.files : []).map(f => ({
+      label: f.label, name: f.absent ? 'non connecté' : (f.erreur ? `illisible : ${f.erreur}` : f.name),
+      vide: !f.sheets.length,
+      videTxt: f.absent ? 'Fichier non connecté — rien à analyser.' : (f.erreur ? 'Lecture impossible.' : 'Aucune formule dans ce fichier.'),
+      sheets: f.sheets.map(s => ({
+        sheet: s.sheet,
+        cols: s.cols.map(c => ({
+          col: c.col, n: `${c.n} ligne${c.n > 1 ? 's' : ''}`, plage: `${c.first} → ${c.last}`,
+          sample: c.sample || '(formule illisible)',
+          regle: c.regle || '',
+          connue: !!c.regle,
+          verdict: c.regle ? 'Reprenable' : 'Règle inconnue',
+          verdictStyle: `${badge}background:${c.regle ? '#e7f5ec' : '#fef3c7'};color:${c.regle ? green : amber}`,
+          casse: c.casse > 0, casseTxt: c.casse > 0 ? `⚠ ${c.casse} cassée(s)` : '',
+        })),
+      })),
+    }));
 
     // ==================== SAISIE COMPTABLE (portage fidèle de la maquette « Saisie par transaction ») ====================
     const kgN = n => (Math.round((+n || 0) * 10) / 10).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' kg';
@@ -9447,6 +9556,7 @@ class Component {
       onRestartDash, onRestartClose, onRestartApply,
       verifBannerOpen, verifBannerText, onVerifBannerApply, onVerifBannerHide,
       extOpen, extTitle, extIntro, extGroups, onExtAck,
+      fsRunning, fsDone, fsBtnLabel, onFormulaScan, fsResume, fsFiles,
       hasStockPend, stockPendLabel, stockPendStyle, onStockPickOpen, onStockPickClose, stockPickOpen, stockPickRows, stockPendCount,
       achatFromStock, achatFromStockNote,
       onHealthOpen: () => this.openHealthCheck(),
