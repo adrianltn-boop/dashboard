@@ -220,7 +220,7 @@ class Component {
     empDocs: {}, empDelDoc: null, bankSalaryEmp: '', bankSalaryMonth: '',
     agenda: [], agendaMonth: null, agendaEdit: null, agendaDelAsk: null,
     payTrack: [], payDraft: null,
-    restartRun: null, verifPending: null, venteAvoirAsk: null, venteAvoirDispo: null, avoirManuel: null,
+    restartRun: null, verifPending: null, extChanges: null, venteAvoirAsk: null, venteAvoirDispo: null, avoirManuel: null,
     ventesSaisie: [], venteDraft: null,
     grenkeMan: [], grkDraft: null, grkDelAsk: null,
     achatsSaisie: [], achatDraft: null, chequiersLive: [], compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null, chqEditDraft: null, stockRoomAlert: null, avoirTotals: {},
@@ -247,6 +247,35 @@ class Component {
   static HMOIS_KEY = 'avHeuresMois';
   static FILEPATHS_KEY = 'avFilePaths';
   static ANNULE_KEY = 'avAnnule';
+  static SEENSNAP_KEY = 'avSeenSnap'; // « ce que j'avais vu la dernière fois » — voir detectExternalChanges
+  // Lignes surveillées pour détecter une modification faite HORS du tableau de bord (quelqu'un
+  // écrit à la main dans Excel, ou supprime une ligne par erreur). Limité aux fichiers dans
+  // lesquels le dashboard écrit : sur Banque/Bordereaux/Crédits les changements sont normaux
+  // (nouveau relevé, nouvelles livraisons) et l'alerte ne serait que du bruit qu'on cesserait de lire.
+  static CHANGEWATCH = [
+    { src: 'payTrack', label: 'Suivi de paiement', kind: 'ventes', name: r => r.client || '',
+      key: r => r.num || String(r.id || ''),
+      fields: [['ttc', 'Montant TTC', '€'], ['avoir', 'Avoir', '€'], ['regle', 'Montant réglé', '€'], ['etat', 'État', ''],
+               ['dateFac', 'Date de facture', ''], ['dateEch', 'Échéance', ''], ['datePay', 'Date du paiement', ''], ['client', 'Client', '']] },
+    { src: 'ventes', label: 'Factures clients', kind: 'ventes', name: r => r.partner || '',
+      key: r => r.ref || '',
+      fields: [['ttc', 'Montant TTC', '€'], ['ht', 'Montant HT', '€'], ['paid', 'Montant réglé', '€'],
+               ['stText', 'Statut', ''], ['partner', 'Client', ''], ['d', 'Date', ''], ['due', 'Échéance', '']] },
+    { src: 'grenke', label: 'Financement Grenke', kind: 'ventes', name: r => r.cust || '',
+      key: r => r.ref || '',
+      fields: [['ttc', 'Total TTC', '€'], ['p1', '1er paiement', '€'], ['p2', '2e paiement', '€'], ['charge', 'Charges', '€'],
+               ['statut', 'Statut', ''], ['com', 'Commentaire', ''], ['cust', 'Client', '']] },
+    { src: 'factures', label: 'Factures fournisseurs', kind: 'factures', name: r => r.partner || '',
+      key: r => r.ref || '',
+      fields: [['ttc', 'Montant', '€'], ['paid', 'Payé', '€'], ['stText', 'Statut', ''],
+               ['partner', 'Fournisseur', ''], ['d', 'Date', ''], ['due', 'Date paiement', '']] },
+    // `linked` : une ligne d'achat supprimée laisse derrière elle un chèque au chéquier et des
+    // lignes de stock (écriture triple) — on liste ces liens orphelins, voir _achatLinks.
+    { src: 'ops', label: 'Achats pêcheur', kind: 'operations', name: r => r.partner || '', linked: true,
+      key: r => r.ref || '',
+      fields: [['amt', 'Montant', '€'], ['paid', 'Total payé', '€'], ['reste', 'Solde', '€'],
+               ['status', 'Statut', ''], ['chq', 'Chèque / observation', ''], ['partner', 'Pêcheur', '']] },
+  ];
   static EMPDOCS_KEY = 'avEmpDocs';
   static AGENDA_KEY = 'avAgenda';
   static PAYTRACK_KEY = 'avPayTrack';
@@ -4313,6 +4342,9 @@ class Component {
       let w; try { w = await pw.handle.createWritable(); await w.write(patched); await w.close(); }
       catch (we) { const err = new Error(`le fichier est peut-être ouvert dans Excel (${(we && we.message) || 'accès refusé'}) — fermez-le puis Réessayer`); err.locked = true; throw err; }
       // 6) le watcher relira le fichier écrit → la vue se met à jour depuis Excel (source de vérité)
+      // _ownWrite : cette relecture-là vient de NOTRE écriture, elle ne doit pas apparaître dans le
+      // journal des modifications externes (sinon chaque enregistrement génère une alerte).
+      this._ownWrite = true;
       try { const wm = this._watched || {}; for (const k of Object.keys(wm)) if (wm[k] && wm[k].handle === pw.handle) wm[k].lastMod = 0; } catch (e) {}
       // RÈGLE 8/13 : étape réussie — mais si des lignes de stock n'ont pas pu être placées
       // (pw.unresolved), ce n'est PAS un succès total : on le distingue en « partiel » pour que
@@ -6195,9 +6227,91 @@ class Component {
     } catch (e) { return { avoirs: [], etats: [], error: (e && e.message) || 'lecture impossible' }; }
   }
   // Vérification silencieuse au démarrage : calcule les écarts et les signale, SANS jamais écrire.
+  // ---------- Modifications faites HORS du tableau de bord (journal des changements) ----------
+  // Normalise une valeur pour la comparaison : 1200, « 1200 » et « 1200,00 » doivent être vus comme
+  // identiques, sinon la moindre relecture générerait de fausses alertes.
+  _cwVal(v) {
+    if (v == null) return '';
+    if (typeof v === 'object') return v.y ? `${v.y}-${this.dd(v.m)}-${this.dd(v.d)}` : '';
+    if (typeof v === 'number') return String(Math.round(v * 100) / 100);
+    const s = String(v).trim(); if (s === '') return '';
+    const n = parseFloat(s.replace(',', '.'));
+    return (isFinite(n) && /^-?\d+([.,]\d+)?$/.test(s)) ? String(Math.round(n * 100) / 100) : s;
+  }
+  _cwShow(v, unit) { if (v === '' || v == null) return '(vide)'; return unit === '€' ? this.fmt(this._vNum(v)) : String(v); }
+  // Photo de l'état actuel de toutes les lignes surveillées.
+  _changeSnapshot() {
+    const out = {};
+    Component.CHANGEWATCH.forEach(spec => {
+      const rows = this.state[spec.src];
+      if (!Array.isArray(rows)) return; // source jamais lue : on ne l'inscrit pas (évite un faux « tout supprimé »)
+      const m = {};
+      rows.forEach(r => {
+        const k = String(spec.key(r) || '').trim(); if (!k) return;
+        const e = { __name: spec.name(r) };
+        spec.fields.forEach(([f]) => { e[f] = this._cwVal(r[f]); });
+        m[k] = e;
+      });
+      out[spec.src] = m;
+    });
+    return out;
+  }
+  _loadSeenSnap() { try { const o = JSON.parse(localStorage.getItem(Component.SEENSNAP_KEY) || 'null'); return (o && o.srcs) ? o.srcs : null; } catch (e) { return null; } }
+  _saveSeenSnap(s) { try { localStorage.setItem(Component.SEENSNAP_KEY, JSON.stringify({ v: 1, srcs: s })); } catch (e) {} }
+  // Liens laissés orphelins par la suppression d'une ligne d'achat (écriture triple : pêcheur +
+  // chèque + stock). Précis quand l'achat a été saisi ici (on a gardé ses lignes de stock et son
+  // n° de chèque) ; sinon on renvoie vers la vérification manuelle, sans inventer de précision.
+  _achatLinks(ref, prevRow) {
+    const liens = [];
+    const sai = this.achatSaisieRows().find(a => a.num && this.nrm(a.num) === this.nrm(ref));
+    const chq = (sai && sai.chequeNum) || (prevRow && prevRow.chq) || '';
+    if (chq) liens.push(`Chèque n° ${chq} — la ligne correspondante reste dans le chéquier`);
+    if (sai && Array.isArray(sai.lignes) && sai.lignes.length) {
+      liens.push(`Stock : ${sai.lignes.map(l => `${l.espece || '?'} ${l.calibre || ''} ${this._vNum(l.poids)} kg`.replace(/\s+/g, ' ').trim()).join(' · ')}`);
+    } else {
+      liens.push('Stock : vérifiez la feuille de la semaine correspondante — des entrées peuvent rester sans achat associé');
+    }
+    return liens;
+  }
+  // Compare la photo précédente à l'actuelle et signale ce qui a bougé sans passer par le tableau
+  // de bord. AUCUNE écriture, aucun droit de veto : le fichier Excel reste la seule vérité, on
+  // informe seulement pour qu'une fausse manip soit vue et corrigée dans Excel.
+  detectExternalChanges() {
+    const cur = this._changeSnapshot();
+    const prev = this._loadSeenSnap();
+    // Premier démarrage : on prend la photo de référence sans rien signaler.
+    if (!prev) { this._saveSeenSnap(cur); return; }
+    // Écriture faite par le tableau de bord lui-même : on réaligne la photo en silence. Sans ça
+    // chaque enregistrement déclencherait une alerte et le journal deviendrait illisible.
+    if (this._ownWrite) { this._ownWrite = false; this._saveSeenSnap(cur); return; }
+    const groups = [];
+    Component.CHANGEWATCH.forEach(spec => {
+      const a = prev[spec.src], b = cur[spec.src];
+      if (!a || !b || !Object.keys(a).length) return; // pas de point de comparaison fiable
+      const items = [];
+      Object.keys(b).forEach(k => {
+        if (!a[k]) { items.push({ type: 'ajout', ref: k, name: b[k].__name || '', changes: [], links: [] }); return; }
+        const ch = [];
+        spec.fields.forEach(([f, lbl, unit]) => {
+          const x = a[k][f] == null ? '' : a[k][f], y = b[k][f] == null ? '' : b[k][f];
+          if (x !== y) ch.push({ label: lbl, from: this._cwShow(x, unit), to: this._cwShow(y, unit) });
+        });
+        if (ch.length) items.push({ type: 'modif', ref: k, name: b[k].__name || '', changes: ch, links: [] });
+      });
+      Object.keys(a).forEach(k => {
+        if (b[k]) return;
+        items.push({ type: 'suppression', ref: k, name: a[k].__name || '', changes: [], links: spec.linked ? this._achatLinks(k, a[k]) : [] });
+      });
+      if (items.length) groups.push({ src: spec.src, label: spec.label, kind: spec.kind, items });
+    });
+    this._saveSeenSnap(cur); // la photo est mise à jour même si on signale : on n'alerte qu'une fois
+    if (groups.length) this.setState({ extChanges: { groups, total: groups.reduce((s, g) => s + g.items.length, 0) } });
+  }
+  ackExternalChanges() { this.setState({ extChanges: null }); }
   async checkVerifsAtStartup() {
     try {
       this.refreshPayIdFacture(); // ID Facture du suivi de paiement : lu du fichier dès qu'il est connecté
+      this.detectExternalChanges(); // ce qui a bougé dans Excel depuis la dernière fois
       const chk = await this._computeVerifs();
       const n = chk.avoirs.length + chk.etats.length;
       if (n) this.setState({ verifPending: { avoirs: chk.avoirs, etats: chk.etats } });
@@ -6284,6 +6398,7 @@ class Component {
   }
   async pollWatched() {
     const w = this._watched; if (!w || this._polling) return; this._polling = true;
+    let relu = false; // au moins un fichier a été relu : on cherchera ce qui a changé
     try {
       for (const name of Object.keys(w)) {
         const it = w[name];
@@ -6293,10 +6408,14 @@ class Component {
           if (file.lastModified > it.lastMod) {
             it.lastMod = file.lastModified;
             await this.reimportSilent(it);
+            relu = true;
             this.setState({ lastSync: Date.now() });
           }
         } catch (e) { /* fichier momentanément verrouillé par Excel : on retentera au prochain tour */ }
       }
+      // Un fichier a changé sur le disque : on signale ce qui a bougé hors du tableau de bord
+      // (modification à la main, ligne supprimée…). Silencieux si c'est nous qui venons d'écrire.
+      if (relu) { try { this.detectExternalChanges(); } catch (e) { /* best-effort : ne bloque jamais la relecture */ } }
       // dossier Stock : relit tout si un fichier a changé ou si un nouveau est apparu
       if (this._stockDir) {
         try {
@@ -7105,6 +7224,31 @@ class Component {
     const verifBannerText = vp ? `${(vp.avoirs || []).length + (vp.etats || []).length} correction(s) à appliquer dans votre fichier de ventes (totaux d'avoirs, états de facture).` : '';
     const onVerifBannerApply = () => this.requestVerifPreview(vp ? vp.avoirs : [], vp ? vp.etats : []);
     const onVerifBannerHide = () => this.setState({ verifPending: null });
+    // ---- Journal des modifications faites HORS du tableau de bord ----
+    // Informer, jamais imposer : Excel reste la seule vérité. Deux issues seulement — « J'ai vu »
+    // (c'est normal) ou ouvrir le fichier pour corriger une fausse manip.
+    const ec = this.state.extChanges;
+    const extOpen = !!ec;
+    const extTotal = ec ? ec.total : 0;
+    const extTitle = extTotal > 1 ? `${extTotal} modifications faites en dehors du tableau de bord` : 'Une modification faite en dehors du tableau de bord';
+    const extIntro = "Ces lignes ont changé dans vos fichiers Excel sans passer par le tableau de bord — quelqu'un a écrit à la main, ou supprimé une ligne. Rien n'a été modifié ici : le fichier reste la référence. Vérifiez que c'est bien voulu.";
+    const extGroups = (ec ? ec.groups : []).map(g => ({
+      label: g.label,
+      openLabel: `Ouvrir « ${this.writeSourceLabel(g.kind)} » dans Excel`,
+      onOpen: () => this.openSourceInExcel(g.kind, this.writeSourceLabel(g.kind)),
+      openStyle: `padding:6px 12px;border-radius:8px;font-size:12px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.3)};cursor:pointer;font-family:inherit`,
+      items: g.items.map(it => ({
+        ref: it.ref || '—', name: it.name || '',
+        tag: it.type === 'suppression' ? 'LIGNE SUPPRIMÉE' : it.type === 'ajout' ? 'LIGNE AJOUTÉE' : 'MODIFIÉE',
+        tagStyle: `${badge}background:${it.type === 'suppression' ? '#fdeaea' : it.type === 'ajout' ? '#e7f5ec' : '#fef3c7'};color:${it.type === 'suppression' ? red : it.type === 'ajout' ? green : amber}`,
+        changes: it.changes.map(c => ({ label: c.label, from: c.from, to: c.to })),
+        hasChanges: it.changes.length > 0,
+        links: (it.links || []).map(t => ({ text: t })),
+        hasLinks: (it.links || []).length > 0,
+        linkIntro: it.type === 'suppression' ? 'Cette ligne était liée à :' : '',
+      })),
+    }));
+    const onExtAck = () => this.ackExternalChanges();
 
     // ==================== SAISIE COMPTABLE (portage fidèle de la maquette « Saisie par transaction ») ====================
     const kgN = n => (Math.round((+n || 0) * 10) / 10).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' kg';
@@ -9180,6 +9324,7 @@ class Component {
       restartOpen, restartRunning, restartDone, restartTitle, restartSummary, restartRows, restartHasFixes, restartAllGood,
       onRestartDash, onRestartClose, onRestartApply,
       verifBannerOpen, verifBannerText, onVerifBannerApply, onVerifBannerHide,
+      extOpen, extTitle, extIntro, extGroups, onExtAck,
       onHealthOpen: () => this.openHealthCheck(),
       isSaisieCompta, compTab, compIsAchat, compIsVente, compIsFourn, compIsPaiement,
       impayesAchats, paiementEmpty, paiementModeOpts, paiementIsPartiel, paiementIsCheque, paiementIsAutre, paiementIsComptant, paiementComptantSolde, paiementSelectedLabel,
