@@ -1037,8 +1037,17 @@ class Component {
       const wb = await this.readWorkbook(buf.slice(0)); const sh = wb.find(s => s.name === cfg.sheetName); if (!sh) return;
       const hdrIdx = cfg.headerRowIdx != null ? cfg.headerRowIdx : 0;
       const invCol = cfg.cols.ref; if (invCol == null || invCol < 0) return; // colonne déjà réglée dans Paramètres
-      const fields = this.writeFieldsFor('ventes').filter(x => cfg.cols[x.key] != null && cfg.cols[x.key] >= 0);
+      // RÈGLE 3 : la ligne cible se repère sur les COLONNES MÉTIER PRINCIPALES (date, HT, client),
+      // JAMAIS sur la colonne n° de facture, pré-imprimée sur toutes les lignes.
+      // BUG CORRIGÉ : on passait ici TOUTES les colonnes réglées, n° de facture compris. Comme ce
+      // numéro est pré-imprimé partout, plus aucune ligne n'était vue comme libre et le repérage
+      // partait en fin de tableau — sur une ligne DIFFÉRENTE de celle où l'écriture allait
+      // réellement se faire. Le formulaire affichait donc un numéro, le fichier en gardait un autre,
+      // et comme le dédoublonnage se fait par numéro, la vente apparaissait EN DOUBLE : une ligne
+      // locale au mauvais numéro, une ligne du fichier au bon. (La saisie d'achat, elle, filtrait
+      // déjà correctement — d'où l'écart de comportement entre les deux formulaires.)
       const venteAnchorKeys = this._anchorFieldsFor('ventes');
+      const fields = this.writeFieldsFor('ventes').filter(x => cfg.cols[x.key] != null && cfg.cols[x.key] >= 0 && venteAnchorKeys.indexOf(x.key) >= 0);
       const venteDateKey = Object.keys(this._dateFieldsFor('ventes')).find(k => venteAnchorKeys.indexOf(k) >= 0 && cfg.cols[k] != null && cfg.cols[k] >= 0);
       const venteDateColIdx = venteDateKey != null ? cfg.cols[venteDateKey] : -1;
       const loc = await this._locateAppendTarget(buf.slice(0), cfg.sheetName, fields.map(x => cfg.cols[x.key]), cfg.firstDataIdx != null ? cfg.firstDataIdx : (hdrIdx + 1), venteDateColIdx);
@@ -1222,6 +1231,14 @@ class Component {
   // Appelé UNIQUEMENT après une écriture Excel confirmée et vérifiée : met à jour les vues
   // opérationnelles internes (suivi de paiement, Grenke) et affiche le récapitulatif.
   async _venteAfterWrite(rec) {
+    // La fiche locale adopte le n° de facture RÉELLEMENT porté par la ligne Excel. S'il diffère de
+    // celui proposé au formulaire, garder l'ancien ferait apparaître la vente DEUX FOIS : le
+    // dédoublonnage entre saisies locales et lignes du fichier se fait par numéro de facture.
+    const refFichier = (this._pendingWrite && this._pendingWrite.refUsed) || '';
+    if (refFichier && this.nrm(refFichier) !== this.nrm(rec.num)) {
+      this.setState({ msg: { kind: 'info', text: `N° de facture ajusté sur celui du fichier : ${refFichier} (au lieu de ${rec.num || '—'}).` } });
+      rec = { ...rec, num: refFichier };
+    }
     const id = rec.id, client = rec.client, ttc = rec.ttc, datePrev = rec.datePrev, delai = rec.delai, ht = rec.ht, grenke = rec.grenke, lignes = rec.lignes;
     const arr = this.venteSaisieRows().slice(); const i = arr.findIndex(x => String(x.id) === String(id));
     if (i >= 0) arr[i] = rec; else arr.unshift(rec);
@@ -2613,6 +2630,7 @@ class Component {
       const missingHdr = colIdxs.filter(ci => !String(hdrRow[ci] == null ? '' : hdrRow[ci]).trim());
       if (colIdxs.length && missingHdr.length === colIdxs.length) throw new Error(`la structure de « ${sheetName} » a changé (en-têtes introuvables ligne ${hdrIdx + 1}) — rouvrez le réglage des colonnes dans Paramètres`);
       const colVals = {}; const preview = [];
+      let refUsed = ''; // n° de facture réellement porté par la ligne écrite (pré-imprimé le cas échéant)
       // Déclaré ICI (avant la boucle) et non plus seulement pour les écritures secondaires
       // (avoir/Grenke via putDate) : sans ça, la date PRINCIPALE de cette ligne (celle de la
       // saisie elle-même) n'était jamais marquée comme colonne-date — sur une ligne neuve
@@ -2622,7 +2640,10 @@ class Component {
       fields.forEach(f => {
         const ci = colsMap[f.key]; const raw = valsByField[f.key];
         // Ne JAMAIS écraser un n° de facture déjà pré-imprimé : on garde celui du fichier.
-        if (f.key === 'ref') { const existing = String(targetRow[ci] == null ? '' : targetRow[ci]).trim(); if (existing) { preview.push({ label: f.label, col: colName(ci + 1), value: existing + ' (déjà là)' }); return; } }
+        // `refUsed` retient le numéro RÉELLEMENT porté par la ligne, pour que la fiche locale adopte
+        // ensuite celui-là (voir _venteAfterWrite). Sans ce filet, la fiche garderait le numéro
+        // proposé au formulaire et, si les deux diffèrent, la vente s'afficherait en double.
+        if (f.key === 'ref') { const existing = String(targetRow[ci] == null ? '' : targetRow[ci]).trim(); if (existing) { refUsed = existing; preview.push({ label: f.label, col: colName(ci + 1), value: existing + ' (déjà là)' }); return; } }
         const s = (raw == null ? '' : String(raw)).trim();
         if (dateFields[f.key] && s !== '') {
           const serial = this._excelSerial(raw); // écrit une VRAIE date Excel (série), affiche JJ/MM/AAAA
@@ -2786,10 +2807,10 @@ class Component {
       }
       if (extraSheets.length) combinedSheetName = [sheetName, ...extraSheets].join(', ');
       this._pendingWrite = editsBySheet
-        ? { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: combinedSheetName, editsBySheet, verifyTargets, rowAppends, dateCols, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null }
+        ? { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: combinedSheetName, editsBySheet, verifyTargets, rowAppends, dateCols, refUsed, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null }
         // dateCols inclus ici aussi (cas simple mono-feuille, sans avoir/Grenke combinés) — sinon la
         // date principale de la ligne perdait son format lors de l'écriture réelle (RÈGLE « Dates Excel »).
-        : { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: loc.mode, colVals, dateCols, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null };
+        : { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName, excelRow: loc.excelRow, previewIdx: loc.previewIdx, mode: loc.mode, colVals, dateCols, refUsed, refuseFormula: !!opts.refuseFormula, allowFormulaCols, after: opts.after || null, afterClose: opts.afterClose || null, step: opts.step || null };
       this.setState({ writePreview: { kind, fileName: hi.name, sheetName: combinedSheetName, excelRow: editsBySheet ? null : loc.excelRow, rows: preview, status: null } });
     } catch (e) {
       const tail = kind === 'ventes' ? " La vente n'a PAS été enregistrée — corrigez le réglage de l'écriture puis recommencez." : ' Votre saisie est enregistrée dans le tableau de bord.';
