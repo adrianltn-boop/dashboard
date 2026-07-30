@@ -2084,15 +2084,15 @@
             </div>
             <sc-for list="{{ partnersRows }}" as="f" hint-placeholder-count="6">
               <div style="display:grid;grid-template-columns:1fr 118px 90px 108px 100px 96px 80px;gap:8px;align-items:center;padding:{{ rowPad }};border-top:1px solid #f1f4f8;font-size:13px">
-                <div style="display:flex;align-items:center;gap:10px;min-width:0">
+                <button onclick="{{ f.onOpen }}" title="Ouvrir la fiche de {{ f.name }}" style="display:flex;align-items:center;gap:10px;min-width:0;background:transparent;border:none;padding:0;cursor:pointer;font-family:inherit;text-align:left;width:100%">
                   <div style="{{ f.av }}">{{ f.ini }}</div>
                   <div style="min-width:0">
-                    <div style="color:#0e1b2e;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.name }}</div>
+                    <div style="color:#0e1b2e;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px">{{ f.name }}</div>
                     <sc-if value="{{ f.avoirLabel }}" hint-placeholder-val="{{ false }}">
                       <div style="font-size:11px;font-weight:600;color:#15803d;margin-top:1px">{{ f.avoirLabel }}</div>
                     </sc-if>
                   </div>
-                </div>
+                </button>
                 <span style="color:#69788c;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.tag }}</span>
                 <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#3a4a5e">{{ f.ops }}</span>
                 <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:#0e1b2e">{{ f.vol }}</span>
@@ -2843,6 +2843,94 @@
         </sc-for>
         <div style="display:flex;justify-content:flex-end;padding:16px 22px 20px;border-top:1px solid #eef1f6">
           <button style="{{ agBtnGhost }}" onclick="{{ onStockPickClose }}">Fermer</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+  <!-- ============ FICHE TIERS (client / fournisseur) ============
+       Une seule série sur la courbe → pas de légende, le titre nomme la donnée. Barres en HTML
+       (aucune dépendance) : extrémité arrondie posée sur la ligne de base, écart entre barres,
+       axes discrets, et UNE seule étiquette directe (le mois le plus fort). Le détail se lit au
+       survol de chaque barre, et le tableau des factures sert de vue chiffrée. -->
+  <sc-if value="{{ ficheOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ prefixOverlayStyle }}" onclick="{{ onFicheClose }}">
+      <div style="width:860px;max-width:95vw;max-height:88vh;overflow:auto;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px" onclick="{{ ctxStop }}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+          <div style="min-width:0">
+            <div style="font-size:17px;font-weight:700;color:#0e1b2e">{{ ficheTitle }}</div>
+            <div style="font-size:12.5px;color:#8291a5;margin-top:4px">{{ ficheSub }}</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <sc-if value="{{ ficheIsClient }}" hint-placeholder-val="{{ false }}">
+              <button style="padding:8px 15px;border-radius:9px;font-size:12.5px;font-weight:700;color:#fff;background:#15803d;border:none;cursor:pointer;font-family:inherit" onclick="{{ onFicheAvoir }}">＋ Ajouter un avoir</button>
+            </sc-if>
+            <button style="{{ agBtnGhost }}" onclick="{{ onFicheClose }}">Fermer</button>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
+          <sc-for list="{{ ficheKpis }}" as="k" hint-placeholder-count="5">
+            <div style="flex:1;min-width:150px;background:#fff;border:1px solid #e9edf4;border-left:3px solid {{ k.bar }};border-radius:12px;padding:12px 14px">
+              <div style="font-size:11.5px;color:#69788c;font-weight:500">{{ k.label }}</div>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;color:{{ k.valueColor }};margin-top:5px">{{ k.value }}</div>
+              <div style="font-size:11px;color:#9aa7b8;margin-top:3px">{{ k.note }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="margin-top:18px;border:1px solid #eef1f6;border-radius:12px;padding:16px 18px">
+          <div style="font-size:13px;font-weight:700;color:#0e1b2e;margin-bottom:14px">{{ ficheChartTitle }}</div>
+          <sc-if value="{{ ficheBarsEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:22px 0;text-align:center;color:#9aa7b8;font-size:12.5px">Aucun mouvement sur les 12 derniers mois.</div>
+          </sc-if>
+          <div style="display:flex;align-items:flex-end;gap:2px;height:150px;border-bottom:1px solid #e9edf4">
+            <sc-for list="{{ ficheBars }}" as="b" hint-placeholder-count="12">
+              <div style="flex:1;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:stretch;position:relative" title="{{ b.tip }}">
+                <sc-if value="{{ b.hasDirect }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size:10px;font-weight:700;color:#0e1b2e;text-align:center;margin-bottom:3px;white-space:nowrap">{{ b.direct }}</div>
+                </sc-if>
+                <div style="{{ b.barStyle }}"></div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display:flex;gap:2px;margin-top:6px">
+            <sc-for list="{{ ficheBars }}" as="b" hint-placeholder-count="12">
+              <div style="flex:1;text-align:center;font-size:10.5px;color:#9aa7b8">{{ b.label }}</div>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:14px;margin-top:16px;flex-wrap:wrap">
+          <div style="flex:1 1 300px;border:1px solid #eef1f6;border-radius:12px;padding:15px 17px">
+            <div style="font-size:13px;font-weight:700;color:#0e1b2e;margin-bottom:12px">Moyens de paiement</div>
+            <sc-for list="{{ ficheMoyens }}" as="m" hint-placeholder-count="3">
+              <div style="margin-bottom:11px">
+                <div style="display:flex;justify-content:space-between;gap:10px;font-size:12.5px;margin-bottom:4px">
+                  <span style="color:#3a4a5e">{{ m.nom }}</span>
+                  <span style="font-family:'IBM Plex Mono',monospace;color:#0e1b2e;font-weight:600">{{ m.montant }} <span style="color:#9aa7b8;font-weight:400">· {{ m.part }}</span></span>
+                </div>
+                <div style="background:#f1f4f8;border-radius:4px"><div style="{{ m.barStyle }}"></div></div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="flex:2 1 380px;border:1px solid #eef1f6;border-radius:12px;padding:15px 17px;overflow:hidden">
+            <div style="font-size:13px;font-weight:700;color:#0e1b2e;margin-bottom:10px">Dernières factures</div>
+            <sc-if value="{{ ficheFacturesEmpty }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:14px 0;text-align:center;color:#9aa7b8;font-size:12.5px">Aucune facture.</div>
+            </sc-if>
+            <div style="display:grid;grid-template-columns:82px 1fr 92px 84px 96px;gap:8px;padding-bottom:7px;font-size:10.5px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.3px">
+              <span>Date</span><span>N°</span><span style="text-align:right">Montant</span><span style="text-align:right">Reste</span><span>État</span>
+            </div>
+            <sc-for list="{{ ficheFactures }}" as="r" hint-placeholder-count="5">
+              <div style="display:grid;grid-template-columns:82px 1fr 92px 84px 96px;gap:8px;align-items:center;padding:7px 0;border-top:1px solid #f4f6fa;font-size:12.5px">
+                <span style="color:#69788c;font-family:'IBM Plex Mono',monospace">{{ r.date }}</span>
+                <span style="color:#3a4a5e;font-family:'IBM Plex Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.ref }}</span>
+                <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:#0e1b2e">{{ r.ttc }}</span>
+                <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:{{ r.resteColor }}">{{ r.reste }}</span>
+                <span><span style="{{ r.statutStyle }}">{{ r.statut }}</span></span>
+              </div>
+            </sc-for>
+          </div>
         </div>
       </div>
     </div>

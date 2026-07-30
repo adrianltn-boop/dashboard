@@ -220,7 +220,7 @@ class Component {
     empDocs: {}, empDelDoc: null, bankSalaryEmp: '', bankSalaryMonth: '',
     agenda: [], agendaMonth: null, agendaEdit: null, agendaDelAsk: null,
     payTrack: [], payDraft: null,
-    restartRun: null, verifPending: null, extChanges: null, venteAvoirAsk: null, venteAvoirDispo: null, avoirManuel: null,
+    restartRun: null, verifPending: null, extChanges: null, venteAvoirAsk: null, venteAvoirDispo: null, avoirManuel: null, ficheTiers: null,
     ventesSaisie: [], venteDraft: null,
     grenkeMan: [], grkDraft: null, grkDelAsk: null,
     achatsSaisie: [], achatDraft: null, chequiersLive: [], compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null, chqEditDraft: null, stockRoomAlert: null, avoirTotals: {}, stockLines: [], stockPick: false, chequierLines: [],
@@ -8490,7 +8490,99 @@ class Component {
       // Avoir disponible (source : onglet Avoirs, relu depuis Excel) — uniquement côté Clients.
       const avEntry = this.state.tiers !== 'Fournisseurs' ? avoirTotals[this._norm(name)] : null;
       const avoirLabel = avEntry && Math.abs(avEntry.montant) > 0.005 ? `Avoir : ${this.fmt(avEntry.montant)}` : '';
-      return { ini: name[0], av, name, avoirLabel, tag: this.state.tiers === 'Fournisseurs' ? p.cat : (C.SEGMENTS[name] || p.cat), ops: String(p.n), vol: this.fmt(p.vol), enc: p.enc ? this.fmt(p.enc) : '—', encColor: p.enc ? red : gray, last: `${this.dd(p.last.d)}/${this.dd(p.last.m)}`, status: actif ? 'Actif' : 'Veille', statusStyle: actif ? `${badge}background:#e7f5ec;color:${green}` : `${badge}background:#eef1f5;color:${slate}` }; });
+      return { onOpen: () => this.setState({ ficheTiers: name }), ini: name[0], av, name, avoirLabel, tag: this.state.tiers === 'Fournisseurs' ? p.cat : (C.SEGMENTS[name] || p.cat), ops: String(p.n), vol: this.fmt(p.vol), enc: p.enc ? this.fmt(p.enc) : '—', encColor: p.enc ? red : gray, last: `${this.dd(p.last.d)}/${this.dd(p.last.m)}`, status: actif ? 'Actif' : 'Veille', statusStyle: actif ? `${badge}background:#e7f5ec;color:${green}` : `${badge}background:#eef1f5;color:${slate}` }; });
+    // ---- FICHE TIERS (clic sur une ligne de Clients / Fournisseurs) ----
+    // Tout est calculé sur l'HISTORIQUE COMPLET, pas sur la période affichée : une fiche sert à
+    // juger une relation dans la durée, pas à refléter le filtre en cours.
+    const ficheName = this.state.ficheTiers;
+    const ficheOpen = !!ficheName;
+    let ficheTitle = '', ficheSub = '', ficheKpis = [], ficheBars = [], ficheBarsEmpty = true, ficheChartTitle = '',
+      ficheMoyens = [], ficheFactures = [], ficheFacturesEmpty = true, ficheIsClient = false, ficheAvoirLabel = '';
+    if (ficheOpen) {
+      ficheIsClient = this.state.tiers !== 'Fournisseurs';
+      const typeF = ficheIsClient ? 'Vente' : 'Achat';
+      const mine = ops.filter(r => r.type === typeF && this.nrm(r.partner) === this.nrm(ficheName));
+      const volTot = mine.reduce((a, r) => a + Math.abs(r.amt), 0);
+      const nb = mine.length;
+      const encours = mine.reduce((a, r) => a + (r.reste != null ? r.reste : 0), 0);
+      // Délai moyen de paiement : lu sur le suivi des paiements (date de facture → date de paiement).
+      const pt = this.payTrackRows().filter(r => this.nrm(r.client) === this.nrm(ficheName));
+      const delais = pt.map(r => {
+        if (!r.dateFac || !r.datePay) return null;
+        const a = this.agParse(r.dateFac), b = this.agParse(r.datePay);
+        if (isNaN(a) || isNaN(b)) return null;
+        const j = Math.round((b - a) / 864e5); return (j >= 0 && j < 400) ? j : null;
+      }).filter(v => v != null);
+      const delaiMoy = delais.length ? Math.round(delais.reduce((a, b) => a + b, 0) / delais.length) : null;
+      const avEntry2 = ficheIsClient ? avoirTotals[this._norm(ficheName)] : null;
+      const avoirDispo = avEntry2 ? avEntry2.montant : 0;
+      ficheAvoirLabel = avoirDispo > 0.005 ? this.fmt(avoirDispo) : '—';
+      ficheTitle = ficheName;
+      ficheSub = `${ficheIsClient ? 'Client' : 'Fournisseur'} · ${nb} ${nb > 1 ? 'opérations' : 'opération'} sur tout l'historique`;
+      ficheKpis = [
+        card(ficheIsClient ? 'Chiffre d’affaires' : 'Total acheté', this.fmt(volTot), '#0e1b2e', 'tout l’historique', accent),
+        card('Panier moyen', this.fmt(nb ? volTot / nb : 0), '#0e1b2e', `sur ${nb} facture${nb > 1 ? 's' : ''}`, slate),
+        card('Encours', this.fmt(encours), encours > 0.005 ? amber : green, encours > 0.005 ? 'reste à encaisser' : 'rien à encaisser', encours > 0.005 ? amber : green),
+        card('Délai moyen de paiement', delaiMoy == null ? '—' : `${delaiMoy} j`, delaiMoy == null ? gray : (delaiMoy > 45 ? red : delaiMoy > 30 ? amber : green), delaiMoy == null ? 'aucun paiement daté' : `sur ${delais.length} paiement${delais.length > 1 ? 's' : ''}`, delaiMoy == null ? gray : (delaiMoy > 45 ? red : green)),
+      ];
+      if (ficheIsClient) ficheKpis.push(card('Avoir disponible', ficheAvoirLabel, avoirDispo > 0.005 ? green : gray, 'crédit chez vous', avoirDispo > 0.005 ? green : gray));
+
+      // --- Courbe : 12 derniers mois. UNE seule série → pas de légende, le titre nomme la donnée.
+      // Barres en HTML (aucune dépendance, aucun SVG) : extrémité arrondie posée sur la ligne de
+      // base, écart de 2px entre barres, axes discrets, et une SEULE étiquette directe (le mois le
+      // plus fort) plutôt qu'un chiffre sur chaque barre. Le détail se lit au survol.
+      const finM = aY * 12 + aM, debM = finM - 11;
+      const parMois = {};
+      mine.forEach(r => { const k = ymOf(r); if (k >= debM && k <= finM) parMois[k] = (parMois[k] || 0) + Math.abs(r.amt); });
+      const serie = []; for (let k = debM; k <= finM; k++) serie.push({ k, v: parMois[k] || 0 });
+      const maxV = Math.max(...serie.map(s => s.v), 0);
+      ficheBarsEmpty = maxV <= 0;
+      ficheChartTitle = ficheIsClient ? 'Chiffre d’affaires mensuel — 12 derniers mois' : 'Achats mensuels — 12 derniers mois';
+      const moisCourt = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+      ficheBars = serie.map(s => {
+        const mIdx = ((s.k % 12) + 12) % 12, yy = Math.floor(s.k / 12);
+        const pct = maxV > 0 ? Math.max(s.v > 0 ? 3 : 0, Math.round((s.v / maxV) * 100)) : 0;
+        return {
+          label: moisCourt[mIdx],
+          // Étiquette directe RÉSERVÉE au mois le plus fort : un chiffre sur chaque barre serait illisible.
+          direct: (maxV > 0 && s.v === maxV) ? this.fmt(s.v) : '',
+          hasDirect: maxV > 0 && s.v === maxV,
+          tip: `${C.MONTHS[mIdx]} ${yy} — ${this.fmt(s.v)}`,
+          barStyle: `width:100%;height:${pct}%;background:${s.v === maxV && maxV > 0 ? accent : this.hexToRgba(accent, 0.45)};border-radius:4px 4px 0 0;transition:height .2s`,
+        };
+      });
+
+      // --- Moyens de paiement : proportions, pas de camembert (illisible au-delà de deux parts).
+      // Une seule teinte + un libellé chiffré par ligne : l'identité ne repose jamais sur la couleur.
+      const gr = mine.reduce((a, r) => a + ((r.ref && grenkeLinkedFactRefs.has(this.nrm(r.ref))) ? Math.abs(r.amt) : 0), 0);
+      const avUse = pt.reduce((a, r) => a + (this._vNum(r.avoir) || 0), 0);
+      const regle = pt.reduce((a, r) => a + (this._vNum(r.regle) || 0), 0);
+      const moyens = ficheIsClient
+        ? [{ n: 'Financement Grenke', v: gr }, { n: 'Réglé directement', v: regle }, { n: 'Payé par avoir', v: avUse }]
+        : [{ n: 'Réglé', v: mine.reduce((a, r) => a + (r.paid || 0), 0) }, { n: 'Restant dû', v: encours }];
+      const totM = moyens.reduce((a, m) => a + Math.max(0, m.v), 0);
+      ficheMoyens = moyens.filter(m => m.v > 0.005).map(m => ({
+        nom: m.n, montant: this.fmt(m.v),
+        part: totM > 0 ? Math.round((m.v / totM) * 100) + ' %' : '—',
+        barStyle: `height:8px;border-radius:4px;background:${accent};width:${totM > 0 ? Math.max(2, Math.round((m.v / totM) * 100)) : 0}%`,
+      }));
+
+      // --- Dernières factures (table de données de la fiche : le détail chiffré reste lisible).
+      const facs = mine.slice().sort((a, b) => (b.y * 10000 + b.m * 100 + b.d) - (a.y * 10000 + a.m * 100 + a.d)).slice(0, 12);
+      ficheFacturesEmpty = facs.length === 0;
+      ficheFactures = facs.map(r => ({
+        date: `${this.dd(r.d)}/${this.dd(r.m)}/${r.y}`, ref: r.ref || '—',
+        ttc: this.fmt(Math.abs(r.amt)),
+        reste: (r.reste != null && r.reste > 0.005) ? this.fmt(r.reste) : '—',
+        resteColor: (r.reste != null && r.reste > 0.005) ? amber : green,
+        statut: r.status || '—',
+        statutStyle: `${badge}background:${/pay|sold/i.test(r.status || '') ? '#e7f5ec' : /retard|relanc/i.test(r.status || '') ? '#fdeaea' : '#fef4e6'};color:${/pay|sold/i.test(r.status || '') ? green : /retard|relanc/i.test(r.status || '') ? red : amber}`,
+      }));
+    }
+    const onFicheClose = () => this.setState({ ficheTiers: null });
+    // Créer un avoir pour ce client : réutilise le circuit d'avoir manuel déjà en place
+    // (aperçu → confirmation → écriture dans l'onglet Avoirs).
+    const onFicheAvoir = () => this.setState({ ficheTiers: null, avoirManuel: { client: ficheName, montant: '', phase: 'ask' } });
     const partnerTagHeader = this.state.tiers === 'Fournisseurs' ? 'Catégorie' : 'Segment';
     const volHeader = `Volume ${tiersScopeLabel}`;
     const tiersPeriodTabs = ['Mois', 'Année'].map(name => ({ name, onClick: () => this.setState({ tiersPeriodMode: name }), style: tiersMode === name ? `padding:6px 13px;border-radius:8px;font-size:12.5px;font-weight:600;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit` : 'padding:6px 13px;border-radius:8px;font-size:12.5px;font-weight:500;color:#69788c;background:transparent;border:none;cursor:pointer;font-family:inherit' }));
@@ -10029,6 +10121,8 @@ class Component {
       stockHubTabs, stockIsActuel, stockIsHistorique,
       vehicleRows, onVehicleAdd, vehicleBankOpen, vehicleBankRows, onVehicleBankClose,
       partnersRows, partnerTagHeader, volHeader, tiersTabs, tiersPeriodTabs,
+      ficheOpen, ficheTitle, ficheSub, ficheKpis, ficheBars, ficheBarsEmpty, ficheChartTitle,
+      ficheMoyens, ficheFactures, ficheFacturesEmpty, ficheIsClient, ficheAvoirLabel, onFicheClose, onFicheAvoir,
       settingsIntro, sources, inputStyle, objInputs,
       setupOpen, setupSteps, setupPct, setupCountLabel, setupDoneCount, setupTotalCount, setupAllDone, onSetupClose, onSetupOpen, setupEntBadgeStyle, setupEntStatusLabel,
       demoMode: demo, demoToggleLabel, onToggleDemo, demoBtnStyle, demoStatusLabel, demoStatusStyle, demoModeText,
