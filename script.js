@@ -8217,27 +8217,63 @@ class Component {
     };
     const NAVGROUPHELP = {
       piloter: `PILOTER — votre poste du matin : le tableau de bord (chiffres clés, trésorerie) et l'agenda de l'entreprise.`,
-      saisir: `SAISIR — le point d'entrée unique : enregistrez vos achats pêcheurs et vos ventes. Tout le reste (Ventes, Achat pêche, Stock, Suivi de paiement, Grenke) se remplit à partir d'ici.`,
-      ventes: `SUIVRE vos clients : liste des ventes, suivi de paiement, financement Grenke et classement des clients.`,
-      achats: `SUIVRE vos fournisseurs et la marchandise : achats aux pêcheurs, factures fournisseurs à payer et le hub Stock (stock actuel · marges par espèce · historique).`,
-      finances: `SUIVRE l'argent : rapprochement du relevé bancaire et crédits & assurances.`,
-      gestion: `GÉRER l'entreprise : heures et fiches des employés, messagerie interne, bordereaux, bibliothèque de documents et véhicules.`,
+      saisir: `SAISIR — le point d'entrée unique : enregistrez vos achats pêcheurs, vos paiements, vos ventes et vos factures fournisseurs. Tout le reste se remplit à partir d'ici.`,
+      ventes: `VENTES — l'argent qui rentre : liste des ventes, suivi des paiements clients, financement Grenke et fiches clients.`,
+      achats: `ACHATS — l'argent qui sort : achats aux pêcheurs, factures à payer et fiches fournisseurs.`,
+      stock: `STOCK — la marchandise : stock de la semaine, marges par espèce, historique et bordereaux de livraison.`,
+      personnel: `PERSONNEL — les heures travaillées et les fiches des employés.`,
+      finances: `FINANCES — rapprochement du relevé bancaire, crédits et assurances.`,
+      admin: `ADMINISTRATIF — bibliothèque de documents, véhicules et messagerie interne.`,
     };
+    // Menu rangé par SENS DE L'ARGENT (ce qui rentre / ce qui sort) plutôt que par type de document :
+    // une même question n'a ainsi qu'une seule adresse possible. `set` = onglet interne à ouvrir, ce
+    // qui permet d'exposer directement une sous-vue (Clients / Fournisseurs, Stock actuel /
+    // Historique) sans dupliquer de page. Les identifiants `view` ne sont VOLONTAIREMENT pas
+    // renommés, même quand ils sont mal nommés (« Relance » = Suivi de paiement) : les profils
+    // utilisateurs enregistrent les pages autorisées sous ces noms-là, les renommer les casserait.
     const navGroupDefs = [
       { key: 'piloter', label: 'Piloter', items: [{ name: 'Tableau de bord', view: 'Tableau de bord' }, { name: 'Agenda', view: 'Agenda' }] },
       { key: 'saisir', label: 'Saisie', items: [{ name: 'Saisie comptable', view: 'SaisieCompta' }] },
-      { key: 'ventes', label: 'Ventes & clients', items: [{ name: 'Ventes', view: 'Ventes' }, { name: 'Suivi de paiement', view: 'Relance' }, { name: 'Financement Grenke', view: 'Grenke' }, { name: 'Clients', view: 'Tiers' }] },
-      { key: 'achats', label: 'Achats & stock', items: [{ name: 'Achat pêche', view: 'Achats' }, { name: 'Facture fournisseur', view: 'Factures' }, { name: 'Stock', view: 'Stock' }, { name: 'Comptabilité analytique', view: 'Comptabilité analytique', hidden: true }] },
-      { key: 'finances', label: 'Finances', items: [{ name: 'Banque', view: 'Banque' }, { name: 'Crédits', view: 'Crédits' }] },
-      { key: 'gestion', label: 'Gestion', items: [{ name: 'Heures', view: 'Heures' }, { name: 'Employés', view: 'Employés' }, { name: 'Messages', view: 'Messages' }, { name: 'Bordereaux', view: 'Bordereaux' }, { name: 'Bibliothèque', view: 'Bibliothèque' }, { name: 'Véhicules', view: 'Véhicules' }] },
+      { key: 'ventes', label: 'Ventes', items: [
+        { name: 'Ventes', view: 'Ventes' },
+        { name: 'Suivi de paiement', view: 'Relance' },
+        { name: 'Financement Grenke', view: 'Grenke' },
+        { name: 'Clients', view: 'Tiers', set: { tiers: 'Clients' } },
+      ] },
+      // « Factures » reste au libellé NEUTRE tant que la page mélange clients et fournisseurs :
+      // l'appeler « Factures fournisseurs » aujourd'hui serait un mensonge. Le libellé deviendra
+      // « Factures fournisseurs » quand les factures clients auront basculé vers Suivi de paiement.
+      { key: 'achats', label: 'Achats', items: [
+        { name: 'Achat pêche', view: 'Achats' },
+        { name: 'Factures', view: 'Factures' },
+        { name: 'Fournisseurs', view: 'Tiers', set: { tiers: 'Fournisseurs' } },
+      ] },
+      { key: 'stock', label: 'Stock', items: [
+        { name: 'Stock actuel', view: 'Stock', set: { stockTab: 'actuel' } },
+        { name: 'Marges par espèce', view: 'Comptabilité analytique' },
+        { name: 'Historique', view: 'Stock', set: { stockTab: 'historique' } },
+        { name: 'Bordereaux', view: 'Bordereaux' },
+      ] },
+      { key: 'personnel', label: 'Personnel', items: [{ name: 'Heures', view: 'Heures' }, { name: 'Employés', view: 'Employés' }] },
+      { key: 'finances', label: 'Finances', items: [{ name: 'Banque', view: 'Banque' }, { name: 'Crédits & assurances', view: 'Crédits' }] },
+      { key: 'admin', label: 'Administratif', items: [{ name: 'Bibliothèque', view: 'Bibliothèque' }, { name: 'Véhicules', view: 'Véhicules' }, { name: 'Messages', view: 'Messages' }] },
       { key: 'settings', label: '⚙ Paramètres', items: [{ name: 'Paramètres', view: 'Paramètres' }] },
     ];
     // Profil simplifié : seules les pages autorisées apparaissent ; un groupe vidé disparaît.
     const navGroupDefsVisible = isAdminUI ? navGroupDefs
       : navGroupDefs.filter(g => g.key !== 'settings').map(g => ({ ...g, items: g.items.filter(it => profilVoit(it.view)) })).filter(g => g.items.length);
+    // Valeur COURANTE d'un onglet interne, avec son défaut : sans ça « Stock actuel » et « Clients »
+    // ne s'allumeraient pas au démarrage, l'état n'étant pas encore posé (il vaut undefined).
+    const navStateVal = k => k === 'stockTab' ? (['actuel', 'historique'].includes(this.state.stockTab) ? this.state.stockTab : 'actuel')
+      : k === 'tiers' ? (this.state.tiers || 'Clients') : this.state[k];
+    const navItemActive = it => view === it.view && (!it.set || Object.keys(it.set).every(k => navStateVal(k) === it.set[k]));
     const navGroupOfView = {};
-    navGroupDefsVisible.forEach(g => g.items.forEach(it => { navGroupOfView[it.view] = g.key; }));
-    const activeGroupKey = navGroupOfView[view] || 'piloter';
+    navGroupDefsVisible.forEach(g => g.items.forEach(it => { if (navGroupOfView[it.view] == null) navGroupOfView[it.view] = g.key; }));
+    // Le groupe ouvert est celui qui contient l'entrée réellement active : une même page atteinte
+    // depuis deux groupes (Clients dans Ventes, Fournisseurs dans Achats) ne fait donc pas sauter le
+    // menu d'un groupe à l'autre. Repli sur le premier groupe qui cite la page (profil restreint).
+    const ownerGroup = navGroupDefsVisible.find(g => g.items.some(navItemActive));
+    const activeGroupKey = ownerGroup ? ownerGroup.key : (navGroupOfView[view] || 'piloter');
     const msgUnread = this.msgUnreadCount();
     const navGroups = navGroupDefsVisible.map(g => {
       const active = activeGroupKey === g.key;
@@ -8246,15 +8282,17 @@ class Component {
       return {
         name: (hasMessages && msgUnread) ? `${g.label} 💬 ${msgUnread}` : g.label,
         help: NAVGROUPHELP[g.key] || '',
-        onClick: () => { const first = visItems[0] || g.items[0]; this.setState({ view: first.view, cat: 'Toutes', q: '', page: 0 }); if (first.view === 'Messages') this.markMessagesRead(); if (first.view === 'SaisieCompta') this.openCompForm(this.state.compTab || 'Achat'); },
+        onClick: () => { const first = visItems[0] || g.items[0]; this.setState({ view: first.view, cat: 'Toutes', q: '', page: 0, ...(first.set || {}) }); if (first.view === 'Messages') this.markMessagesRead(); if (first.view === 'SaisieCompta') this.openCompForm(this.state.compTab || 'Achat'); },
         tabStyle: active
           ? `display:block;width:100%;text-align:left;padding:9px 12px;border-radius:9px;font-size:13px;font-weight:600;color:${accent};background:${soft};border:none;cursor:pointer;font-family:inherit;white-space:nowrap`
           : 'display:block;width:100%;text-align:left;padding:9px 12px;border-radius:9px;font-size:13px;font-weight:500;color:#4c5b6e;background:transparent;border:none;cursor:pointer;font-family:inherit;white-space:nowrap',
         subItems: (active && visItems.length > 1) ? visItems.map(it => ({
           name: (it.view === 'Messages' && msgUnread) ? `${it.name} (${msgUnread})` : it.name,
           help: NAVHELP[it.view] || '',
-          onClick: () => { this.setState({ view: it.view, cat: 'Toutes', q: '', page: 0 }); if (it.view === 'Messages') this.markMessagesRead(); },
-          tabStyle: (view === it.view || (it.view === 'Stock' && view === 'Comptabilité analytique'))
+          onClick: () => { this.setState({ view: it.view, cat: 'Toutes', q: '', page: 0, ...(it.set || {}) }); if (it.view === 'Messages') this.markMessagesRead(); },
+          // Plus de cas particulier « Stock allumé quand on est sur Comptabilité analytique » :
+          // « Marges par espèce » est désormais une entrée de menu à part entière, qui s'allume seule.
+          tabStyle: navItemActive(it)
             ? `display:block;width:100%;text-align:left;padding:7px 12px 7px 26px;border-radius:8px;font-size:12.5px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.3)};cursor:pointer;font-family:inherit;white-space:nowrap;margin-top:2px`
             : `display:block;width:100%;text-align:left;padding:7px 12px 7px 26px;border-radius:8px;font-size:12.5px;font-weight:500;color:#8291a5;background:transparent;border:1px solid transparent;cursor:pointer;font-family:inherit;white-space:nowrap;margin-top:2px`,
         })) : [],
