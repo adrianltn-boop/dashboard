@@ -347,10 +347,16 @@
                   <span><span style="{{ t.typeStyle }}">{{ t.type }}</span></span>
                   <span style="color:#0e1b2e;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.partner }}<span style="color:#9aa7b8;font-weight:400"> · {{ t.cat }}</span></span>
                   <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:{{ t.amountColor }}">{{ t.amount }}</span>
-                  <span><span style="{{ t.statusStyle }}">{{ t.status }}</span></span>
+                  <!-- Statut CLIQUABLE quand la facture est « À vérifier » : c'est le seul accès à
+                       la résolution des anomalies de paiement. Le code le prévoyait déjà (onResolve)
+                       mais le gabarit n'affichait qu'une étiquette morte : la fonction était donc
+                       injoignable depuis toute l'interface. -->
+                  <!-- Achats pêcheur : le statut n'est jamais cliquable (la résolution d'anomalie ne
+                       concerne que les factures clients) — étiquette, et non bouton inerte. -->
+                  <span><span style="{{ t.statusStyle }}" title="{{ t.statusTitle }}">{{ t.status }}</span></span>
                   <span style="text-align:center;display:flex;gap:4px;justify-content:center;align-items:center">
                     <sc-if value="{{ t.notAnnulled }}" hint-placeholder-val="{{ false }}">
-                      <button style="{{ t.cancelStyle }}" onclick="{{ t.onCancel }}" title="Annuler cette ligne dans Excel (colonne dédiée)">⊘</button>
+                      <button style="{{ t.cancelStyle }}" onclick="{{ t.onCancel }}" title="Annuler cette ligne : elle est barrée et grisée dans Excel, aucune donnée n'est effacée">⊘</button>
                     </sc-if>
                     <sc-if value="{{ t.annulled }}" hint-placeholder-val="{{ false }}">
                       <span style="{{ t.annuleBadgeStyle }}">Annulé</span>
@@ -1058,7 +1064,7 @@
                     <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#0e1b2e">{{ f.ttc }}</span>
                     <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#69788c">{{ f.paid }}</span>
                     <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:{{ f.resteColor }}">{{ f.reste }}</span>
-                    <span><button style="{{ f.statusButtonStyle }}" onclick="{{ f.onResolve }}" title="{{ f.statusTitle }}">{{ f.status }}</button></span>
+                    <span><span style="{{ f.statusBadgeStyle }}" title="{{ f.statusTitle }}">{{ f.status }}</span></span>
                     <span style="text-align:center;display:flex;gap:4px;justify-content:center;align-items:center">
                       <sc-if value="{{ f.canPayFourn }}" hint-placeholder-val="{{ false }}">
                         <button style="{{ f.payFournStyle }}" onclick="{{ f.onPayFourn }}" title="{{ f.payFournTitle }}">Payée</button>

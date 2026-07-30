@@ -6871,7 +6871,7 @@ class Component {
     const grenkeLinkCardStyle = 'width:560px;max-width:100%;max-height:88vh;overflow:auto;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px';
     const grenkeUnlinkStyle = 'padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#b91c1c;background:#fff;border:1px solid #f0c9c9;cursor:pointer;font-family:inherit';
     const grenkeAutoStyle = 'padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#69788c;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit';
-    const achatAll = (isAchatView ? scoped : []).map(r => { const gross = Math.abs(r.amt); const paid = r.paid != null ? r.paid : (r.status === 'Payé' ? gross : 0); const reste = r.reste != null ? r.reste : Math.max(0, gross - paid); const st = reste > 0.005 ? (r.status === 'Retard' ? 'Retard' : 'Non payé') : 'Payé'; const annulled = isAnnule(r); const opWarn = r.paymentWarning || null; return { date: `${this.dd(r.d)}/${this.dd(r.m)}`, ref: r.ref, partner: (r.manual ? '✎ ' : '') + r.partner, paidStr: this.fmt(paid), resteStr: this.fmt(reste), resteColor: reste > 0.005 ? red : green, status: st + (opWarn ? ' ⚠' : ''), statusStyle: st === 'Payé' ? `${badge}background:#e7f5ec;color:${green}` : st === 'Retard' ? `${badge}background:#fdeaea;color:${red}` : `${badge}background:#fef4e6;color:${amber}`, statusButtonStyle: (st === 'Payé' ? `${badge}background:#e7f5ec;color:${green}` : st === 'Retard' ? `${badge}background:#fdeaea;color:${red}` : `${badge}background:#fef4e6;color:${amber}`) + ';border:none;cursor:default;font-family:inherit', onResolve: null, statusTitle: opWarn || '', onTrash: () => this.setState({ trashAsk: { kind: 'op', key: this.opHideKey(r), label: 'Facture ' + (r.ref || '—') + ' · ' + (r.partner || '—') + ' · ' + this.fmt(gross) } }), trashStyle: trashBtnStyle, annulled, notAnnulled: !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none', onCancel: () => this.requestCancelPreview('operations', r.ref), cancelStyle: cancelBtnStyle, onRestore: () => this.requestCancelPreview('operations', r.ref, { restore: true }), restoreStyle: restoreBtnStyle, annuleBadgeStyle }; });
+    const achatAll = (isAchatView ? scoped : []).map(r => { const gross = Math.abs(r.amt); const paid = r.paid != null ? r.paid : (r.status === 'Payé' ? gross : 0); const reste = r.reste != null ? r.reste : Math.max(0, gross - paid); const st = reste > 0.005 ? (r.status === 'Retard' ? 'Retard' : 'Non payé') : 'Payé'; const annulled = isAnnule(r); const opWarn = r.paymentWarning || null; return { date: `${this.dd(r.d)}/${this.dd(r.m)}`, ref: r.ref, partner: (r.manual ? '✎ ' : '') + r.partner, paidStr: this.fmt(paid), resteStr: this.fmt(reste), resteColor: reste > 0.005 ? red : green, status: st + (opWarn ? ' ⚠' : ''), statusStyle: st === 'Payé' ? `${badge}background:#e7f5ec;color:${green}` : st === 'Retard' ? `${badge}background:#fdeaea;color:${red}` : `${badge}background:#fef4e6;color:${amber}`, statusTitle: opWarn || '', onTrash: () => this.setState({ trashAsk: { kind: 'op', key: this.opHideKey(r), label: 'Facture ' + (r.ref || '—') + ' · ' + (r.partner || '—') + ' · ' + this.fmt(gross) } }), trashStyle: trashBtnStyle, annulled, notAnnulled: !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none', onCancel: () => this.requestCancelPreview('operations', r.ref), cancelStyle: cancelBtnStyle, onRestore: () => this.requestCancelPreview('operations', r.ref, { restore: true }), restoreStyle: restoreBtnStyle, annuleBadgeStyle }; });
     const achatStatusVals = [...new Set(achatAll.map(t => t.status))];
     const achatStatusEff = effStatus('achat', achatStatusVals);
     const achatStatusChips = statusChipsFor('achat', achatStatusVals);
@@ -6935,17 +6935,22 @@ class Component {
     const facFilters = facFilterList.map(name => ({ name, onClick: () => this.setState({ facFilter: name, q: '', page: 0 }), style: this.state.facFilter === name ? `padding:6px 12px;border-radius:99px;font-size:12px;font-weight:600;color:#fff;background:${accent};border:1px solid ${accent};cursor:pointer;font-family:inherit` : 'padding:6px 12px;border-radius:99px;font-size:12px;font-weight:500;color:#5b6b7f;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit' }));
     const ff = this.state.facFilter;
     const facSorted = [...foF.filter(f => inSelPeriod(f.em) || f.reste > 0)].sort((a, b) => (a.reste > 0 ? 0 : 1) - (b.reste > 0 ? 0 : 1) || this.days(a.dueO) - this.days(b.dueO));
-    const facMatch = f => ff === 'Tous' || ff === 'Client' || ff === 'Fournisseur' ? true : f.status === ff;
+    // Plus de branches « Client »/« Fournisseur » : elles n'étaient jamais atteintes (ces valeurs
+    // n'existent pas dans facFilterList) et cette page ne contient de toute façon QUE des
+    // fournisseurs (voir foF ci-dessus). Les factures clients vivent dans Ventes / Suivi de paiement.
+    const facMatch = f => ff === 'Tous' ? true : f.status === ff;
     const facList = facSorted.filter(facMatch);
     const facQ = facList.filter(f => matchTxt(f.ref, f.partner, f.status, f.typeLabel));
     const facPager = paginate(facQ);
     const facRows = facPager.slice.map(f => {
-      const isGr = grenkeLinkedFactRefs.has(this.nrm(f.ref)), canResolve = f.status === 'À vérifier' && f.sens === 'Client';
+      // Pas de résolution d'anomalie ici : elle ne concerne que les factures CLIENTS, absentes de
+      // cette page (foF ne garde que les fournisseurs). Elle reste accessible là où les ventes
+      // s'affichent réellement — Tableau de bord et Ventes, où le statut « À vérifier » est cliquable.
+      const isGr = grenkeLinkedFactRefs.has(this.nrm(f.ref));
       const annulled = isAnnuleF(f);
-      return { date: `${this.dd(f.em.d)}/${this.dd(f.em.m)}`, due: `${this.dd(f.dueO.d)}/${this.dd(f.dueO.m)}`, dueColor: f.over ? red : '#69788c', ref: f.ref, partner: f.partner, typeLabel: isGr ? 'Grenke' : (f.sens === 'Client' ? 'Client' : 'Fourn.'), typeStyle: isGr ? `${badge}background:#e7f5ec;color:${green}` : (f.sens === 'Client' ? `${badge}background:${soft};color:${accent}` : `${badge}background:#eef1f5;color:${slate}`), ttc: this.fmt(f.ttc), paid: f.paid ? this.fmt(f.paid) : '—', reste: f.reste ? this.fmt(f.reste) : '—', resteColor: f.reste ? (f.over ? red : '#0e1b2e') : green, status: f.status + (f.paymentWarning ? ' ⚠' : ''),
-        statusButtonStyle: `${statusStyle(f.status)};border:${canResolve || f.paymentWarning ? '1px solid #e0b85f' : 'none'};cursor:${canResolve ? 'pointer' : 'default'};font-family:inherit`,
-        statusTitle: canResolve ? 'Cliquez pour comprendre et résoudre cette anomalie' : (f.paymentWarning || ''),
-        onResolve: canResolve ? () => this.setState({ payResolveRef: f.ref }) : null,
+      return { date: `${this.dd(f.em.d)}/${this.dd(f.em.m)}`, due: `${this.dd(f.dueO.d)}/${this.dd(f.dueO.m)}`, dueColor: f.over ? red : '#69788c', ref: f.ref, partner: f.partner, typeLabel: isGr ? 'Grenke' : 'Fourn.', typeStyle: isGr ? `${badge}background:#e7f5ec;color:${green}` : `${badge}background:#eef1f5;color:${slate}`, ttc: this.fmt(f.ttc), paid: f.paid ? this.fmt(f.paid) : '—', reste: f.reste ? this.fmt(f.reste) : '—', resteColor: f.reste ? (f.over ? red : '#0e1b2e') : green, status: f.status + (f.paymentWarning ? ' ⚠' : ''),
+        statusBadgeStyle: `${statusStyle(f.status)};border:${f.paymentWarning ? '1px solid #e0b85f' : 'none'}`,
+        statusTitle: f.paymentWarning || '',
         annulled, notAnnulled: !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none',
         onCancel: () => this.requestCancelPreview('factures', f.ref, { month: f.em.m }), cancelStyle: cancelBtnStyle,
         onRestore: () => this.requestCancelPreview('factures', f.ref, { restore: true, month: f.em.m }), restoreStyle: restoreBtnStyle, annuleBadgeStyle,
@@ -8240,12 +8245,11 @@ class Component {
         { name: 'Financement Grenke', view: 'Grenke' },
         { name: 'Clients', view: 'Tiers', set: { tiers: 'Clients' } },
       ] },
-      // « Factures » reste au libellé NEUTRE tant que la page mélange clients et fournisseurs :
-      // l'appeler « Factures fournisseurs » aujourd'hui serait un mensonge. Le libellé deviendra
-      // « Factures fournisseurs » quand les factures clients auront basculé vers Suivi de paiement.
+      // Libellé « Factures fournisseurs » désormais exact : la page ne contient QUE des fournisseurs
+      // (elle filtre sur sens === 'Fournisseur'). Les factures clients vivent dans Ventes.
       { key: 'achats', label: 'Achats', items: [
         { name: 'Achat pêche', view: 'Achats' },
-        { name: 'Factures', view: 'Factures' },
+        { name: 'Factures fournisseurs', view: 'Factures' },
         { name: 'Fournisseurs', view: 'Tiers', set: { tiers: 'Fournisseurs' } },
       ] },
       { key: 'stock', label: 'Stock', items: [
