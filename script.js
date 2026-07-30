@@ -2342,10 +2342,23 @@ class Component {
     const bakName = `${base} — sauvegarde ${stamp}.xlsx`;
     const bytes = new Uint8Array(buf.slice(0));
     if (this._backupDir && this._backupDir.getFileHandle) {
-      try { const fh = await this._backupDir.getFileHandle(bakName, { create: true }); const wr = await fh.createWritable(); await wr.write(bytes); await wr.close(); return { ok: true, where: this._backupDir.name || 'dossier de sauvegarde', bakName }; } catch (e) {}
+      try {
+        // Autorisation parfois expirée depuis le dernier démarrage : on la redemande avant d'échouer.
+        if (this._backupDir.queryPermission) {
+          let p = await this._backupDir.queryPermission({ mode: 'readwrite' });
+          if (p !== 'granted' && this._backupDir.requestPermission) p = await this._backupDir.requestPermission({ mode: 'readwrite' });
+          if (p !== 'granted') return { ok: false, reason: `Accès refusé au dossier de sauvegarde « ${this._backupDir.name || ''} ». Réautorisez-le dans Paramètres → Dossier de sauvegarde.` };
+        }
+        const fh = await this._backupDir.getFileHandle(bakName, { create: true }); const wr = await fh.createWritable(); await wr.write(bytes); await wr.close();
+        return { ok: true, where: this._backupDir.name || 'dossier de sauvegarde', bakName };
+      } catch (e) { return { ok: false, reason: `Sauvegarde impossible dans « ${this._backupDir.name || 'le dossier choisi' } » : ${(e && e.message) || 'erreur'}.` }; }
     }
-    // repli : téléchargement de la copie de sauvegarde
-    try { const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = bakName; a.click(); setTimeout(() => URL.revokeObjectURL(url), 4000); return { ok: true, where: 'téléchargement', bakName }; } catch (e) { return { ok: false }; }
+    // Plus de repli par TÉLÉCHARGEMENT : il déposait une copie du fichier dans les téléchargements
+    // à CHAQUE écriture, ce qui encombrait le dossier sans que personne n'aille jamais y chercher
+    // quoi que ce soit. La sauvegarde passe désormais uniquement par le dossier dédié, choisi une
+    // fois dans Paramètres — et la RÈGLE « pas de sauvegarde, pas d'écriture » reste entière :
+    // sans dossier, on refuse d'écrire plutôt que d'écrire sans filet.
+    return { ok: false, reason: "Aucun dossier de sauvegarde n'est choisi. Ouvrez Paramètres → Dossier de sauvegarde et désignez-en un : une copie datée y sera déposée avant chaque écriture." };
   }
 
   // Localise la ligne d'écriture — RÈGLE 3 : on écrit JUSTE APRÈS la dernière ligne contenant une
@@ -4735,7 +4748,7 @@ class Component {
       }
       // 2) SAUVEGARDE OBLIGATOIRE avant écriture (RÈGLE 12 : pas de sauvegarde → pas d'écriture)
       const bak = await this._backupBeforeWrite(pw.name, buf);
-      if (!bak || !bak.ok) throw new Error('sauvegarde de sécurité impossible — écriture annulée pour ne rien risquer');
+      if (!bak || !bak.ok) throw new Error((bak && bak.reason) || 'sauvegarde de sécurité impossible — écriture annulée pour ne rien risquer');
       // 2 bis) CRÉATION DES LIGNES MANQUANTES (avec recopie des formules) — appliquée ICI, sur le
       // buffer FRAIS relu ci-dessus. Le faire au moment de l'aperçu ne servait à rien : `buf` y est
       // remplacé par la version disque, donc la ligne créée était perdue et les éditions visaient
@@ -8648,6 +8661,7 @@ class Component {
     const onHelpTipClose = () => this.setState({ helpTip: null });
     const helpHintOpen = helpMode && !helpTip;
     const backupFolderName = this.state.backupFolderName || '';
+    const backupManquant = !backupFolderName; // bloque toute écriture (RÈGLE : pas de sauvegarde, pas d'écriture)
     const onChangeBackupFolder = () => this.changeBackupFolder();
     const backupStatusMap = {
       saving: { text: 'Sauvegarde en cours…', color: '#b45309' },
@@ -9929,7 +9943,7 @@ class Component {
       bannerStyle, bannerText, bannerActions,
       bannerVisible, onDismissBanner, bannerCloseStyle,
       htTtcLabel, htTtcStyle, onToggleHtTtc, refreshStyle, onRefreshAll,
-      onBackup, backupBusy, backupBtnLabel, backupBtnStyle, backupFolderName, onChangeBackupFolder, backupStatus,
+      onBackup, backupBusy, backupBtnLabel, backupBtnStyle, backupFolderName, backupManquant, onChangeBackupFolder, backupStatus,
       onSuivi, suiviBusy, suiviBtnLabel, suiviBtnStyle, suiviFolderName, onChangeSuiviFolder, suiviStatus, suiviPeriodLabel,
       helpMode, onHelpToggle, helpBtnStyle, helpRootClass, helpTip, helpTipStyle, onHelpTipClose, helpHintOpen,
       viewHelp: NAVHELP[view] || '',

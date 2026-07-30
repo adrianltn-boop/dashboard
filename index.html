@@ -2174,7 +2174,12 @@
               <span style="font-size:14px;font-weight:600;color:#0e1b2e">Sauvegarde complète</span>
               <div style="font-size:12.5px;color:#8291a5;margin-top:6px;line-height:1.6;max-width:720px">Crée une archive .zip complète (copie du tableau de bord + vos fichiers Excel connectés + toutes vos données) dans un dossier de votre choix. Une nouvelle sauvegarde horodatée à chaque clic.</div>
               <sc-if value="{{ backupFolderName }}" hint-placeholder-val="{{ false }}">
-                <div style="font-size:12px;color:#69788c;margin-top:8px">📁 Dossier : <b>{{ backupFolderName }}</b></div>
+                <div style="font-size:12px;color:#69788c;margin-top:8px">📁 Dossier : <b>{{ backupFolderName }}</b> — une copie datée y est déposée avant chaque écriture.</div>
+              </sc-if>
+              <!-- Sans dossier, aucune écriture n'est possible : on le dit ICI, avant que
+                   l'utilisatrice ne se heurte au refus au milieu d'une saisie. -->
+              <sc-if value="{{ backupManquant }}" hint-placeholder-val="{{ false }}">
+                <div style="font-size:12.5px;font-weight:600;margin-top:9px;padding:10px 12px;border-radius:9px;background:#fdeaea;border:1px solid #f1d4d4;color:#b91c1c;line-height:1.55">⚠ Aucun dossier de sauvegarde choisi — le tableau de bord refusera d'écrire dans vos fichiers Excel tant qu'il n'en aura pas un. Choisissez-en un ci-contre : une copie datée y sera déposée avant chaque écriture.</div>
               </sc-if>
               <sc-if value="{{ backupStatus }}" hint-placeholder-val="{{ false }}">
                 <div style="font-size:12px;font-weight:600;margin-top:6px;color:{{ backupStatus.color }}">{{ backupStatus.text }}</div>
