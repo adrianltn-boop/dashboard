@@ -1,5 +1,8 @@
   body { margin: 0; background: #dfe4ec; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   * { box-sizing: border-box; }
+  /* Base commune à tous les boutons : sans elle, un bouton dont le style inline oublie
+     font-family s'affiche dans la police par défaut du navigateur au milieu de l'interface. */
+  button { font-family: inherit; }
   ::-webkit-scrollbar { height: 8px; width: 8px; }
   ::-webkit-scrollbar-thumb { background: #cbd3df; border-radius: 99px; }
   .missing-hatch {

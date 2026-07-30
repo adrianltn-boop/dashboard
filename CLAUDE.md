@@ -125,6 +125,30 @@
   décalée dès qu'on trie). La ligne reste intacte,
   seulement barrée et grisée.
 
+## Réglage de l'écriture (colonnes)
+- Les colonnes d'écriture sont DÉTECTÉES automatiquement
+  à partir des en-têtes (_writeKw + _autoWriteCols).
+  L'assistant de pointage manuel ne sert plus que de
+  repli quand un champ essentiel manque.
+- _autoWriteCols fait DEUX passes GLOBALES : toutes les
+  égalités strictes d'abord, les correspondances
+  partielles ensuite. Champ par champ, un libellé
+  générique traité tôt raflerait en `includes` la
+  colonne qu'un champ précis prendrait en égalité
+  (« Date » volant « Date de paiement »).
+- PIÈGE (même famille que includes('com')) : la passe
+  `includes` ignore les mots-clés de moins de 4
+  caractères. « an » est contenu dans « montant »,
+  « ht » dans « chiffre ». Les mots courts ne servent
+  qu'à l'égalité stricte.
+- Fichier fournisseurs : la recherche est BORNÉE aux
+  colonnes du bloc courant (deux tableaux côte à côte),
+  sinon on marque les lignes du bloc voisin.
+- La colonne « Annulé » se répare à chaud
+  (_retrouveColAnnule) : elle manquait à
+  _detectFacturesSheet, ce qui rendait le bouton ⊘ des
+  factures fournisseurs définitivement inopérant.
+
 ## Documents édités (impression / PDF)
 - Un navigateur n'expose AUCUNE API d'imprimante :
   la Web Printing API de Chrome est réservée aux

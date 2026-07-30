@@ -1626,6 +1626,10 @@ class Component {
         else if (h.includes('montant')) cols.ttc = ci;
         else if ((h.includes('paiement') || h.includes('paiment')) && h.includes('date')) cols.datePaie = ci;
         else if (h.includes('paiment') || h.includes('paiement')) cols.paye = ci;
+        // Sans cette ligne, cols.annule restait indéfini et le bouton ⊘ des factures fournisseurs
+        // échouait SYSTÉMATIQUEMENT (« Aucune colonne Annulé réglée ») sans aucun moyen d'y remédier,
+        // le mode pointage manuel étant court-circuité pour cette source.
+        else if (h.includes('annule') || h.includes('annulation')) cols.annule = ci;
       } return cols; };
     return { headerIdx, normalCols: mapBlock(0, block2Start), crustaceCols: block2Start < header.length ? mapBlock(block2Start, header.length) : {} };
   }
@@ -2253,6 +2257,105 @@ class Component {
   writeableKinds() { return ['operations', 'ventes', 'factures']; }
   writeSourceLabel(kind) { return kind === 'operations' ? 'Achat pêcheur' : kind === 'ventes' ? 'Vente client' : kind === 'factures' ? 'Facture fournisseur' : kind; }
   static MONTHS_UP = ['JANVIER', 'FEVRIER', 'MARS', 'AVRIL', 'MAI', 'JUIN', 'JUILLET', 'AOUT', 'SEPTEMBRE', 'OCTOBRE', 'NOVEMBRE', 'DECEMBRE'];
+  // ============ DÉTECTION AUTOMATIQUE DES COLONNES D'ÉCRITURE ============
+  // Le pointage manuel colonne par colonne (13 clics pour les ventes) était la dernière étape
+  // manuelle du réglage, et la plus exposée à l'erreur : une colonne mal désignée fait écrire un
+  // montant dans une case de date. Ces mots-clés permettent de proposer le réglage complet, que
+  // l'utilisatrice n'a plus qu'à relire dans le récapitulatif.
+  //
+  // PIÈGE (même famille que includes('com') → « customer ») : la 2e passe travaille en `includes`,
+  // donc un mot-clé COURT y ferait n'importe quoi — « an » est contenu dans « montant », « ht »
+  // dans « chiffre », « n° » partout. D'où le filtre `k.length >= 4` sur la passe includes : les
+  // mots-clés courts ne servent qu'à l'égalité stricte.
+  _writeKw(kind) {
+    if (kind === 'operations') return {
+      ref: ['numero de facture', 'n° de facture', 'numero facture', 'no de facture', 'facture', 'numero'],
+      annee: ['annee', 'année', 'an'],
+      date: ['date', 'date facture', 'date de facture'],
+      partner: ['nom du pecheur', 'pecheur', 'nom du fournisseur', 'fournisseur', 'nom du client', 'client', 'nom'],
+      amt: ['montant', 'montant total', 'montant ht', 'total'],
+      cheque: ['numero de cheque', 'n° de cheque', 'no de cheque', 'cheque', 'chq'],
+      paid: ['total paye', 'montant paye', 'deja paye', 'paye', 'regle'],
+      paidDate: ['date de paiement', 'date paiement', 'date du paiement', 'paye le', 'regle le'],
+      solde: ['solde', 'restant a payer', 'reste a payer', 'restant du', 'restant', 'reste'],
+      annule: ['annule', 'annulé', 'annulation'],
+    };
+    if (kind === 'ventes') return {
+      idFacture: ['id facture', 'id de facture', 'identifiant facture', 'id'],
+      ref: ['numero de facture', 'n° de facture', 'numero facture', 'no de facture', 'facture', 'numero'],
+      partner: ['nom du client', 'client', 'nom'],
+      date: ['date facture', 'date de facture', 'date'],
+      ht: ['montant ht', 'total ht', 'ht'],
+      tvaIr: ['tva irlande', 'tva irl', 'tva ir'],
+      tvaFr: ['tva france', 'tva fr'],
+      grenke: ['grenke'],
+      ttc: ['total ttc', 'montant ttc', 'ttc'],
+      delai: ['delai de paiement', 'delai paiement', 'conditions de paiement', 'delai', 'conditions'],
+      datePrev: ['date prevue', 'date prevu', 'date echeance', "date d'echeance", 'echeance'],
+      status: ['etat', 'statut', 'relance', 'suivi'],
+      annule: ['annule', 'annulé', 'annulation'],
+    };
+    if (kind === 'factures') return {
+      date: ['date'],
+      partner: ['fournisseur', 'nom du fournisseur'],
+      ref: ['numero de facture', 'n° de facture', 'facture'],
+      ttc: ['montant', 'montant ttc', 'total'],
+      paye: ['paiement', 'paiment', 'paye', 'regle'],
+      datePaie: ['date paiement', 'date de paiement', 'date paiment'],
+      annule: ['annule', 'annulé', 'annulation'],
+    };
+    return {};
+  }
+  // Champs sans lesquels l'écriture n'a aucun sens : tant qu'ils manquent, on repasse la main à
+  // l'assistant manuel plutôt que d'écrire au hasard.
+  _writeEssentials(kind) {
+    if (kind === 'operations') return ['ref', 'date', 'partner', 'amt'];
+    if (kind === 'ventes') return ['ref', 'partner', 'date', 'ht'];
+    if (kind === 'factures') return ['date', 'partner', 'ttc'];
+    return [];
+  }
+  // Deux passes GLOBALES (et non champ par champ) : d'abord toutes les égalités strictes, ensuite
+  // seulement les correspondances partielles. Sans cela, un champ générique traité tôt raflerait
+  // en `includes` la colonne qu'un champ plus précis aurait prise en égalité stricte — typiquement
+  // « Date » volant la colonne « Date de paiement ».
+  _autoWriteCols(kind, headerRow, opts) {
+    opts = opts || {};
+    const kws = this._writeKw(kind);
+    const H = (headerRow || []).map(c => this._norm(c));
+    const lo = opts.from != null ? opts.from : 0;
+    const hi = opts.to != null ? opts.to : H.length;
+    const used = {};
+    const out = {};
+    const keys = Object.keys(kws);
+    const chercher = (test) => {
+      keys.forEach(k => {
+        if (out[k] != null) return;
+        for (const mot of kws[k]) {
+          const m = this._norm(mot);
+          if (!m) continue;
+          let idx = -1;
+          for (let i = lo; i < hi; i++) { if (!used[i] && H[i] && test(H[i], m)) { idx = i; break; } }
+          if (idx >= 0) { out[k] = idx; used[idx] = 1; return; }
+        }
+      });
+    };
+    chercher((h, m) => h === m);
+    chercher((h, m) => m.length >= 4 && h.includes(m));
+    return out;
+  }
+  // Trouve la ligne d'en-tête d'une feuille : la première des 15 premières lignes qui reconnaît au
+  // moins deux champs essentiels. Évite de prendre un titre décoratif pour un en-tête.
+  _autoHeaderIdx(kind, rows) {
+    const ess = this._writeEssentials(kind);
+    let best = -1, bestN = 0;
+    for (let i = 0; i < Math.min((rows || []).length, 15); i++) {
+      const cols = this._autoWriteCols(kind, rows[i] || []);
+      const n = ess.filter(k => cols[k] != null).length;
+      if (n > bestN) { bestN = n; best = i; }
+      if (n === ess.length) break;
+    }
+    return bestN >= 2 ? best : -1;
+  }
   // Champs candidats à placer, dans l'ordre des vraies colonnes de ses fichiers.
   writeFieldsFor(kind) {
     if (kind === 'operations') return [
@@ -2890,6 +2993,35 @@ class Component {
     if (!cfg.cols) return null;
     return { sheetName: cfg.sheetName, colsMap: cfg.cols, firstDataIdx: cfg.firstDataIdx || 0 };
   }
+  // Retrouve la colonne « Annulé » dans l'en-tête réel de la feuille et complète le réglage
+  // enregistré. La recherche est BORNÉE aux colonnes du bloc courant (élargies de 4 colonnes) :
+  // le fichier fournisseurs porte deux tableaux côte à côte, et une recherche sur toute la largeur
+  // marquerait les lignes du bloc voisin.
+  async _retrouveColAnnule(kind, cfg, sheetName, colsMap, buf, opts) {
+    try {
+      const wb = await this.readWorkbook(buf.slice(0));
+      const sh = wb.find(x => x.name === sheetName); if (!sh) return -1;
+      const mc = cfg.monthly && opts && opts.month ? (cfg.months || {})[opts.month] : null;
+      const hIdx = (mc && mc.headerRowIdx != null) ? mc.headerRowIdx
+        : (cfg.headerRowIdx != null ? cfg.headerRowIdx : this._autoHeaderIdx(kind, sh.rows));
+      if (hIdx == null || hIdx < 0) return -1;
+      const header = sh.rows[hIdx] || [];
+      const connues = Object.values(colsMap || {}).filter(v => typeof v === 'number' && v >= 0);
+      const from = connues.length ? Math.min(...connues) : 0;
+      const to = connues.length ? Math.min(header.length, Math.max(...connues) + 5) : header.length;
+      const trouve = this._autoWriteCols(kind, header, { from, to }).annule;
+      if (trouve == null || trouve < 0) return -1;
+      // Réglage complété et enregistré : la réparation ne se rejoue pas à chaque clic.
+      const next = JSON.parse(JSON.stringify(cfg));
+      const bloc = (opts && opts.block) || 'normal';
+      if (next.monthly) {
+        if (next.months && next.months[opts && opts.month] && next.months[opts.month].blocks && next.months[opts.month].blocks[bloc]) next.months[opts.month].blocks[bloc].cols.annule = trouve;
+        if (next.blocks && next.blocks[bloc]) next.blocks[bloc].cols.annule = trouve;
+      } else if (next.cols) next.cols.annule = trouve;
+      this.saveWriteMap(kind, next);
+      return trouve;
+    } catch (e) { console.error('[_retrouveColAnnule]', e); return -1; }
+  }
   // Annulation visible (ou rétablissement) d'une ligne déjà enregistrée. On n'efface JAMAIS rien :
   // la ligne est barrée et grisée sur toute sa largeur (voir _markRowAnnule) et la colonne dédiée
   // reçoit « Annulé par utilisateur » avec la date. Le rétablissement retire simplement ce
@@ -2902,8 +3034,6 @@ class Component {
     if (!cfg || !cfg.enabled) { this.setState({ msg: { kind: 'error', text: `Écriture non réglée pour « ${this.writeSourceLabel(kind)} » — réglez-la dans Paramètres avant d'annuler une ligne dans Excel.` } }); return; }
     const target = this._writeTargetFor(kind, cfg, opts); if (!target) return;
     const sheetName = target.sheetName, colsMap = target.colsMap, firstDataIdx = target.firstDataIdx;
-    const annuleCol = colsMap.annule;
-    if (annuleCol == null || annuleCol < 0) { this.setState({ msg: { kind: 'error', text: `Aucune colonne « Annulé » réglée pour « ${this.writeSourceLabel(kind)} » — ajoutez-la dans Paramètres → Régler l'écriture.` } }); return; }
     const refCol = colsMap.ref;
     if (refCol == null || refCol < 0) { this.setState({ msg: { kind: 'error', text: `Colonne « N° de facture » non réglée pour « ${this.writeSourceLabel(kind)} » — impossible de retrouver la ligne.` } }); return; }
     const hi = this._writableHandleFor(kind);
@@ -2914,6 +3044,16 @@ class Component {
       const file = await hi.handle.getFile();
       const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
       const buf = await file.arrayBuffer();
+      // La colonne « Annulé » n'est plus « réglée à la main » : si elle manque au réglage, on la
+      // retrouve dans l'en-tête réel du fichier et on complète le réglage à chaud. C'est ce qui
+      // rendait le bouton ⊘ définitivement inopérant sur les factures fournisseurs, dont le mode
+      // de pointage manuel est court-circuité.
+      let annuleCol = colsMap.annule;
+      if (annuleCol == null || annuleCol < 0) annuleCol = await this._retrouveColAnnule(kind, cfg, sheetName, colsMap, buf, opts);
+      if (annuleCol == null || annuleCol < 0) {
+        this.setState({ msg: { kind: 'error', text: `Aucune colonne « Annulé » dans la feuille « ${sheetName} » de « ${cfg.fileName || this.writeSourceLabel(kind)} ». Ajoutez un en-tête « Annulé » à droite du tableau, puis réessayez — le tableau de bord la reconnaîtra tout seul.` } });
+        return;
+      }
       const loc = await this._locateRowByRef(buf, sheetName, refCol, ref, firstDataIdx);
       if (!loc) { this.setState({ msg: { kind: 'error', text: `Ligne « ${ref} » introuvable dans « ${sheetName} » — le fichier a peut-être changé. Actualisez puis réessayez.` } }); return; }
       // Texte daté, écrit en clair dans une VRAIE cellule (et non dans un commentaire Excel, qui est
@@ -4336,7 +4476,20 @@ class Component {
     const view = this._pwSheetView(wb[sheetIdx].rows, (saved && saved.sheetName === onThisSheet) ? saved.headerRowIdx : null, (rmap && rmap.sheetName === onThisSheet) ? rmap.headerIdx : null);
     const fields = this.writeFieldsFor(kind);
     const pw = { kind, label, fileName: name, sheetNames: wb.map(s => s.name), sheetIdx, sheetName: onThisSheet, ...view, fields, cols: {}, firstDataIdx: null, editKey: null, phase: 'mapping', i: 0 };
-    if (saved && saved.cols && saved.sheetName === onThisSheet) { pw.cols = { ...saved.cols }; pw.firstDataIdx = saved.firstDataIdx != null ? saved.firstDataIdx : view.headerIdx + 1; pw.phase = 'recap'; }
+    // DÉTECTION AUTOMATIQUE : on propose le réglage complet plutôt que 13 clics de pointage.
+    // On ne saute au récapitulatif que si les champs essentiels sont trouvés — sinon l'assistant
+    // manuel reprend la main sur les seuls champs manquants, ce qui reste plus sûr que d'écrire
+    // une valeur dans une colonne devinée au hasard.
+    const autoCols = this._autoWriteCols(kind, (wb[sheetIdx].rows || [])[view.headerIdx] || []);
+    const manquants = this._writeEssentials(kind).filter(k => autoCols[k] == null);
+    if (Object.keys(autoCols).length) {
+      pw.cols = { ...autoCols };
+      pw.auto = { trouves: Object.keys(autoCols).length, manquants };
+      if (!manquants.length) { pw.firstDataIdx = view.headerIdx + 1; pw.phase = 'recap'; }
+      else { pw.i = fields.findIndex(f => pw.cols[f.key] == null); if (pw.i < 0) pw.i = 0; }
+    }
+    // Un réglage déjà enregistré prime toujours sur la détection : il a été relu et validé.
+    if (saved && saved.cols && saved.sheetName === onThisSheet) { pw.cols = { ...saved.cols }; pw.firstDataIdx = saved.firstDataIdx != null ? saved.firstDataIdx : view.headerIdx + 1; pw.phase = 'recap'; pw.auto = null; }
     this.setState({ paramWrite: pw });
   }
   pwSetSheet(idx) {
@@ -4711,7 +4864,15 @@ class Component {
     else if (pw.phase === 'startrow') { out.pwBadge = '↓'; out.pwPromptQ = "À partir de quelle ligne dois-je écrire ?"; out.pwPromptSub = 'Cliquez sur la première ligne vide, sous vos en-têtes.'; out.pwStep = ''; }
     else if (pw.phase === 'editStart') { out.pwBadge = '✎'; out.pwPromptQ = "Nouvelle première ligne d'écriture ?"; out.pwPromptSub = 'Cliquez sur la bonne ligne.'; out.pwStep = ''; }
     else if (pw.phase === 'editField') { out.pwBadge = '✎'; out.pwPromptQ = 'Nouvelle colonne pour « ' + fieldLabel(pw.editKey) + " » ?"; out.pwPromptSub = 'Cliquez sur la bonne colonne. Le reste ne bouge pas.'; out.pwStep = ''; }
+    else if (pw.auto && !(pw.auto.manquants || []).length) { out.pwBadge = '✓'; out.pwPromptQ = 'Colonnes reconnues toutes seules — vérifiez puis enregistrez.'; out.pwPromptSub = 'Le tableau de bord a lu vos en-têtes. Une ligne fausse ? Cliquez « Modifier » dessus.'; out.pwStep = ''; }
     else { out.pwBadge = '✓'; out.pwPromptQ = "C'est réglé — vérifiez et enregistrez."; out.pwPromptSub = 'Une erreur ? Cliquez « Modifier » sur la ligne concernée.'; out.pwStep = ''; }
+    // Bandeau de détection : dit franchement ce qui a été reconnu et ce qui reste à pointer.
+    out.pwAutoOn = !!pw.auto;
+    out.pwAutoText = pw.auto
+      ? ((pw.auto.manquants || []).length
+        ? `${pw.auto.trouves} colonne${pw.auto.trouves > 1 ? 's' : ''} reconnue${pw.auto.trouves > 1 ? 's' : ''} automatiquement. Il reste à me montrer : ${pw.auto.manquants.map(k => fieldLabel(k)).join(', ')}.`
+        : `${pw.auto.trouves} colonnes reconnues automatiquement dans vos en-têtes. Relisez le récapitulatif ci-dessous, puis enregistrez.`)
+      : '';
     out.pwPhase = pw.phase;
     out.pwTitle = "Régler l'écriture — " + pw.label;
     out.pwFileName = pw.fileName || ''; out.pwSheetName = pw.sheetName;
@@ -5236,6 +5397,15 @@ class Component {
   // Bouton « Ouvrir dans Excel » (Paramètres) : la File System Access API ne donne jamais le
   // chemin absolu d'un fichier (par sécurité navigateur) — on le demande une fois et on le
   // mémorise par source, pour les prochains clics.
+  // Corriger une ligne déjà écrite. La règle du projet interdit de modifier une écriture existante
+  // depuis l'interface : une correction en aveugle sur un fichier partagé est le meilleur moyen de
+  // perdre une information sans s'en apercevoir. Le crayon ouvre donc le bon fichier dans Excel et
+  // rappelle le numéro de la ligne. Pour retirer une ligne du décompte sans rien effacer, c'est ⊘.
+  openRowInExcel(kind, ref) {
+    const label = this.writeSourceLabel(kind);
+    this.openSourceInExcel(kind, label);
+    this.setState({ msg: { kind: 'ok', text: `« ${label} » s'ouvre dans Excel — la ligne à corriger porte le n° ${ref || '—'}. Pour l'annuler sans rien effacer, utilisez plutôt le bouton ⊘.` } });
+  }
   openSourceInExcel(kind, label) {
     const paths = this.state.filePaths || {};
     let path = paths[kind];
@@ -7549,6 +7719,7 @@ class Component {
     const grenkeHiddenCount = grenkeRowsAll.length - grenkeRows.length;
     const trashBtnStyle = 'width:26px;height:26px;border-radius:7px;border:1px solid #ecdcdc;background:#fff;color:#b91c1c;font-size:12px;cursor:pointer;line-height:1;padding:0';
     const cancelBtnStyle = 'width:26px;height:26px;border-radius:7px;border:1px solid #e0b85f;background:#fff;color:#b45309;font-size:12px;cursor:pointer;line-height:1;padding:0';
+    const rowEditStyle = 'width:26px;height:26px;border-radius:7px;border:1px solid #dde3ec;background:#fff;color:#5b6b7f;font-size:12px;cursor:pointer;line-height:1;padding:0';
     const restoreBtnStyle = 'padding:4px 10px;border-radius:7px;border:1px solid #bfe3cc;background:#fff;color:#15803d;font-size:11px;font-weight:600;cursor:pointer;line-height:1.4;font-family:inherit;white-space:nowrap';
     const annuleBadgeStyle = 'padding:3px 9px;border-radius:6px;font-size:10.5px;font-weight:700;color:#b45309;background:#fff4e5;border:1px solid #f0dcae;white-space:nowrap';
     const F = this._memo('F', [this.state.ventes, this.state.factures, this.state.demoMode], () => this.computeFactures());
@@ -7749,7 +7920,9 @@ class Component {
     const isGrenkeView = view === 'Grenke';
     const scoped = effCat === 'Toutes' ? typeScoped : typeScoped.filter(r => r.cat === effCat);
     const opStatus = { 'Payé': `${badge}background:#e7f5ec;color:${green}`, 'Payée': `${badge}background:#e7f5ec;color:${green}`, 'Partiellement payée': `${badge}background:#fff7df;color:#9a6700`, 'En attente': `${badge}background:#fef4e6;color:${amber}`, 'Non payé': `${badge}background:#fef4e6;color:${amber}`, 'Non payée': `${badge}background:#fef4e6;color:${amber}`, 'Retard': `${badge}background:#fdeaea;color:${red}` };
-    const cap = compact ? 22 : 15;
+    // Nombre de lignes affichées avant le lien « voir tout ». Relevé : à 15 lignes le tableau
+    // était plus court que la colonne latérale, ce qui laissait un vide sous les achats.
+    const cap = compact ? 40 : 30;
     const scopedQ = scoped.filter(r => matchTxt(r.partner, r.ref, r.cat, r.type));
     // ---- filtres de statut par tableau (Tous / Payé / En attente / …) ----
     const stFAll = this.state.tblStatusF || {};
@@ -7777,6 +7950,7 @@ class Component {
         typeStyle: isGrk ? `${badge}background:#ede9fe;color:#6d28d9` : r.type === 'Vente' ? `${badge}background:${soft};color:${accent}` : `${badge}background:#eef1f5;color:${slate}`,
         canCancel: cancelableType, annulled, notAnnulled: cancelableType && !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none',
         onCancel: cancelableType ? () => this.requestCancelPreview(cancelKind, r.ref) : null, cancelStyle: cancelBtnStyle,
+        onEditRow: cancelableType ? () => this.openRowInExcel(cancelKind, r.ref) : null, editStyle: rowEditStyle,
         onRestore: cancelableType ? () => this.requestCancelPreview(cancelKind, r.ref, { restore: true }) : null, restoreStyle: restoreBtnStyle, annuleBadgeStyle });
     });
     const moreLabel = (view === 'Achats' && scoped.length > cap) ? `Affichage des ${cap} premières lignes sur ${scoped.length} — réduisez la période pour tout voir.` : '';
@@ -7869,7 +8043,7 @@ class Component {
     const grenkeLinkCardStyle = 'width:560px;max-width:100%;max-height:88vh;overflow:auto;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px';
     const grenkeUnlinkStyle = 'padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#b91c1c;background:#fff;border:1px solid #f0c9c9;cursor:pointer;font-family:inherit';
     const grenkeAutoStyle = 'padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#69788c;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit';
-    const achatAll = (isAchatView ? scoped : []).map(r => { const gross = Math.abs(r.amt); const paid = r.paid != null ? r.paid : (r.status === 'Payé' ? gross : 0); const reste = r.reste != null ? r.reste : Math.max(0, gross - paid); const st = reste > 0.005 ? (r.status === 'Retard' ? 'Retard' : 'Non payé') : 'Payé'; const annulled = isAnnule(r); const opWarn = r.paymentWarning || null; return { date: `${this.dd(r.d)}/${this.dd(r.m)}`, ref: r.ref, partner: (r.manual ? '✎ ' : '') + r.partner, paidStr: this.fmt(paid), resteStr: this.fmt(reste), resteColor: reste > 0.005 ? red : green, status: st + (opWarn ? ' ⚠' : ''), statusStyle: st === 'Payé' ? `${badge}background:#e7f5ec;color:${green}` : st === 'Retard' ? `${badge}background:#fdeaea;color:${red}` : `${badge}background:#fef4e6;color:${amber}`, statusTitle: opWarn || '', onTrash: () => this.setState({ trashAsk: { kind: 'op', key: this.opHideKey(r), label: 'Facture ' + (r.ref || '—') + ' · ' + (r.partner || '—') + ' · ' + this.fmt(gross) } }), trashStyle: trashBtnStyle, annulled, notAnnulled: !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none', onCancel: () => this.requestCancelPreview('operations', r.ref), cancelStyle: cancelBtnStyle, onRestore: () => this.requestCancelPreview('operations', r.ref, { restore: true }), restoreStyle: restoreBtnStyle, annuleBadgeStyle }; });
+    const achatAll = (isAchatView ? scoped : []).map(r => { const gross = Math.abs(r.amt); const paid = r.paid != null ? r.paid : (r.status === 'Payé' ? gross : 0); const reste = r.reste != null ? r.reste : Math.max(0, gross - paid); const st = reste > 0.005 ? (r.status === 'Retard' ? 'Retard' : 'Non payé') : 'Payé'; const annulled = isAnnule(r); const opWarn = r.paymentWarning || null; return { date: `${this.dd(r.d)}/${this.dd(r.m)}`, ref: r.ref, partner: (r.manual ? '✎ ' : '') + r.partner, paidStr: this.fmt(paid), resteStr: this.fmt(reste), resteColor: reste > 0.005 ? red : green, status: st + (opWarn ? ' ⚠' : ''), statusStyle: st === 'Payé' ? `${badge}background:#e7f5ec;color:${green}` : st === 'Retard' ? `${badge}background:#fdeaea;color:${red}` : `${badge}background:#fef4e6;color:${amber}`, statusTitle: opWarn || '', onTrash: () => this.setState({ trashAsk: { kind: 'op', key: this.opHideKey(r), label: 'Facture ' + (r.ref || '—') + ' · ' + (r.partner || '—') + ' · ' + this.fmt(gross) } }), trashStyle: trashBtnStyle, annulled, notAnnulled: !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none', onCancel: () => this.requestCancelPreview('operations', r.ref), cancelStyle: cancelBtnStyle, onEditRow: () => this.openRowInExcel('operations', r.ref), editStyle: rowEditStyle, onRestore: () => this.requestCancelPreview('operations', r.ref, { restore: true }), restoreStyle: restoreBtnStyle, annuleBadgeStyle }; });
     const achatStatusVals = [...new Set(achatAll.map(t => t.status))];
     const achatStatusEff = effStatus('achat', achatStatusVals);
     const achatStatusChips = statusChipsFor('achat', achatStatusVals);
@@ -7951,6 +8125,7 @@ class Component {
         statusTitle: f.paymentWarning || '',
         annulled, notAnnulled: !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none',
         onCancel: () => this.requestCancelPreview('factures', f.ref, { month: f.em.m }), cancelStyle: cancelBtnStyle,
+        onEditRow: () => this.openRowInExcel('factures', f.ref), editStyle: rowEditStyle,
         onRestore: () => this.requestCancelPreview('factures', f.ref, { restore: true, month: f.em.m }), restoreStyle: restoreBtnStyle, annuleBadgeStyle,
         // « Payée » : uniquement pour une facture FOURNISSEUR encore due et non annulée — c'est le
         // circuit qui remplit enfin les colonnes Paiement / Date paiement du fichier fournisseurs.

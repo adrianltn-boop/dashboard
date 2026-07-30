@@ -52,7 +52,7 @@
 
   <!-- Contenu principal -->
   <div class="app-main" style="flex:1;min-width:0;padding:32px;overflow-x:auto">
-  <div class="app-card" style="max-width:1200px;min-width:1020px;margin:0 auto;background:#f6f8fc;border:1px solid #e2e8f1;border-radius:18px;overflow:hidden;box-shadow:0 20px 44px -24px rgba(14,27,46,.28)">
+  <div class="app-card" style="max-width:1440px;min-width:1020px;margin:0 auto;background:#f6f8fc;border:1px solid #e2e8f1;border-radius:18px;overflow:hidden;box-shadow:0 20px 44px -24px rgba(14,27,46,.28)">
 
     <!-- Top bar -->
     <div class="app-topbar" style="display:flex;justify-content:flex-end;align-items:center;padding:14px 24px;background:#fff;border-bottom:1px solid #eef1f6">
@@ -286,11 +286,11 @@
               </div>
             </div>
             <div style="padding:0 20px 8px">
-              <div style="display:grid;grid-template-columns:58px 96px 1fr 108px 108px 100px 100px;gap:8px;align-items:center;padding:12px 4px;font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">
+              <div style="display:grid;grid-template-columns:58px 96px 1fr 108px 108px 100px 122px;gap:8px;align-items:center;padding:12px 4px;font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">
                 <span>Date</span><span>N°</span><span>Pêcheur</span><span style="text-align:right">Mont. payé</span><span style="text-align:right">Restant à payer</span><span>Statut</span><span></span>
               </div>
               <sc-for list="{{ achatRows }}" as="t" hint-placeholder-count="8">
-                <div style="display:grid;grid-template-columns:58px 96px 1fr 108px 108px 100px 100px;gap:8px;align-items:center;padding:{{ rowPad }};border-top:1px solid #f1f4f8;font-size:13px;opacity:{{ t.rowOpacity }}">
+                <div style="display:grid;grid-template-columns:58px 96px 1fr 108px 108px 100px 122px;gap:8px;align-items:center;padding:{{ rowPad }};border-top:1px solid #f1f4f8;font-size:13px;opacity:{{ t.rowOpacity }}">
                   <span style="color:#69788c;font-family:'IBM Plex Mono',monospace">{{ t.date }}</span>
                   <span style="color:#3a4a5e;font-family:'IBM Plex Mono',monospace;text-decoration:{{ t.refDecoration }}">{{ t.ref }}</span>
                   <span style="color:#0e1b2e;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.partner }}</span>
@@ -300,6 +300,7 @@
                   <span style="text-align:center;display:flex;gap:4px;justify-content:center;align-items:center">
                     <sc-if value="{{ t.notAnnulled }}" hint-placeholder-val="{{ true }}">
                       <button style="{{ t.trashStyle }}" onclick="{{ t.onTrash }}" title="Masquer cette ligne (corbeille)">🗑</button>
+                      <button style="{{ t.editStyle }}" onclick="{{ t.onEditRow }}" title="Corriger cette ligne : ouvre le fichier dans Excel. Pour la retirer sans rien effacer, utilisez ⊘.">✎</button>
                       <button style="{{ t.cancelStyle }}" onclick="{{ t.onCancel }}" title="Annuler cette ligne dans Excel (colonne dédiée)">⊘</button>
                     </sc-if>
                     <sc-if value="{{ t.annulled }}" hint-placeholder-val="{{ false }}">
@@ -337,11 +338,11 @@
               </div>
             </div>
             <div style="padding:0 20px 8px">
-              <div style="display:grid;grid-template-columns:84px 58px 74px 1fr 112px 92px 100px;gap:8px;align-items:center;padding:12px 4px;font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">
+              <div style="display:grid;grid-template-columns:84px 58px 74px 1fr 112px 92px 118px;gap:8px;align-items:center;padding:12px 4px;font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">
                 <span>N° facture</span><span>Date</span><span>Type</span><span>Partenaire</span><span style="text-align:right">Montant</span><span>Statut</span><span></span>
               </div>
               <sc-for list="{{ filtered }}" as="t" hint-placeholder-count="8">
-                <div style="display:grid;grid-template-columns:84px 58px 74px 1fr 112px 92px 100px;gap:8px;align-items:center;padding:{{ rowPad }};border-top:1px solid #f1f4f8;font-size:13px;opacity:{{ t.rowOpacity }}">
+                <div style="display:grid;grid-template-columns:84px 58px 74px 1fr 112px 92px 118px;gap:8px;align-items:center;padding:{{ rowPad }};border-top:1px solid #f1f4f8;font-size:13px;opacity:{{ t.rowOpacity }}">
                   <span style="color:#3a4a5e;font-family:'IBM Plex Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:{{ t.refDecoration }}">{{ t.ref }}</span>
                   <span style="color:#69788c;font-family:'IBM Plex Mono',monospace">{{ t.date }}</span>
                   <span><span style="{{ t.typeStyle }}">{{ t.type }}</span></span>
@@ -356,6 +357,7 @@
                   <span><span style="{{ t.statusStyle }}" title="{{ t.statusTitle }}">{{ t.status }}</span></span>
                   <span style="text-align:center;display:flex;gap:4px;justify-content:center;align-items:center">
                     <sc-if value="{{ t.notAnnulled }}" hint-placeholder-val="{{ false }}">
+                      <button style="{{ t.editStyle }}" onclick="{{ t.onEditRow }}" title="Corriger cette ligne : ouvre le fichier dans Excel. Pour la retirer sans rien effacer, utilisez ⊘.">✎</button>
                       <button style="{{ t.cancelStyle }}" onclick="{{ t.onCancel }}" title="Annuler cette ligne : elle est barrée et grisée dans Excel, aucune donnée n'est effacée">⊘</button>
                     </sc-if>
                     <sc-if value="{{ t.annulled }}" hint-placeholder-val="{{ false }}">
@@ -1080,6 +1082,7 @@
                         <button style="{{ f.payFournStyle }}" onclick="{{ f.onPayFourn }}" title="{{ f.payFournTitle }}">Payée</button>
                       </sc-if>
                       <sc-if value="{{ f.notAnnulled }}" hint-placeholder-val="{{ true }}">
+                        <button style="{{ f.editStyle }}" onclick="{{ f.onEditRow }}" title="Corriger cette ligne : ouvre le fichier dans Excel. Pour la retirer sans rien effacer, utilisez ⊘.">✎</button>
                         <button style="{{ f.cancelStyle }}" onclick="{{ f.onCancel }}" title="Annuler cette ligne : elle est barrée et grisée dans Excel, aucune donnée n'est effacée">⊘</button>
                       </sc-if>
                       <sc-if value="{{ f.annulled }}" hint-placeholder-val="{{ false }}">
@@ -2233,7 +2236,7 @@
             <div style="font-size:14px;font-weight:600;color:#0e1b2e;margin-bottom:4px">🩺 Bilan de santé</div>
             <div style="font-size:12.5px;color:#8291a5">Vérifie d'un coup vos fichiers, vos données, vos réglages et la cohérence, puis produit un rapport à m'envoyer si besoin.</div>
           </div>
-          <button style="padding:10px 18px;border-radius:10px;font-size:13px;font-weight:700;color:#fff;background:{{ accentColor }};border:none;cursor:pointer;font-family:inherit;white-space:nowrap" onclick="{{ onHealthOpen }}">Lancer le bilan</button>
+          <button style="padding:10px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:{{ accentColor }};border:none;cursor:pointer;font-family:inherit;white-space:nowrap" onclick="{{ onHealthOpen }}">Lancer le bilan</button>
         </div>
 
         <!-- ============ GESTION DES DOCUMENTS (impression / PDF) ============
@@ -2273,7 +2276,7 @@
               <div style="font-size:14px;font-weight:600;color:#0e1b2e;margin-bottom:4px">🧮 Inventaire des formules</div>
               <div style="font-size:12.5px;color:#8291a5">Liste où se trouvent les formules de vos fichiers et lesquelles le tableau de bord saurait recalculer lui-même. Rien n'est modifié : c'est un état des lieux avant de décider.</div>
             </div>
-            <button style="padding:10px 18px;border-radius:10px;font-size:13px;font-weight:700;color:#fff;background:{{ accentColor }};border:none;cursor:pointer;font-family:inherit;white-space:nowrap" onclick="{{ onFormulaScan }}">{{ fsBtnLabel }}</button>
+            <button style="padding:10px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:{{ accentColor }};border:none;cursor:pointer;font-family:inherit;white-space:nowrap" onclick="{{ onFormulaScan }}">{{ fsBtnLabel }}</button>
           </div>
           <sc-if value="{{ fsDone }}" hint-placeholder-val="{{ false }}">
             <div style="margin-top:14px;padding:11px 13px;border-radius:10px;background:#f8fafc;border:1px solid #eef1f6;font-size:12.5px;color:#3a4a5e;line-height:1.55">{{ fsResume }}</div>
@@ -2321,7 +2324,7 @@
             <div style="font-size:14px;font-weight:600;color:#0e1b2e;margin-bottom:4px">🔄 Redémarrer le tableau de bord</div>
             <div style="font-size:12.5px;color:#8291a5">Relit tous vos fichiers Excel, recalcule les totaux d'avoirs et vérifie les états de facture (payée, en attente, à relancer, avoir). Les corrections vous sont montrées : rien n'est écrit sans votre accord.</div>
           </div>
-          <button style="padding:10px 18px;border-radius:10px;font-size:13px;font-weight:700;color:#fff;background:{{ accentColor }};border:none;cursor:pointer;font-family:inherit;white-space:nowrap" onclick="{{ onRestartDash }}">Redémarrer</button>
+          <button style="padding:10px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:{{ accentColor }};border:none;cursor:pointer;font-family:inherit;white-space:nowrap" onclick="{{ onRestartDash }}">Redémarrer</button>
         </div>
 
         <div style="background:#fff;border:1px solid #e9edf4;border-radius:14px;box-shadow:0 1px 2px rgba(16,32,54,.04);padding:20px">
@@ -3438,6 +3441,10 @@
           <div style="{{ pwStepStyle }}">{{ pwStep }}</div>
         </div>
 
+        <sc-if value="{{ pwAutoOn }}" hint-placeholder-val="{{ false }}">
+          <div style="margin:0 0 14px;padding:10px 13px;border-radius:10px;background:#eef6ef;border:1px solid #cfe6d3;font-size:12.5px;color:#1d6a34;line-height:1.55">🔎 {{ pwAutoText }}</div>
+        </sc-if>
+
         <div style="font-size:11px;color:#93a1b3;text-transform:uppercase;letter-spacing:.3px;margin-bottom:6px">Vos colonnes</div>
         <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:6px">
           <sc-for list="{{ pwHeaderCells }}" as="hc" hint-placeholder-count="6">
@@ -3792,7 +3799,7 @@
         </div>
         <div style="padding:16px 28px;border-top:1px solid #eef1f6;background:#f8fafc;display:flex;justify-content:space-between;align-items:center;gap:12px">
           <div style="font-size:12px;color:#69788c;line-height:1.5">Vous pourrez rouvrir cet assistant à tout moment depuis <b>Paramètres</b>.</div>
-          <button style="padding:10px 22px;border-radius:10px;font-size:13.5px;font-weight:700;color:#fff;background:#1a56db;border:none;cursor:pointer;font-family:inherit;flex-shrink:0" onclick="{{ onSetupClose }}">Terminer ✓</button>
+          <button style="padding:10px 22px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#1a56db;border:none;cursor:pointer;font-family:inherit;flex-shrink:0" onclick="{{ onSetupClose }}">Terminer ✓</button>
         </div>
       </div>
     </div>
