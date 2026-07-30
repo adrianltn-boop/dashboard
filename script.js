@@ -859,18 +859,36 @@ class Component {
         (dateCols[shName] = dateCols[shName] || new Set()).add(Number(colIdx));
         put(shName, rowIdx, colIdx, serial, label, this._isoToFr(iso));
       };
-      // 1) « Suivi des paiements » — ligne repérée par ID Facture (colonne A).
+      // 1) « Suivi des paiements » — ligne repérée par ID Facture, PUIS par n° de facture.
+      // Le repli sur le numéro est indispensable pour les ANCIENNES factures, celles que Faustine a
+      // saisies à la main dans Excel avant le tableau de bord : leur colonne ID Facture est souvent
+      // vide (ou porte un identifiant qui n'a rien à voir avec ceux du tableau de bord). Sans ce
+      // repli, leur ligne n'était jamais trouvée — Montant réglé, Date du paiement et État n'étaient
+      // PAS écrits — alors que l'écriture de l'État dans « Factures » (étape 2) réussissait, donc
+      // l'aperçu n'était pas vide et le message final annonçait quand même un succès. Un paiement
+      // sur une ancienne facture semblait donc enregistré sans que le suivi ne bouge.
       const sloc = this._suiviLocate(wb);
-      if (sloc && sloc.cols.idFacture >= 0) {
+      if (sloc) {
         const rows = (wb.find(s => s.name === sloc.sheetName) || { rows: [] }).rows;
-        const want = String(rec.id).trim(); let rowIdx = -1;
-        for (let r = sloc.dataStart; r < rows.length; r++) { const v = (rows[r] || [])[sloc.cols.idFacture]; if (v != null && String(v).trim() === want) { rowIdx = r; break; } }
+        const norm = v => this.nrm(v).replace(/^0+(?=\d)/, ''); // même normalisation que _locateRowByRef
+        const wantId = String(rec.id).trim(), wantNum = norm(rec.num);
+        let rowIdx = -1;
+        if (sloc.cols.idFacture >= 0 && wantId) {
+          for (let r = sloc.dataStart; r < rows.length; r++) { const v = (rows[r] || [])[sloc.cols.idFacture]; if (v != null && String(v).trim() === wantId) { rowIdx = r; break; } }
+        }
+        if (rowIdx < 0 && sloc.cols.numero >= 0 && wantNum) {
+          for (let r = sloc.dataStart; r < rows.length; r++) { const v = (rows[r] || [])[sloc.cols.numero]; if (v != null && norm(v) === wantNum) { rowIdx = r; break; } }
+        }
         if (rowIdx >= 0) {
           put(sloc.sheetName, rowIdx, sloc.cols.regle, rec.regle, 'Montant réglé (Suivi des paiements)', this.fmt(rec.regle));
           if (rec.datePay) putDate(sloc.sheetName, rowIdx, sloc.cols.datePay, rec.datePay, 'Date du paiement (Suivi des paiements)');
           put(sloc.sheetName, rowIdx, sloc.cols.etat, rec.etat, 'État (Suivi des paiements)');
           if (rec.avoir > 0) put(sloc.sheetName, rowIdx, sloc.cols.avoir, rec.avoir, 'Avoir (Suivi des paiements)', this.fmt(rec.avoir));
           sheets.push(sloc.sheetName);
+        } else {
+          // TRANSPARENCE : la feuille existe mais la ligne est introuvable. On le DIT dans l'aperçu,
+          // au lieu de laisser croire que le suivi a été mis à jour (voir le commentaire ci-dessus).
+          preview.push({ label: '⚠ Suivi des paiements NON mis à jour', col: '—', value: `Aucune ligne ne correspond à l'ID « ${wantId} » ni au n° « ${rec.num || '—'} » dans « ${sloc.sheetName} ». Vérifiez le numéro, ou complétez la ligne directement dans Excel.` });
         }
       }
       // 2) « Factures » — ligne repérée par n° de facture, colonne État (mappée dans Paramètres).
