@@ -910,6 +910,12 @@ class Component {
         }
         if (rowIdx >= 0) {
           put(sloc.sheetName, rowIdx, sloc.cols.regle, rec.regle, 'Montant réglé (Suivi des paiements)', this.fmt(rec.regle));
+          // SOLDE recalculé et RÉÉCRIT à chaque paiement. Indispensable : tant que la colonne est
+          // une formule, Excel la recalcule — mais une écriture directe du XML ne déclenche aucun
+          // recalcul, et surtout, dès que les formules sont remplacées par leur valeur (voir
+          // requestDevaluePreview), plus PERSONNE ne la mettrait à jour. Le solde resterait
+          // éternellement celui d'avant le paiement. Même règle que côté achats pêcheur.
+          put(sloc.sheetName, rowIdx, sloc.cols.solde, Math.round((this._vNum(rec.ttc) - this._vNum(rec.avoir) - this._vNum(rec.regle)) * 100) / 100, 'Solde restant (Suivi des paiements)', this.fmt(Math.round((this._vNum(rec.ttc) - this._vNum(rec.avoir) - this._vNum(rec.regle)) * 100) / 100));
           if (rec.datePay) putDate(sloc.sheetName, rowIdx, sloc.cols.datePay, rec.datePay, 'Date du paiement (Suivi des paiements)');
           put(sloc.sheetName, rowIdx, sloc.cols.etat, rec.etat, 'État (Suivi des paiements)');
           if (rec.avoir > 0) put(sloc.sheetName, rowIdx, sloc.cols.avoir, rec.avoir, 'Avoir (Suivi des paiements)', this.fmt(rec.avoir));
@@ -939,7 +945,16 @@ class Component {
       // FORMULE Excel (ex. « =SI(...) ») : sans cette autorisation, l'écriture ci-dessus (put, à la
       // ligne 851) est sautée EN SILENCE par patchXlsxFile — le paiement semble enregistré (chèque,
       // avoir) mais l'État affiché reste celui, périmé, de l'ancienne formule.
-      const allowFormulaCols = (sloc && sloc.cols.etat >= 0) ? { [sloc.sheetName]: new Set([sloc.cols.etat]) } : null;
+      // État ET Solde sont souvent des FORMULES sur les lignes déjà présentes. Sans cette
+      // autorisation, patchXlsxFile les saute EN SILENCE (protection anti-formule) : le paiement
+      // semblerait enregistré alors que l'état et le solde affichés resteraient ceux d'avant.
+      let allowFormulaCols = null;
+      if (sloc) {
+        const allow = new Set();
+        if (sloc.cols.etat >= 0) allow.add(sloc.cols.etat);
+        if (sloc.cols.solde >= 0) allow.add(sloc.cols.solde);
+        if (allow.size) allowFormulaCols = { [sloc.sheetName]: allow };
+      }
       this._pendingWrite = { kind: 'ventes', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: sheetList.join(', '), editsBySheet, verifyTargets, rowAppends, dateCols, refuseFormula: true, allowFormulaCols, after: () => this._payAfterWrite(rec) };
       this.setState({ writePreview: { kind: 'paiementClient', fileName: hi.name, sheetName: sheetList.join(', '), excelRow: null, rows: preview, status: null, refLabel: rec.num || String(rec.id) } });
     } catch (e) {
@@ -3792,6 +3807,31 @@ class Component {
     if (dateEchIso && todayIso && dateEchIso < todayIso) return Component.ETAT_RETARD;
     return Component.ETAT_ATTENTE;
   }
+  // Écarts de SOLDE dans « Suivi des paiements » : Solde doit toujours valoir TTC − Avoir − Réglé.
+  // Ce contrôle devient vital une fois les formules remplacées par leur valeur : plus rien ne
+  // recalcule la colonne côté Excel, c'est donc au tableau de bord de garantir qu'elle reste juste.
+  // Il rattrape aussi les soldes figés avant que le paiement ne réécrive systématiquement la case.
+  _soldesEcarts(wb) {
+    const sloc = this._suiviLocate(wb); if (!sloc || sloc.cols.solde < 0 || sloc.cols.ttc < 0) return [];
+    const sh = wb.find(s => s.name === sloc.sheetName); if (!sh) return [];
+    const rows = sh.rows; const c = sloc.cols; const out = [];
+    for (let r = sloc.dataStart; r < rows.length; r++) {
+      const rr = rows[r] || [];
+      const num = c.numero >= 0 ? String(rr[c.numero] == null ? '' : rr[c.numero]).trim() : '';
+      const client = c.client >= 0 ? String(rr[c.client] == null ? '' : rr[c.client]).trim() : '';
+      if (!num && !client) continue;
+      const brut = rr[c.solde];
+      if (brut === '' || brut == null) continue; // case jamais servie : on ne la remplit pas d'office
+      const ttc = this._vNum(rr[c.ttc]) || 0;
+      if (!(Math.abs(ttc) > 0.005)) continue; // sans TTC exploitable, aucun solde attendu fiable
+      const avoir = c.avoir >= 0 ? (this._vNum(rr[c.avoir]) || 0) : 0;
+      const regle = c.regle >= 0 ? (this._vNum(rr[c.regle]) || 0) : 0;
+      const attendu = Math.round((ttc - avoir - regle) * 100) / 100;
+      const actuel = Math.round((this._vNum(brut) || 0) * 100) / 100;
+      if (Math.abs(attendu - actuel) > 0.005) out.push({ sheetName: sloc.sheetName, rowIdx: r, col: c.solde, ref: num || client, actuel, attendu, solde: true });
+    }
+    return out;
+  }
   // Écarts d'état dans « Suivi des paiements » : compare la colonne Etat à l'état attendu.
   _etatsEcarts(wb) {
     const sloc = this._suiviLocate(wb); if (!sloc || sloc.cols.etat < 0) return [];
@@ -6483,7 +6523,8 @@ class Component {
     try {
       const file = await hi.handle.getFile(); const buf = await file.arrayBuffer();
       const wb = await this.readWorkbook(buf);
-      return { avoirs: this._avoirsEcarts(wb), etats: this._etatsEcarts(wb), error: '' };
+      // Les écarts de solde rejoignent les états : même correction, même aperçu, même écriture.
+      return { avoirs: this._avoirsEcarts(wb), etats: [...this._etatsEcarts(wb), ...this._soldesEcarts(wb)], error: '' };
     } catch (e) { return { avoirs: [], etats: [], error: (e && e.message) || 'lecture impossible' }; }
   }
   // Vérification silencieuse au démarrage : calcule les écarts et les signale, SANS jamais écrire.
@@ -6714,10 +6755,19 @@ class Component {
         editsBySheet[t.sheetName] = editsBySheet[t.sheetName] || {};
         editsBySheet[t.sheetName][t.rowIdx + ':' + t.col] = t.attendu;
         verifyTargets.push({ sheetName: t.sheetName, rowIdx: t.rowIdx, col: t.col, val: t.attendu });
-        preview.push({ label: `État — ${t.ref}`, col: `${this._colLetter(t.col + 1)}${t.rowIdx + 1}`, value: `${t.actuel} → ${t.attendu}` });
+        // Les écarts de SOLDE voyagent dans la même liste que les états (même forme, même
+        // correction) mais s'affichent en montants, pas en texte.
+        preview.push(t.solde
+          ? { label: `Solde — ${t.ref}`, col: `${this._colLetter(t.col + 1)}${t.rowIdx + 1}`, value: `${this.fmt(t.actuel)} → ${this.fmt(t.attendu)}` }
+          : { label: `État — ${t.ref}`, col: `${this._colLetter(t.col + 1)}${t.rowIdx + 1}`, value: `${t.actuel} → ${t.attendu}` });
       });
       const sheetList = Object.keys(editsBySheet);
-      this._pendingWrite = { kind: 'ventes', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: sheetList.join(', '), editsBySheet, verifyTargets, refuseFormula: true, after: () => this.setState({ verifPending: null, restartRun: null }) };
+      // État, Solde et total d'avoirs sont fréquemment des FORMULES. Sans cette autorisation, la
+      // correction serait sautée en silence par la protection anti-formule et l'écart resterait —
+      // le tableau de bord signalerait éternellement le même problème sans jamais le résoudre.
+      const allowFormulaCols = {};
+      [...(avoirs || []), ...(etats || [])].forEach(x => { (allowFormulaCols[x.sheetName] = allowFormulaCols[x.sheetName] || new Set()).add(Number(x.col)); });
+      this._pendingWrite = { kind: 'ventes', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: sheetList.join(', '), editsBySheet, verifyTargets, refuseFormula: true, allowFormulaCols, after: () => this.setState({ verifPending: null, restartRun: null }) };
       this.setState({ writePreview: { kind: 'verif', fileName: hi.name, sheetName: sheetList.join(', '), excelRow: null, rows: preview, status: null, title: `${preview.length} correction(s) à appliquer` } });
     } catch (e) {
       this.setState({ msg: { kind: 'error', text: `Préparation des corrections impossible : ${(e && e.message) || 'erreur'}. Aucun fichier n'a été modifié.` } });
