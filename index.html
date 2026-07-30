@@ -2236,6 +2236,34 @@
           <button style="padding:10px 18px;border-radius:10px;font-size:13px;font-weight:700;color:#fff;background:{{ accentColor }};border:none;cursor:pointer;font-family:inherit;white-space:nowrap" onclick="{{ onHealthOpen }}">Lancer le bilan</button>
         </div>
 
+        <!-- ============ GESTION DES DOCUMENTS (impression / PDF) ============
+             Un modèle de nom et un mode par type de document. Le nom est celui que Chrome/Edge
+             reprend dans « Enregistrer au format PDF ». -->
+        <div style="background:#fff;border:1px solid #e9edf4;border-radius:14px;box-shadow:0 1px 2px rgba(16,32,54,.04);padding:20px">
+          <div style="font-size:14px;font-weight:600;color:#0e1b2e;margin-bottom:4px">🖨 Gestion des documents</div>
+          <div style="font-size:12.5px;color:#8291a5;line-height:1.6;max-width:760px">Pour chaque type de document, choisissez sous quel nom il est enregistré et ce qu'il se passe au clic sur <b>Imprimer</b>. Jetons disponibles dans un nom : <b>{numero}</b>, <b>{tiers}</b>, <b>{date}</b>, <b>{periode}</b>, <b>{jour}</b>, <b>{mois}</b>, <b>{annee}</b>, <b>{entreprise}</b>. Le mode <b>Demander</b> ouvre une fenêtre de choix à chaque impression.</div>
+          <sc-for list="{{ docTypeRows }}" as="d" hint-placeholder-count="6">
+            <div style="margin-top:14px;border:1px solid #eef1f6;border-radius:12px;padding:13px 15px">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+                <div style="min-width:0;flex:1 1 300px">
+                  <div style="font-size:13px;font-weight:700;color:#0e1b2e">{{ d.label }}</div>
+                  <div style="font-size:11.5px;color:#8291a5;margin-top:2px;line-height:1.5">{{ d.desc }}</div>
+                </div>
+                <div style="display:flex;gap:4px;background:#f4f6fa;border-radius:9px;padding:3px;flex-wrap:wrap">
+                  <sc-for list="{{ d.modes }}" as="m" hint-placeholder-count="3">
+                    <button style="{{ m.style }}" onclick="{{ m.onClick }}">{{ m.name }}</button>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="margin-top:10px">
+                <label style="display:block;font-size:11px;font-weight:600;color:#69788c;margin-bottom:4px;text-transform:uppercase;letter-spacing:.3px">Nom du fichier</label>
+                <input value="{{ d.nom }}" onchange="{{ d.onNom }}" style="{{ docNomInputStyle }}">
+                <div style="font-size:11.5px;color:#9aa7b8;margin-top:5px">Donne par exemple : <span style="font-family:'IBM Plex Mono',monospace;color:#5b6b7f">{{ d.apercu }}</span></div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+
         <!-- ============ INVENTAIRE DES FORMULES ============
              Lecture seule. Sert à décider quelles formules le tableau de bord peut reprendre à son
              compte : une formule remplacée par sa valeur devient figée, plus rien ne la recalcule. -->
@@ -2861,6 +2889,10 @@
             <div style="font-size:12.5px;color:#8291a5;margin-top:4px">{{ ficheSub }}</div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <sc-if value="{{ ficheCanRelance }}" hint-placeholder-val="{{ false }}">
+              <button style="{{ fichePrintStyle }}" onclick="{{ onFicheRelance }}" title="Éditer une lettre de relance reprenant toutes les factures impayées">{{ ficheRelanceLabel }}</button>
+            </sc-if>
+            <button style="{{ fichePrintStyle }}" onclick="{{ onFichePrint }}" title="Imprimer cette fiche ou l'enregistrer en PDF">🖨 Imprimer la fiche</button>
             <sc-if value="{{ ficheIsClient }}" hint-placeholder-val="{{ false }}">
               <button style="padding:8px 15px;border-radius:9px;font-size:12.5px;font-weight:700;color:#fff;background:#15803d;border:none;cursor:pointer;font-family:inherit" onclick="{{ onFicheAvoir }}">＋ Ajouter un avoir</button>
             </sc-if>
@@ -2918,16 +2950,17 @@
             <sc-if value="{{ ficheFacturesEmpty }}" hint-placeholder-val="{{ false }}">
               <div style="padding:14px 0;text-align:center;color:#9aa7b8;font-size:12.5px">Aucune facture.</div>
             </sc-if>
-            <div style="display:grid;grid-template-columns:82px 1fr 92px 84px 96px;gap:8px;padding-bottom:7px;font-size:10.5px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.3px">
-              <span>Date</span><span>N°</span><span style="text-align:right">Montant</span><span style="text-align:right">Reste</span><span>État</span>
+            <div style="display:grid;grid-template-columns:82px 1fr 92px 84px 96px 34px;gap:8px;padding-bottom:7px;font-size:10.5px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.3px">
+              <span>Date</span><span>N°</span><span style="text-align:right">Montant</span><span style="text-align:right">Reste</span><span>État</span><span></span>
             </div>
             <sc-for list="{{ ficheFactures }}" as="r" hint-placeholder-count="5">
-              <div style="display:grid;grid-template-columns:82px 1fr 92px 84px 96px;gap:8px;align-items:center;padding:7px 0;border-top:1px solid #f4f6fa;font-size:12.5px">
+              <div style="display:grid;grid-template-columns:82px 1fr 92px 84px 96px 34px;gap:8px;align-items:center;padding:7px 0;border-top:1px solid #f4f6fa;font-size:12.5px">
                 <span style="color:#69788c;font-family:'IBM Plex Mono',monospace">{{ r.date }}</span>
                 <span style="color:#3a4a5e;font-family:'IBM Plex Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.ref }}</span>
                 <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:#0e1b2e">{{ r.ttc }}</span>
                 <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:{{ r.resteColor }}">{{ r.reste }}</span>
                 <span><span style="{{ r.statutStyle }}">{{ r.statut }}</span></span>
+                <span><button style="{{ ficheRowPrintStyle }}" onclick="{{ r.onPrint }}" title="Éditer un duplicata de cette facture">🖨</button></span>
               </div>
             </sc-for>
           </div>
@@ -2935,6 +2968,32 @@
       </div>
     </div>
   </sc-if>
+
+  <!-- ============ DOCUMENT À ÉDITER : imprimer ou enregistrer en PDF ============
+       Le nom saisi ici devient le <title> du document, donc le nom proposé par Chrome/Edge dans
+       « Enregistrer au format PDF ». C'est le seul levier qu'un navigateur laisse sur ce nom. -->
+  <sc-if value="{{ docPrintOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ prefixOverlayStyle }}" onclick="{{ onDocPrintCancel }}">
+      <div style="width:520px;max-width:95vw;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px" onclick="{{ ctxStop }}">
+        <div style="font-size:16px;font-weight:700;color:#0e1b2e">Éditer le document</div>
+        <div style="font-size:12.5px;color:#8291a5;margin-top:4px">{{ docPrintLabel }}</div>
+        <div style="margin-top:16px">
+          <label style="display:block;font-size:11px;font-weight:600;color:#69788c;margin-bottom:5px;text-transform:uppercase;letter-spacing:.3px">Nom du document</label>
+          <input value="{{ docPrintName }}" oninput="{{ onDocPrintName }}" style="{{ docPrintInputStyle }}">
+          <div style="font-size:11.5px;color:#9aa7b8;margin-top:6px;line-height:1.55">Ce nom sera proposé automatiquement si vous choisissez « Enregistrer au format PDF » dans la fenêtre d'impression.</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:20px;flex-wrap:wrap">
+          <button style="background:none;border:none;padding:0;font-size:12px;color:#8291a5;text-decoration:underline;cursor:pointer;font-family:inherit" onclick="{{ onDocPrintSettings }}">Régler le comportement par défaut</button>
+          <div style="display:flex;gap:9px;flex-wrap:wrap">
+            <button style="{{ docPrintGhostStyle }}" onclick="{{ onDocPrintPreview }}">Aperçu</button>
+            <button style="{{ docPrintGhostStyle }}" onclick="{{ onDocPrintPdf }}">📄 PDF</button>
+            <button style="{{ docPrintBtnStyle }}" onclick="{{ onDocPrintPrint }}">🖨 Imprimer</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
   <sc-if value="{{ extOpen }}" hint-placeholder-val="{{ false }}">
     <div style="{{ prefixOverlayStyle }}">
       <div style="width:680px;max-width:94vw;max-height:86vh;overflow:auto;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px" onclick="{{ ctxStop }}">

@@ -1789,10 +1789,8 @@ class Component {
     return `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>Archive des heures — ${esc(a.name)}</title><style>*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0e1b2e;background:#f4f6fa}.sheet{max-width:820px;margin:24px auto;background:#fff;padding:38px 44px;box-shadow:0 2px 12px rgba(16,32,54,.08)}header.rh{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid ${accent};padding-bottom:16px}header.rh .t{font-size:22px;font-weight:800}header.rh .s{font-size:13px;color:#5a6b80;margin-top:4px}header.rh .m{font-size:12px;color:#8291a5;text-align:right;line-height:1.5}.grand{margin-top:18px;border:1.5px solid ${accent};background:${this.hexToRgba(accent, 0.06)};border-radius:10px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center}.grand .gl{font-size:13px;font-weight:600}.grand .gv{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}section{margin-top:20px;page-break-inside:avoid}h2{font-size:14px;font-weight:700;margin:0 0 8px;display:flex;align-items:center;gap:10px}.badge{font-size:11.5px;font-weight:600;color:${accent};background:${this.hexToRgba(accent, 0.1)};padding:3px 9px;border-radius:20px}table{width:100%;border-collapse:collapse;font-size:12.5px}th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;padding:6px 8px;border-bottom:1.5px solid #e6ebf2}td{padding:7px 8px;border-bottom:1px solid #f1f4f8}.r{text-align:right}.mono{font-variant-numeric:tabular-nums;font-family:'SFMono-Regular',Consolas,monospace}.empty{font-size:12.5px;color:#9aa7b8;font-style:italic}footer{margin-top:26px;padding-top:14px;border-top:1px solid #eef1f6;font-size:11px;color:#aeb8c6;text-align:center}.bar{position:sticky;top:0;background:#fff;border-bottom:1px solid #e6ebf2;padding:10px 16px;display:flex;gap:10px;justify-content:flex-end}.bar button{padding:9px 15px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;border:1px solid ${accent};background:${accent};color:#fff}.bar button.sec{background:#fff;color:#475569;border-color:#d7dde6}@media print{body{background:#fff}.sheet{box-shadow:none;margin:0;max-width:none;padding:0}.bar{display:none}@page{margin:14mm}}</style></head><body><div class="bar"><button class="sec" onclick="window.close()">Fermer</button><button onclick="window.print()">Imprimer / Enregistrer en PDF</button></div><div class="sheet"><header class="rh"><div><div class="t">Archive des heures — ${esc(a.name)}</div><div class="s">${esc(this.entCfg().nom)} — totalité des heures enregistrées</div></div><div class="m">éditée le ${esc(stamp)}<br>${a.weeks.length} semaine${a.weeks.length > 1 ? 's' : ''} · ${a.dayCount} jour${a.dayCount > 1 ? 's' : ''}</div></header><div class="grand"><span class="gl">TOTAL GÉNÉRAL</span><span class="gv">${esc(a.totalLabel)}</span></div>${body}<footer>Archive générée depuis le tableau de bord — à enregistrer en PDF via Imprimer.</footer></div></body></html>`;
   }
   generateEmpArchive(name) {
-    const html = this._buildEmpArchiveHtml(name);
-    const w = window.open('', '_blank');
-    if (!w) { this.setState({ msg: { kind: 'error', text: 'Fenêtre bloquée — autorisez les pop-ups pour ouvrir l’archive des heures.' } }); return; }
-    w.document.open(); w.document.write(html); w.document.close();
+    const a = this.hEmpArchiveData(name);
+    this.openDocument('heures', this._buildEmpArchiveHtml(name), { tiers: (a && a.name) || name });
   }
   dd(n) { return String(n).padStart(2, '0'); }
   pIso(s) { if (s && typeof s === 'object') return s; const p = String(s).split('-'); return { y: +p[0], m: +p[1], d: +p[2] }; }
@@ -5863,6 +5861,275 @@ class Component {
   setPendingField(key, idx) { const p = this.state.pending; if (!p) return; this.setState({ pending: { ...p, fields: { ...p.fields, [key]: +idx } } }); }
   setPendingCombine(v) { const p = this.state.pending; if (!p) return; this.setState({ pending: { ...p, combine: !!v } }); }
   cancelImport() { this.setState({ pending: null }); }
+  // ==================== DOCUMENTS ÉDITÉS (impression / PDF) ====================
+  // UN SEUL circuit pour tout ce que le tableau de bord met sur papier.
+  //
+  // Pourquoi ce détour plutôt qu'un window.print() par bouton : un navigateur n'expose AUCUNE API
+  // d'imprimante. La Web Printing API de Chrome existe mais reste réservée aux Isolated Web Apps,
+  // donc inaccessible ici. Le seul levier disponible est window.print(), et le <title> du document
+  // devient le nom proposé par Chrome/Edge dans « Enregistrer au format PDF ». D'où le modèle de
+  // nom par type de document, réglable dans Paramètres.
+  //
+  // Au passage à Electron, _emitDoc() est le SEUL point à reprendre : webContents.print({ silent,
+  // deviceName, copies }) pour l'imprimante, webContents.printToPDF() pour le PDF. Les gabarits,
+  // les modèles de nom et la pop-up ne bougeront pas.
+  static PRINT_KEY = 'avPrintCfg';
+  // Jetons acceptés dans un modèle de nom : {numero} {tiers} {date} {periode} {jour} {mois} {annee} {entreprise}
+  static DOC_TYPES = [
+    { key: 'facture', label: 'Facture client (duplicata)', desc: 'Récapitulatif d’une facture de vente : montants, échéance, reste dû.', nom: 'Facture {numero} - {tiers} - {date}' },
+    { key: 'relance', label: 'Lettre de relance', desc: 'Courrier de rappel listant les factures impayées d’un client.', nom: 'Relance {tiers} - {date}' },
+    { key: 'fiche', label: 'Fiche client / fournisseur', desc: 'Synthèse d’une relation : indicateurs, évolution, dernières factures.', nom: 'Fiche {tiers} - {date}' },
+    { key: 'rapport', label: 'Compte rendu de période', desc: 'Le rapport généré depuis le bouton « Compte rendu ».', nom: 'Compte rendu {periode}' },
+    { key: 'presence', label: 'Fiche de présence', desc: 'Pointage hebdomadaire des employés, avec cases de visa.', nom: 'Presence {periode}' },
+    { key: 'heures', label: 'Archive des heures', desc: 'Totalité des heures enregistrées pour une personne.', nom: 'Archive heures {tiers}' },
+  ];
+  static DOC_MODES = [
+    { key: 'ask', label: 'Demander' },
+    { key: 'print', label: 'Imprimer' },
+    { key: 'pdf', label: 'PDF' },
+  ];
+
+  _esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+  // Configuration d'impression : valeurs par défaut du type + réglages enregistrés.
+  printCfg(key) {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(Component.PRINT_KEY) || '{}') || {}; } catch (e) { saved = {}; }
+    const out = {};
+    Component.DOC_TYPES.forEach(t => {
+      const s = (saved && typeof saved === 'object' && saved[t.key]) || {};
+      const nom = (typeof s.nom === 'string' && s.nom.trim()) ? s.nom.trim() : t.nom;
+      const mode = Component.DOC_MODES.some(m => m.key === s.mode) ? s.mode : 'ask';
+      out[t.key] = { key: t.key, label: t.label, desc: t.desc, nom, mode };
+    });
+    return key ? out[key] : out;
+  }
+  setPrintCfg(key, patch) {
+    if (!Component.DOC_TYPES.some(t => t.key === key)) return;
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(Component.PRINT_KEY) || '{}') || {}; } catch (e) { saved = {}; }
+    if (!saved || typeof saved !== 'object') saved = {};
+    saved[key] = { ...(saved[key] || {}), ...patch };
+    this.saveJSON(Component.PRINT_KEY, saved);
+    this.setState({ printTick: (this.state.printTick || 0) + 1 });
+  }
+
+  // Windows refuse \ / : * ? " < > | dans un nom de fichier, et un point final fait disparaître
+  // l'extension. Un nom vide reviendrait à laisser le navigateur nommer le PDF « document.pdf ».
+  _safeFileName(s) {
+    const v = String(s == null ? '' : s)
+      .replace(/[\\/:*?"<>|]/g, ' ')
+      .replace(/[\u0000-\u001f]/g, ' ')
+      .replace(/\s+/g, ' ').trim().replace(/\.+$/, '').slice(0, 120);
+    return v || 'document';
+  }
+  _docFileName(typeKey, vars) {
+    const cfg = this.printCfg(typeKey) || { nom: 'document' };
+    const v = vars || {};
+    const T = Component.TODAY;
+    const dd = n => String(n).padStart(2, '0');
+    const tok = {
+      numero: v.numero || '', tiers: v.tiers || '', periode: v.periode || '',
+      date: v.date || `${dd(T.d)}-${dd(T.m)}-${T.y}`,
+      jour: dd(T.d), mois: dd(T.m), annee: String(T.y),
+      entreprise: this.entCfg().nom,
+    };
+    const nom = String(cfg.nom || '').replace(/\{(\w+)\}/g, (m, k) => (tok[k] != null ? String(tok[k]) : ''));
+    return this._safeFileName(nom);
+  }
+
+  // Ouvre le document dans une fenêtre dédiée. mode : 'print' | 'pdf' → appelle print() une fois la
+  // page peinte (le logo est un data-URL, il faut lui laisser un tick) ; sinon, aperçu simple.
+  _emitDoc(html, name, mode) {
+    if (!html) return false;
+    const titre = this._esc(name);
+    let titled = /<title>[\s\S]*?<\/title>/i.test(html)
+      ? html.replace(/<title>[\s\S]*?<\/title>/i, `<title>${titre}</title>`)
+      : html;
+    // Mode PDF : un navigateur ne sait pas produire un PDF sans passer par la fenêtre d'impression.
+    // Plutôt que deux boutons qui feraient exactement la même chose, on rappelle DANS le document
+    // la destination à choisir. Sous Electron, ce mode appellera printToPDF() et le rappel sautera.
+    if (mode === 'pdf') {
+      titled = titled.replace(/<div class="bar">/i,
+        '<div class="bar"><span style="margin-right:auto;align-self:center;font-size:12.5px;color:#8a5a1a;background:#fff7ed;border:1px solid #fbd9b4;border-radius:8px;padding:6px 11px">Dans la fen\u00eatre d\u2019impression, choisissez <b>Destination \u2192 Enregistrer au format PDF</b>.</span>');
+    }
+    const w = window.open('', '_blank');
+    if (!w) { this.setState({ msg: { kind: 'error', text: 'Fenêtre bloquée — autorisez les pop-ups pour éditer ce document.' } }); return false; }
+    try { w.opener = null; } catch (e) {}
+    w.document.open(); w.document.write(titled); w.document.close();
+    if (mode === 'print' || mode === 'pdf') {
+      try { w.setTimeout(() => { try { w.focus(); w.print(); } catch (e) {} }, 400); } catch (e) {}
+    }
+    return true;
+  }
+  // Point d'entrée unique : tout bouton « Imprimer » du tableau de bord passe par ici.
+  openDocument(typeKey, html, vars) {
+    if (!html) return;
+    const name = this._docFileName(typeKey, vars);
+    const mode = (this.printCfg(typeKey) || {}).mode || 'ask';
+    if (mode === 'ask') { this.setState({ docPrint: { type: typeKey, html, name } }); return; }
+    this._emitDoc(html, name, mode);
+  }
+
+  // ---------- gabarit commun des documents A4 ----------
+  _docCss(accent) {
+    const soft = this.hexToRgba(accent, 0.07);
+    return `*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0e1b2e;background:#f4f6fa}`
+      + `.sheet{max-width:820px;margin:24px auto;background:#fff;padding:38px 44px;box-shadow:0 2px 12px rgba(16,32,54,.08)}`
+      + `header.rh{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;border-bottom:2px solid ${accent};padding-bottom:16px}`
+      + `header.rh .t{font-size:21px;font-weight:800}header.rh .s{font-size:13px;color:#5a6b80;margin-top:4px}`
+      + `header.rh .m{font-size:12px;color:#8291a5;text-align:right;line-height:1.55;white-space:nowrap}`
+      + `.who{display:flex;gap:14px;align-items:flex-start}.who img{width:46px;height:46px;border-radius:10px;object-fit:cover}`
+      + `.dest{margin-top:22px;display:flex;justify-content:flex-end}.dest .box{min-width:280px;border:1px solid #e6ebf2;border-radius:10px;padding:12px 16px;background:#fbfcfe}`
+      + `.dest .dl{font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;font-weight:600}`
+      + `.dest .dv{font-size:15px;font-weight:700;margin-top:4px}`
+      + `section{margin-top:22px;page-break-inside:avoid}`
+      + `h2{font-size:14px;font-weight:700;margin:0 0 10px;display:flex;align-items:center;gap:10px}`
+      + `.badge{font-size:11.5px;font-weight:600;color:${accent};background:${soft};padding:3px 9px;border-radius:20px}`
+      + `p.txt{font-size:13px;line-height:1.65;color:#3a4a5e;margin:0 0 12px}`
+      + `table{width:100%;border-collapse:collapse;font-size:12.5px}`
+      + `th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;padding:7px 8px;border-bottom:1.5px solid #e6ebf2}`
+      + `td{padding:8px;border-bottom:1px solid #f1f4f8}`
+      + `tfoot td{border-top:2px solid #0e1b2e;border-bottom:none;font-weight:700;padding-top:10px}`
+      + `.r{text-align:right}.mono{font-variant-numeric:tabular-nums;font-family:'SFMono-Regular',Consolas,monospace}`
+      + `.tot{margin-top:18px;border:1.5px solid ${accent};background:${soft};border-radius:10px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center}`
+      + `.tot .tl{font-size:13px;font-weight:600}.tot .tv{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}`
+      + `.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}`
+      + `.card{border:1px solid #e6ebf2;border-radius:10px;padding:12px 14px}`
+      + `.cl{font-size:11.5px;color:#69788c;font-weight:500}.cv{font-size:19px;font-weight:700;margin-top:5px;font-variant-numeric:tabular-nums}.cn{font-size:11px;color:#9aa7b8;margin-top:3px}`
+      + `.bars{display:flex;align-items:flex-end;gap:3px;height:130px;border-bottom:1px solid #e9edf4;margin-top:6px}`
+      + `.bars .b{flex:1;background:${this.hexToRgba(accent, 0.5)};border-radius:4px 4px 0 0}`
+      + `.blab{display:flex;gap:3px;margin-top:5px}.blab span{flex:1;text-align:center;font-size:10px;color:#9aa7b8}`
+      + `.sig{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:44px}`
+      + `.sig .sl{font-size:12px;font-weight:700;margin-bottom:34px}.sig .sline{border-top:1px solid #b7c0cc}`
+      + `.empty{font-size:12.5px;color:#9aa7b8;font-style:italic}`
+      + `footer{margin-top:26px;padding-top:14px;border-top:1px solid #eef1f6;font-size:11px;color:#aeb8c6;text-align:center}`
+      + `.bar{position:sticky;top:0;background:#fff;border-bottom:1px solid #e6ebf2;padding:10px 16px;display:flex;gap:10px;justify-content:flex-end;z-index:2}`
+      + `.bar button{padding:9px 15px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;border:1px solid ${accent};background:${accent};color:#fff}`
+      + `.bar button.sec{background:#fff;color:#475569;border-color:#d7dde6}`
+      + `@media print{body{background:#fff}.sheet{box-shadow:none;margin:0;max-width:none;padding:0}.bar{display:none}@page{size:A4 portrait;margin:14mm}}`;
+  }
+  // Enveloppe complète d'un document A4. `body` est du HTML déjà échappé par l'appelant.
+  _docPage(o) {
+    const ent = this.entCfg();
+    const esc = s => this._esc(s);
+    const T = Component.TODAY;
+    const stamp = `${this.dd(T.d)}/${this.dd(T.m)}/${T.y}`;
+    return `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>${esc(o.title || 'Document')}</title>`
+      + `<style>${this._docCss(ent.accent)}</style></head><body>`
+      + `<div class="bar"><button class="sec" onclick="window.close()">Fermer</button>`
+      + `<button onclick="window.print()">Imprimer / Enregistrer en PDF</button></div>`
+      + `<div class="sheet"><header class="rh"><div class="who">`
+      + (ent.logo ? `<img src="${esc(ent.logo)}" alt="">` : '')
+      + `<div><div class="t">${esc(o.title || '')}</div><div class="s">${esc(o.sub || ent.nom)}</div></div></div>`
+      + `<div class="m">${esc(ent.nom)}<br>édité le ${esc(stamp)}${o.meta ? '<br>' + o.meta : ''}</div></header>`
+      + (o.body || '')
+      + `<footer>${esc(o.foot || `Document édité depuis le tableau de bord — ${ent.nom}`)}</footer></div></body></html>`;
+  }
+
+  // ---------- duplicata d'une facture de vente ----------
+  // PIÈGE : le reste dû ne se déduit PAS de « TTC moins réglé ». Sur les factures reprises d'Excel,
+  // la colonne « payé » est souvent vide alors que la facture est soldée (l'état seul porte
+  // l'information). Calculer ttc − payé y ferait réclamer à un client une somme déjà encaissée.
+  // Tant que le fichier ne le dit pas, le duplicata écrit « non renseigné » plutôt que d'inventer.
+  _factureDocHtml(op) {
+    const esc = s => this._esc(s);
+    const dateFac = `${this.dd(op.d)}/${this.dd(op.m)}/${op.y}`;
+    const ttc = Math.abs(this._vNum(op.amt) || 0);
+    const ht = op.ht != null ? Math.abs(this._vNum(op.ht) || 0) : ttc;
+    const tva = Math.round((ttc - ht) * 100) / 100;
+    const paid = Math.max(0, this._vNum(op.paid) || 0);
+    const etat = String(op.status || '');
+    const solde = /pay|sold/i.test(etat);
+    const impaye = /non pay|retard|attente|relanc|impay/i.test(etat);
+    let reste = null;
+    if (op.reste != null) reste = Math.max(0, this._vNum(op.reste) || 0);
+    else if (solde) reste = 0;
+    else if (paid > 0.005) reste = Math.max(0, ttc - paid);
+    else if (impaye) reste = ttc;
+
+    const lignes = [`<tr><td>Montant HT</td><td class="r mono">${esc(this.fmt(ht))}</td></tr>`];
+    if (Math.abs(tva) > 0.005) lignes.push(`<tr><td>TVA</td><td class="r mono">${esc(this.fmt(tva))}</td></tr>`);
+    if (paid > 0.005) lignes.push(`<tr><td>Déjà réglé</td><td class="r mono">− ${esc(this.fmt(paid))}</td></tr>`);
+    const totLabel = reste === 0 ? 'Facture soldée' : 'Reste à régler';
+    const totVal = reste == null ? 'non renseigné' : this.fmt(reste);
+    const reserve = reste == null
+      ? `<p class="txt">Le montant restant dû n'est pas renseigné dans le fichier source pour cette facture : reportez-vous au suivi des paiements avant tout envoi au client.</p>`
+      : '';
+    const body = `<div class="dest"><div class="box"><div class="dl">Client</div><div class="dv">${esc(op.partner || '—')}</div></div></div>`
+      + `<section><h2>Détail<span class="badge">${esc(etat || '—')}</span></h2>`
+      + `<table><tbody>${lignes.join('')}</tbody>`
+      + `<tfoot><tr><td>Total TTC</td><td class="r mono">${esc(this.fmt(ttc))}</td></tr></tfoot></table>`
+      + `<div class="tot"><span class="tl">${esc(totLabel)}</span><span class="tv">${esc(totVal)}</span></div>`
+      + `</section>`
+      + `<section>${reserve}<p class="txt">Duplicata établi à partir du suivi interne. Il reprend les montants enregistrés pour cette facture ; il ne remplace pas la facture d'origine et ne détaille pas les lignes de marchandise, absentes du fichier source.</p></section>`;
+    return this._docPage({
+      title: `Facture ${op.ref || ''}`.trim(),
+      sub: `Duplicata — émise le ${dateFac}`,
+      meta: `n° ${esc(op.ref || '—')}`,
+      body,
+      foot: `Duplicata de facture — ${this.entCfg().nom}`,
+    });
+  }
+
+  // ---------- lettre de relance ----------
+  _relanceDocHtml(client, lignes) {
+    const esc = s => this._esc(s);
+    const total = lignes.reduce((a, r) => a + (this._vNum(r.reste) || 0), 0);
+    const rows = lignes.map(r => `<tr><td class="mono">${esc(`${this.dd(r.d)}/${this.dd(r.m)}/${r.y}`)}</td>`
+      + `<td class="mono">${esc(r.ref || '—')}</td>`
+      + `<td class="r mono">${esc(this.fmt(Math.abs(this._vNum(r.amt) || 0)))}</td>`
+      + `<td class="r mono">${esc(this.fmt(this._vNum(r.reste) || 0))}</td></tr>`).join('');
+    const body = `<div class="dest"><div class="box"><div class="dl">Destinataire</div><div class="dv">${esc(client)}</div></div></div>`
+      + `<section><p class="txt">Madame, Monsieur,</p>`
+      + `<p class="txt">Sauf erreur ou règlement croisé avec ce courrier, notre comptabilité fait apparaître `
+      + `${lignes.length > 1 ? `<b>${lignes.length} factures échues</b> restant impayées` : `une <b>facture échue</b> restant impayée`} `
+      + `à ce jour, pour un total de <b>${esc(this.fmt(total))}</b>.</p>`
+      + `<p class="txt">Nous vous remercions de bien vouloir procéder au règlement dans les meilleurs délais, ou de nous signaler tout élément susceptible d'expliquer ce retard.</p></section>`
+      + `<section><h2>Factures concernées<span class="badge">${lignes.length}</span></h2>`
+      + `<table><thead><tr><th>Date</th><th>N° de facture</th><th class="r">Montant TTC</th><th class="r">Reste dû</th></tr></thead>`
+      + `<tbody>${rows || '<tr><td colspan="4" class="empty">Aucune facture impayée.</td></tr>'}</tbody>`
+      + `<tfoot><tr><td colspan="3">Total restant dû</td><td class="r mono">${esc(this.fmt(total))}</td></tr></tfoot></table></section>`
+      + `<section><p class="txt">Dans l'attente de votre règlement, nous vous prions d'agréer, Madame, Monsieur, l'expression de nos salutations distinguées.</p></section>`
+      + `<div class="sig"><div><div class="sl">Signature</div><div class="sline"></div></div><div></div></div>`;
+    return this._docPage({
+      title: 'Lettre de relance',
+      sub: '',
+      body,
+      foot: `Relance client — ${this.entCfg().nom}`,
+    });
+  }
+
+  // ---------- fiche client / fournisseur ----------
+  // Reçoit les valeurs DÉJÀ calculées par la vue : la fiche imprimée doit être le reflet exact de
+  // la fiche à l'écran, jamais un second calcul qui pourrait diverger.
+  _ficheDocHtml(d) {
+    const esc = s => this._esc(s);
+    const kpis = (d.kpis || []).map(k => `<div class="card"><div class="cl">${esc(k.label)}</div>`
+      + `<div class="cv">${esc(k.value)}</div><div class="cn">${esc(k.note)}</div></div>`).join('');
+    const maxBar = 100;
+    const bars = (d.bars || []).map(b => {
+      const h = /height:(\d+)%/.exec(b.barStyle || '');
+      const pct = h ? Math.min(maxBar, +h[1]) : 0;
+      return `<div class="b" style="height:${pct}%"></div>`;
+    }).join('');
+    const labs = (d.bars || []).map(b => `<span>${esc(b.label)}</span>`).join('');
+    const moyens = (d.moyens || []).map(m => `<tr><td>${esc(m.nom)}</td><td class="r mono">${esc(m.montant)}</td><td class="r">${esc(m.part)}</td></tr>`).join('');
+    const facs = (d.factures || []).map(r => `<tr><td class="mono">${esc(r.date)}</td><td class="mono">${esc(r.ref)}</td>`
+      + `<td class="r mono">${esc(r.ttc)}</td><td class="r mono">${esc(r.reste)}</td><td>${esc(r.statut)}</td></tr>`).join('');
+    const body = `<section><h2>Indicateurs<span class="badge">historique complet</span></h2><div class="cards">${kpis}</div></section>`
+      + `<section><h2>${esc(d.chartTitle || 'Évolution')}</h2>`
+      + (d.barsEmpty ? '<p class="empty">Aucun mouvement sur les 12 derniers mois.</p>'
+        : `<div class="bars">${bars}</div><div class="blab">${labs}</div>`) + `</section>`
+      + `<section><h2>Moyens de paiement</h2>`
+      + (moyens ? `<table><thead><tr><th>Moyen</th><th class="r">Montant</th><th class="r">Part</th></tr></thead><tbody>${moyens}</tbody></table>`
+        : '<p class="empty">Aucun règlement enregistré.</p>') + `</section>`
+      + `<section><h2>Dernières factures<span class="badge">${(d.factures || []).length}</span></h2>`
+      + (facs ? `<table><thead><tr><th>Date</th><th>N°</th><th class="r">Montant</th><th class="r">Reste</th><th>État</th></tr></thead><tbody>${facs}</tbody></table>`
+        : '<p class="empty">Aucune facture.</p>') + `</section>`;
+    return this._docPage({ title: d.title || 'Fiche', sub: d.sub || '', body, foot: `Fiche ${esc(d.title || '')} — ${this.entCfg().nom}` });
+  }
+
   _buildReportHtml() {
     const d = this._reportData; if (!d) return;
     const optsDef = { synthese: true, tresorerie: true, relances: true, fournisseurs: true, credits: false, notes: true };
@@ -5934,17 +6201,15 @@ class Component {
   generateHeuresReport() {
     const html = this._buildHeuresReportHtml();
     if (!html) return;
-    const w = window.open('', '_blank');
-    if (!w) { this.setState({ msg: { kind: 'error', text: 'Fen\u00eatre bloqu\u00e9e \u2014 autorisez les pop-ups pour imprimer la fiche de pr\u00e9sence.' } }); return; }
-    try { w.opener = null; } catch (e) {}
-    w.document.open(); w.document.write(html); w.document.close();
+    const d = this._heuresReportData || {};
+    const emp = (d.employees || [])[0];
+    this.openDocument('presence', html, { periode: d.periodLabel || '', tiers: (emp && emp.name) || '' });
   }
   generateReport() {
     const html = this._buildReportHtml();
-    const w = window.open('', '_blank');
-    if (!w) { this.setState({ reportOpen: false, msg: { kind: 'error', text: 'Fenêtre bloquée — autorisez les pop-ups, ou utilisez « Enregistrer » pour télécharger le compte rendu.' } }); return; }
-    w.document.open(); w.document.write(html); w.document.close();
+    const d = this._reportData || {};
     this.setState({ reportOpen: false });
+    this.openDocument('rapport', html, { periode: d.periodLabel || '' });
   }
   saveReport() {
     const html = this._buildReportHtml();
@@ -8497,7 +8762,8 @@ class Component {
     const ficheName = this.state.ficheTiers;
     const ficheOpen = !!ficheName;
     let ficheTitle = '', ficheSub = '', ficheKpis = [], ficheBars = [], ficheBarsEmpty = true, ficheChartTitle = '',
-      ficheMoyens = [], ficheFactures = [], ficheFacturesEmpty = true, ficheIsClient = false, ficheAvoirLabel = '';
+      ficheMoyens = [], ficheFactures = [], ficheFacturesEmpty = true, ficheIsClient = false, ficheAvoirLabel = '',
+      ficheImpayes = [];
     if (ficheOpen) {
       ficheIsClient = this.state.tiers !== 'Fournisseurs';
       const typeF = ficheIsClient ? 'Vente' : 'Achat';
@@ -8569,9 +8835,13 @@ class Component {
 
       // --- Dernières factures (table de données de la fiche : le détail chiffré reste lisible).
       const facs = mine.slice().sort((a, b) => (b.y * 10000 + b.m * 100 + b.d) - (a.y * 10000 + a.m * 100 + a.d)).slice(0, 12);
+      // Lettre de relance : toutes les factures au reste dû non nul, la plus ancienne en tête.
+      ficheImpayes = mine.filter(r => r.reste != null && r.reste > 0.005)
+        .sort((a, b) => (a.y * 10000 + a.m * 100 + a.d) - (b.y * 10000 + b.m * 100 + b.d));
       ficheFacturesEmpty = facs.length === 0;
       ficheFactures = facs.map(r => ({
         date: `${this.dd(r.d)}/${this.dd(r.m)}/${r.y}`, ref: r.ref || '—',
+        onPrint: () => this.openDocument('facture', this._factureDocHtml(r), { numero: r.ref || '', tiers: ficheName }),
         ttc: this.fmt(Math.abs(r.amt)),
         reste: (r.reste != null && r.reste > 0.005) ? this.fmt(r.reste) : '—',
         resteColor: (r.reste != null && r.reste > 0.005) ? amber : green,
@@ -8583,6 +8853,15 @@ class Component {
     // Créer un avoir pour ce client : réutilise le circuit d'avoir manuel déjà en place
     // (aperçu → confirmation → écriture dans l'onglet Avoirs).
     const onFicheAvoir = () => this.setState({ ficheTiers: null, avoirManuel: { client: ficheName, montant: '', phase: 'ask' } });
+    // La fiche imprimée reprend EXACTEMENT les valeurs affichées : on passe les tableaux déjà
+    // calculés, jamais un second calcul qui pourrait diverger de l'écran.
+    const onFichePrint = () => this.openDocument('fiche', this._ficheDocHtml({
+      title: ficheTitle, sub: ficheSub, kpis: ficheKpis, bars: ficheBars, barsEmpty: ficheBarsEmpty,
+      chartTitle: ficheChartTitle, moyens: ficheMoyens, factures: ficheFactures,
+    }), { tiers: ficheName });
+    const ficheCanRelance = ficheIsClient && ficheImpayes.length > 0;
+    const onFicheRelance = () => { if (!ficheCanRelance) return; this.openDocument('relance', this._relanceDocHtml(ficheName, ficheImpayes), { tiers: ficheName }); };
+    const ficheRelanceLabel = `✉ Relance (${ficheImpayes.length})`;
     const partnerTagHeader = this.state.tiers === 'Fournisseurs' ? 'Catégorie' : 'Segment';
     const volHeader = `Volume ${tiersScopeLabel}`;
     const tiersPeriodTabs = ['Mois', 'Année'].map(name => ({ name, onClick: () => this.setState({ tiersPeriodMode: name }), style: tiersMode === name ? `padding:6px 13px;border-radius:8px;font-size:12.5px;font-weight:600;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit` : 'padding:6px 13px;border-radius:8px;font-size:12.5px;font-weight:500;color:#69788c;background:transparent;border:none;cursor:pointer;font-family:inherit' }));
@@ -10015,9 +10294,52 @@ class Component {
     // multi-feuilles) — plafonnée à 70vh avec défilement interne pour ne jamais dépasser l'écran.
     const wpCardStyle = 'width:460px;max-width:100%;max-height:70vh;overflow-y:auto;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px';
     const ctxStop = e => { if (e) e.stopPropagation(); };
+
+    // ---- DOCUMENTS ÉDITÉS : pop-up « Imprimer ou PDF ? » et réglages par type ----
+    // Le nom proposé est modifiable AVANT l'édition : c'est ce nom que Chrome/Edge reprend dans
+    // « Enregistrer au format PDF » (via le <title> du document).
+    const dpCur = this.state.docPrint || null;
+    const docPrintOpen = !!dpCur;
+    const docPrintName = dpCur ? dpCur.name : '';
+    const docPrintLabel = dpCur ? ((this.printCfg(dpCur.type) || {}).label || 'Document') : '';
+    const onDocPrintName = e => { const v = e.target.value; const c = this.state.docPrint; if (c) this.setState({ docPrint: { ...c, name: v } }); };
+    const docPrintClose = () => this.setState({ docPrint: null });
+    const docPrintEmit = mode => { const c = this.state.docPrint; if (!c) return; this.setState({ docPrint: null }); this._emitDoc(c.html, this._safeFileName(c.name), mode); };
+    const onDocPrintCancel = () => docPrintClose();
+    const onDocPrintPrint = () => docPrintEmit('print');
+    const onDocPrintPdf = () => docPrintEmit('pdf');
+    const onDocPrintPreview = () => docPrintEmit('view');
+    const onDocPrintSettings = () => { this.setState({ docPrint: null, view: 'Paramètres', advOpen: true }); };
+    const docPrintBtnStyle = `padding:9px 16px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit`;
+    const docPrintGhostStyle = 'padding:9px 16px;border-radius:9px;font-size:13px;font-weight:600;color:#475569;background:#fff;border:1px solid #d7dde6;cursor:pointer;font-family:inherit';
+    const docPrintInputStyle = "width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #dde3ec;border-radius:9px;font-size:13px;font-family:'IBM Plex Mono',monospace;color:#0e1b2e";
+
+    const docTypeRows = Component.DOC_TYPES.map(t => {
+      const c = this.printCfg(t.key);
+      return {
+        key: t.key, label: t.label, desc: t.desc, nom: c.nom,
+        onNom: e => this.setPrintCfg(t.key, { nom: e.target.value }),
+        apercu: this._docFileName(t.key, { numero: 'FV-1042', tiers: 'Poissonnerie de la Criée', periode: 'Juillet ' + Component.TODAY.y }),
+        modes: Component.DOC_MODES.map(m => ({
+          name: m.label,
+          onClick: () => this.setPrintCfg(t.key, { mode: m.key }),
+          style: c.mode === m.key
+            ? `padding:6px 13px;border-radius:8px;font-size:12px;font-weight:600;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit`
+            : 'padding:6px 13px;border-radius:8px;font-size:12px;font-weight:500;color:#69788c;background:transparent;border:none;cursor:pointer;font-family:inherit',
+        })),
+      };
+    });
+    const docNomInputStyle = "width:100%;box-sizing:border-box;padding:8px 11px;border:1px solid #dde3ec;border-radius:8px;font-size:12.5px;font-family:'IBM Plex Mono',monospace;color:#0e1b2e";
+    const fichePrintStyle = `padding:8px 15px;border-radius:9px;font-size:12.5px;font-weight:700;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.35)};cursor:pointer;font-family:inherit`;
+    const ficheRowPrintStyle = `padding:3px 8px;border-radius:7px;font-size:11px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.3)};cursor:pointer;font-family:inherit`;
+
     const pwv = this._pwRenderVals();
 
     return {
+      docPrintOpen, docPrintName, docPrintLabel, onDocPrintName, onDocPrintCancel, onDocPrintPrint,
+      onDocPrintPdf, onDocPrintPreview, onDocPrintSettings, docPrintBtnStyle, docPrintGhostStyle, docPrintInputStyle,
+      docTypeRows, docNomInputStyle, fichePrintStyle, ficheRowPrintStyle,
+      onFichePrint, onFicheRelance, ficheCanRelance, ficheRelanceLabel,
       ...pwv,
       ctxStop,
       isDash, isOverview, isFactures, isCredits, isBordereaux, isStock, isVehicles, isTiers, isSettings, isBibliotheque, isEmployes, isAgenda,

@@ -109,6 +109,14 @@
   _paySuiviEtat et _etatAttendu. Si les trois
   divergent, chaque paiement enregistré ressort
   aussitôt « en écart » à la relecture.
+- Duplicata de facture : ne JAMAIS déduire le reste
+  dû de « TTC moins réglé ». Sur les factures
+  reprises d'Excel, la colonne « payé » est souvent
+  vide alors que la facture est soldée — seul l'état
+  porte l'information. Le calcul faisait réclamer à
+  un client une somme déjà encaissée. Ordre correct :
+  colonne reste → état soldé → règlement connu →
+  état impayé → sinon « non renseigné ».
 - Annulation : ne jamais vider la ligne ni stocker
   les infos dans un commentaire Excel (zone la plus
   fragile du classeur : perdue via
@@ -116,6 +124,30 @@
   réparation Excel, et accrochée à une cellule donc
   décalée dès qu'on trie). La ligne reste intacte,
   seulement barrée et grisée.
+
+## Documents édités (impression / PDF)
+- Un navigateur n'expose AUCUNE API d'imprimante :
+  la Web Printing API de Chrome est réservée aux
+  Isolated Web Apps. Le seul levier est
+  window.print(), et le <title> du document devient
+  le nom proposé dans « Enregistrer au format PDF ».
+- Circuit UNIQUE : tout bouton Imprimer appelle
+  openDocument(type, html, vars). Le type porte un
+  modèle de nom à jetons ({numero}, {tiers}, {date},
+  {periode}…) et un mode (demander / imprimer / PDF),
+  réglés dans Paramètres → Gestion des documents.
+- Ne JAMAIS rajouter un window.print() direct sur un
+  bouton : le nom de fichier et le mode choisis par
+  l'utilisatrice seraient ignorés.
+- Au passage Electron, _emitDoc() est le SEUL point
+  à reprendre : webContents.print({ silent,
+  deviceName, copies }) et printToPDF(). Les
+  gabarits, les modèles de nom et la pop-up ne
+  bougent pas.
+- Les gabarits reçoivent les valeurs DÉJÀ calculées
+  par la vue (fiche tiers). Ne jamais recalculer
+  dans le gabarit : le papier doit être le reflet
+  exact de l'écran.
 
 ## Déploiement final (à faire en dernier)
 - Empaqueter avec Electron pour usage desktop Windows
