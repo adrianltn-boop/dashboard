@@ -8498,7 +8498,7 @@ class Component {
       piloter: `PILOTER — votre poste du matin : le tableau de bord (chiffres clés, trésorerie) et l'agenda de l'entreprise.`,
       saisir: `SAISIR — le point d'entrée unique : enregistrez vos achats pêcheurs, vos paiements, vos ventes et vos factures fournisseurs. Tout le reste se remplit à partir d'ici.`,
       ventes: `VENTES — l'argent qui rentre : liste des ventes, suivi des paiements clients, financement Grenke et fiches clients.`,
-      achats: `ACHATS — l'argent qui sort : achats aux pêcheurs, factures à payer et fiches fournisseurs.`,
+      achats: `ACHATS — l'argent qui sort : achats aux pêcheurs, paiement des pêcheurs, factures à payer et fiches fournisseurs.`,
       stock: `STOCK — la marchandise : stock de la semaine, marges par espèce, historique et bordereaux de livraison.`,
       personnel: `PERSONNEL — les heures travaillées et les fiches des employés.`,
       finances: `FINANCES — rapprochement du relevé bancaire, crédits et assurances.`,
@@ -8523,6 +8523,10 @@ class Component {
       // (elle filtre sur sens === 'Fournisseur'). Les factures clients vivent dans Ventes.
       { key: 'achats', label: 'Achats', items: [
         { name: 'Achat pêche', view: 'Achats' },
+        // Le formulaire de paiement pêcheur est rattaché ICI, à côté des achats qu'il règle, plutôt
+        // que d'obliger à passer par Saisie comptable. C'est le même écran (un onglet interne),
+        // pas une page en double : `set` ouvre directement le bon onglet.
+        { name: 'Paiement pêcheur', view: 'SaisieCompta', set: { compTab: 'Paiement' } },
         { name: 'Factures fournisseurs', view: 'Factures' },
         { name: 'Fournisseurs', view: 'Tiers', set: { tiers: 'Fournisseurs' } },
       ] },
@@ -8550,7 +8554,11 @@ class Component {
     // Le groupe ouvert est celui qui contient l'entrée réellement active : une même page atteinte
     // depuis deux groupes (Clients dans Ventes, Fournisseurs dans Achats) ne fait donc pas sauter le
     // menu d'un groupe à l'autre. Repli sur le premier groupe qui cite la page (profil restreint).
-    const ownerGroup = navGroupDefsVisible.find(g => g.items.some(navItemActive));
+    // Une entrée PRÉCISE (avec `set`, donc qui vise un onglet interne donné) gagne sur une entrée
+    // générique qui pointe la même page : sur l'onglet Paiement, c'est « Paiement pêcheur » (groupe
+    // Achats) qui est actif, et non « Saisie comptable » — sinon le menu sauterait au clic.
+    const ownerGroup = navGroupDefsVisible.find(g => g.items.some(it => it.set && navItemActive(it)))
+      || navGroupDefsVisible.find(g => g.items.some(navItemActive));
     const activeGroupKey = ownerGroup ? ownerGroup.key : (navGroupOfView[view] || 'piloter');
     const msgUnread = this.msgUnreadCount();
     const navGroups = navGroupDefsVisible.map(g => {
@@ -8560,14 +8568,16 @@ class Component {
       return {
         name: (hasMessages && msgUnread) ? `${g.label} 💬 ${msgUnread}` : g.label,
         help: NAVGROUPHELP[g.key] || '',
-        onClick: () => { const first = visItems[0] || g.items[0]; this.setState({ view: first.view, cat: 'Toutes', q: '', page: 0, ...(first.set || {}) }); if (first.view === 'Messages') this.markMessagesRead(); if (first.view === 'SaisieCompta') this.openCompForm(this.state.compTab || 'Achat'); },
+        // openCompForm doit recevoir l'onglet visé par `set`, sinon il réappliquerait l'ancien
+        // onglet mémorisé et écraserait ce que l'entrée de menu venait de demander.
+        onClick: () => { const first = visItems[0] || g.items[0]; this.setState({ view: first.view, cat: 'Toutes', q: '', page: 0, ...(first.set || {}) }); if (first.view === 'Messages') this.markMessagesRead(); if (first.view === 'SaisieCompta') this.openCompForm((first.set && first.set.compTab) || this.state.compTab || 'Achat'); },
         tabStyle: active
           ? `display:block;width:100%;text-align:left;padding:9px 12px;border-radius:9px;font-size:13px;font-weight:600;color:${accent};background:${soft};border:none;cursor:pointer;font-family:inherit;white-space:nowrap`
           : 'display:block;width:100%;text-align:left;padding:9px 12px;border-radius:9px;font-size:13px;font-weight:500;color:#4c5b6e;background:transparent;border:none;cursor:pointer;font-family:inherit;white-space:nowrap',
         subItems: (active && visItems.length > 1) ? visItems.map(it => ({
           name: (it.view === 'Messages' && msgUnread) ? `${it.name} (${msgUnread})` : it.name,
           help: NAVHELP[it.view] || '',
-          onClick: () => { this.setState({ view: it.view, cat: 'Toutes', q: '', page: 0, ...(it.set || {}) }); if (it.view === 'Messages') this.markMessagesRead(); },
+          onClick: () => { this.setState({ view: it.view, cat: 'Toutes', q: '', page: 0, ...(it.set || {}) }); if (it.view === 'Messages') this.markMessagesRead(); if (it.view === 'SaisieCompta') this.openCompForm((it.set && it.set.compTab) || this.state.compTab || 'Achat'); },
           // Plus de cas particulier « Stock allumé quand on est sur Comptabilité analytique » :
           // « Marges par espèce » est désormais une entrée de menu à part entière, qui s'allume seule.
           tabStyle: navItemActive(it)
