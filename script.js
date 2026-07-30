@@ -223,7 +223,7 @@ class Component {
     restartRun: null, verifPending: null, extChanges: null, venteAvoirAsk: null, venteAvoirDispo: null, avoirManuel: null,
     ventesSaisie: [], venteDraft: null,
     grenkeMan: [], grkDraft: null, grkDelAsk: null,
-    achatsSaisie: [], achatDraft: null, chequiersLive: [], compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null, chqEditDraft: null, stockRoomAlert: null, avoirTotals: {},
+    achatsSaisie: [], achatDraft: null, chequiersLive: [], compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null, chqEditDraft: null, stockRoomAlert: null, avoirTotals: {}, stockLines: [], stockPick: false,
     paiementFilters: [], paiementSort: null, chqAnnuleConfirm: null, chqAnnuleReplaceAsk: null, chqAddDraft: null, chqLiveStatus: null,
     fournSaisie: [], fournDraft: null,
     backupFolderName: null, backupStatus: null, backupLast: null, backupError: null, restoreStatus: null, restorePreview: null,
@@ -1380,9 +1380,14 @@ class Component {
     let chequier = '', chequeNum = '';
     if (paiement === 'cheque') { const arrCq = this.chequierRows(); const cq = arrCq.find(c => c.nom === d.chequier) || arrCq[0];
       if (cq) { chequier = cq.nom; chequeNum = String(this._vNum(d.chequeNum) || cq.next || 0); } }
-    const rec = { id, num: (d.num || '').trim(), pecheur, date: d.date || '', lignes, total, paiement, chequier, chequeNum, observation, paiementImmediat: !!d.paiementImmediat };
+    const recBase = { id, num: (d.num || '').trim(), pecheur, date: d.date || '', lignes, total, paiement, chequier, chequeNum, observation, paiementImmediat: !!d.paiementImmediat };
     // RÈGLE 8/13 : suivi de l'état de chaque étape de la transaction (aucune annonce « enregistré » tant que tout n'est pas résolu).
-    this._achatSteps = { rec, pecheur: 'attente', cheque: paiement === 'cheque' ? 'attente' : 'na', stock: this._stockDir ? 'attente' : 'na' };
+    // fromStock : cet achat vient d'une ligne de stock DÉJÀ présente dans le fichier (reprise via
+    // « Lier une ligne de stock en attente »). L'étape stock est donc sans objet — la réécrire
+    // dupliquerait la marchandise, ce qui fausserait le stock de la semaine.
+    const dejaAuStock = !!d.fromStock;
+    const rec = { ...recBase, fromStock: d.fromStock || null };
+    this._achatSteps = { rec, pecheur: 'attente', cheque: paiement === 'cheque' ? 'attente' : 'na', stock: (this._stockDir && !dejaAuStock) ? 'attente' : 'na' };
     this.requestAppendPreview('operations', this.achatWriteValues(rec), { refuseFormula: true, step: 'pecheur', after: () => this._achatAfterWrite(rec) });
   }
   // Bilan consolidé de l'achat : ne s'affiche que lorsque TOUTES les étapes sont résolues (ok/échec/annulé/sans objet).
@@ -1422,7 +1427,10 @@ class Component {
     this._writeQueue = [];
     if (rec.paiement === 'cheque' && rec.chequeNum && this._achatWriteReady()) this._writeQueue.push(() => this.requestChequePreview(rec));
     else if (rec.paiement === 'cheque' && this._achatSteps) this._achatSteps.cheque = 'fail'; // chèque prévu mais écriture non prête
-    if (this._stockDir) this._writeQueue.push(() => this.requestStockPreview(rec, 'achat'));
+    // Pas de ré-écriture du stock quand l'achat vient d'une ligne de stock existante : la
+    // marchandise est DÉJÀ dans le fichier de la semaine, l'écrire une seconde fois la compterait
+    // deux fois (voir useStockLine et le commentaire sur fromStock plus haut).
+    if (this._stockDir && !rec.fromStock) this._writeQueue.push(() => this.requestStockPreview(rec, 'achat'));
     this._runNextWrite();
     this._maybeFinalizeAchat(); // si ni chèque ni stock à écrire → bilan immédiat
   }
@@ -3480,6 +3488,80 @@ class Component {
     let clientCol = -1; for (let c = 0; c < hdr.length; c++) { if (this._norm(hdr[c]).indexOf('client') >= 0) { clientCol = c; break; } }
     if (clientCol < 0) clientCol = 4; // repli si l'en-tête « Clients » n'est pas détecté
     return { sheetName: sh.name, headerIdx: sec.headerIdx, dataStart: sec.dataStart, totalRow: sec.totalRow, poidsCol, prixCol, clientCol };
+  }
+  // Numéro de semaine porté par le nom d'un fichier de stock. On ne PARSE pas le nom (trop
+  // hasardeux) : on teste les 53 semaines avec la même expression que _stockWeeklyHandle et on
+  // n'accepte le résultat que s'il est unique — sinon on préfère ne pas deviner.
+  _stockWeekOfFile(name) {
+    const s = String(name || ''); const hits = [];
+    for (let w = 1; w <= 53; w++) { if (new RegExp('(^|[^0-9])' + w + '([^0-9]|$)').test(s)) hits.push(w); }
+    return hits.length === 1 ? hits[0] : null;
+  }
+  // Lignes d'ENTRÉE d'un fichier de stock, une par (espèce, calibre, pêcheur). Sert à repérer
+  // celles qui n'ont AUCUN achat pêcheur correspondant — typiquement ajoutées à la main dans le
+  // fichier. BUT DU TABLEAU DE BORD : ne perdre aucune information, donc ne jamais laisser une
+  // entrée de marchandise sans l'achat qui la justifie.
+  stockEntryLines(wb, fileName) {
+    const out = [];
+    (this.entCfg().especes || []).forEach(espece => {
+      const hint = this._stockSheetHint(espece); if (!hint) return;
+      const sh = wb.find(s => { const n = this._norm(s.name); return n === hint.sheet || n.indexOf(hint.sheet) >= 0; });
+      if (!sh) return;
+      const rows = sh.rows;
+      const sec = this._stockFindSection(rows, 'achat', 'entree'); if (!sec || sec.headerIdx < 0) return;
+      const hdr = rows[sec.headerIdx] || [];
+      let clientCol = -1; for (let c = 0; c < hdr.length; c++) { if (this._norm(hdr[c]).indexOf('client') >= 0) { clientCol = c; break; } }
+      if (clientCol < 0) clientCol = 4; // même repli que _stockResolve
+      // Colonne de calibre = colonne d'en-tête suivie d'une colonne « PRIX » (motif universel du fichier).
+      const cals = [];
+      for (let c = 0; c < hdr.length; c++) {
+        const h = this._norm(hdr[c]); if (!h || c === clientCol) continue;
+        if (h.indexOf('prix') >= 0 || h.indexOf('total') >= 0 || h.indexOf('client') >= 0) continue;
+        if (this._norm(hdr[c + 1] || '').indexOf('prix') >= 0) cals.push({ label: String(hdr[c]).trim(), poidsCol: c, prixCol: c + 1 });
+      }
+      const last = (sec.totalRow > sec.dataStart) ? sec.totalRow : rows.length;
+      for (let r = sec.dataStart; r < last; r++) {
+        const rr = rows[r] || [];
+        const client = String(rr[clientCol] == null ? '' : rr[clientCol]).trim(); if (!client) continue;
+        cals.forEach(cal => {
+          const poids = this._vNum(rr[cal.poidsCol]); if (!(poids > 0)) return;
+          out.push({ file: fileName, sheet: sh.name, espece, calibre: cal.label, client, poids, prix: this._vNum(rr[cal.prixCol]), excelRow: r + 1 });
+        });
+      }
+    });
+    return out;
+  }
+  // Lignes de stock « en attente » : une entrée de marchandise sans achat pêcheur correspondant.
+  // Rapprochement par pêcheur ET semaine quand le numéro de semaine du fichier est certain ; sinon
+  // par pêcheur seulement (plus prudent : on préfère ne rien signaler à tort).
+  orphanStockLines() {
+    const lines = Array.isArray(this.state.stockLines) ? this.state.stockLines : [];
+    if (!lines.length) return [];
+    const achats = [
+      ...((this.state.ops || []).filter(r => r.type === 'Achat')).map(r => ({ p: this.nrm(r.partner), w: this.isoWeek({ y: r.y, m: r.m, d: r.d }) })),
+      ...this.achatSaisieRows().map(a => { const q = String(a.date || '').split('-').map(Number); return { p: this.nrm(a.pecheur), w: (q.length === 3 && q[0]) ? this.isoWeek({ y: q[0], m: q[1], d: q[2] }) : null }; }),
+    ];
+    const parPecheur = new Set(achats.map(a => a.p).filter(Boolean));
+    const parSemaine = new Set(achats.filter(a => a.w != null).map(a => a.p + '|' + a.w));
+    return lines.filter(l => {
+      const p = this.nrm(l.client); if (!p) return false;
+      const w = this._stockWeekOfFile(l.file);
+      return w != null ? !parSemaine.has(p + '|' + w) : !parPecheur.has(p);
+    });
+  }
+  // Reprend une ligne de stock en attente dans le formulaire d'achat pêcheur : le pêcheur, l'espèce,
+  // le calibre, le poids et le prix sont déjà connus, il ne reste qu'à compléter et enregistrer.
+  // `fromStock` empêchera la ré-écriture du stock (la ligne existe déjà — voir commitAchatSaisie).
+  useStockLine(idx) {
+    const l = this.orphanStockLines()[idx]; if (!l) return;
+    this.setState({
+      stockPick: false,
+      view: 'SaisieCompta', compTab: 'Achat',
+      achatDraft: { ...this.achatDefault(), pecheur: l.client, fromStock: { file: l.file, sheet: l.sheet, excelRow: l.excelRow },
+        lignes: [{ espece: l.espece, calibre: l.calibre || 'Standard', poids: String(l.poids || ''), prixKg: String(l.prix || '') }] },
+      msg: { kind: 'info', text: `Ligne de stock reprise : ${l.espece} ${l.calibre} · ${l.poids} kg · ${l.client}. Complétez le paiement puis enregistrez — le stock ne sera PAS réécrit, la ligne existe déjà.` },
+    });
+    this.refreshAchatInvoiceNumber();
   }
   // Handle inscriptible du fichier stock de la semaine correspondant à une date.
   async _stockWeeklyHandle(dateIso) {
@@ -5656,7 +5738,7 @@ class Component {
     const files = [];
     for (const [name, h] of await this.listFilesDeep(dir, 3)) { if (/\.(xlsx|xlsm)$/i.test(name) && this.matchPrefix(name, prefix)) files.push({ name, handle: h }); }
     if (!files.length) { if (!silent) this.setState({ msg: { kind: 'error', text: `Aucun fichier commençant par « ${prefix} » dans « ${dir.name} ».` } }); return; }
-    const list = []; const listEspeces = []; const stockChecks = []; let maxMod = 0; this._stockHandles = {};
+    const list = []; const listEspeces = []; const stockChecks = []; const entryLines = []; let maxMod = 0; this._stockHandles = {};
     for (const f of files) {
       try {
         const file = await f.handle.getFile(); maxMod = Math.max(maxMod, file.lastModified);
@@ -5671,6 +5753,8 @@ class Component {
         if (tot.poids || tot.valo) list.push({ file: f.name, sem, poids: tot.poids, valo: tot.valo });
         stockChecks.push(analysis.check);
         listEspeces.push({ file: f.name, sem, ...esp });
+        // Lignes d'entrée détaillées : servent à repérer une marchandise entrée sans achat associé.
+        try { entryLines.push(...this.stockEntryLines(wb, f.name)); } catch (e) { /* feuille atypique : on n'insiste pas */ }
         this._stockHandles[f.name] = f.handle;
       }
       catch (e) { /* fichier verrouillé : on réessaiera */ }
@@ -5679,7 +5763,7 @@ class Component {
     listEspeces.sort((a, b) => (a.sem < b.sem ? 1 : -1));
     this._stockDir = dir; this._stockMax = maxMod;
     const stockErrors = stockChecks.filter(c => c && c.status !== 'Conforme');
-    const patchStock = { stock: list, stockName: dir.name, folderStock: { name: dir.name, count: files.length, prefix }, stockEspeces: listEspeces, stockChecks };
+    const patchStock = { stock: list, stockName: dir.name, folderStock: { name: dir.name, count: files.length, prefix }, stockEspeces: listEspeces, stockChecks, stockLines: entryLines };
     if (!silent) patchStock.msg = stockErrors.length ? { kind: 'error', text: `${stockErrors.length} fichier(s) Stock présentent un écart ou un récapitulatif ambigu. Consultez l'alerte Stock.` } : { kind: 'success', text: `Dossier Stock « ${dir.name} » — ${list.length} inventaire(s), récapitulatifs conformes aux feuilles détaillées.` };
     this.setState(patchStock);
     this.saveJSON(Component.STK_KEY, { name: dir.name, rows: list });
@@ -6279,13 +6363,12 @@ class Component {
   detectExternalChanges() {
     const cur = this._changeSnapshot();
     const prev = this._loadSeenSnap();
-    // Premier démarrage : on prend la photo de référence sans rien signaler.
-    if (!prev) { this._saveSeenSnap(cur); return; }
-    // Écriture faite par le tableau de bord lui-même : on réaligne la photo en silence. Sans ça
-    // chaque enregistrement déclencherait une alerte et le journal deviendrait illisible.
-    if (this._ownWrite) { this._ownWrite = false; this._saveSeenSnap(cur); return; }
+    const own = !!this._ownWrite; if (own) this._ownWrite = false;
     const groups = [];
-    Component.CHANGEWATCH.forEach(spec => {
+    // Premier démarrage (pas de photo de référence) ou écriture faite par le tableau de bord
+    // lui-même : on ne compare pas. Sans ça, tout l'historique apparaîtrait comme « ajouté » au
+    // premier lancement, et chaque enregistrement déclencherait une alerte.
+    if (prev && !own) Component.CHANGEWATCH.forEach(spec => {
       const a = prev[spec.src], b = cur[spec.src];
       if (!a || !b || !Object.keys(a).length) return; // pas de point de comparaison fiable
       const items = [];
@@ -6305,6 +6388,13 @@ class Component {
       if (items.length) groups.push({ src: spec.src, label: spec.label, kind: spec.kind, items });
     });
     this._saveSeenSnap(cur); // la photo est mise à jour même si on signale : on n'alerte qu'une fois
+    // Lignes de stock sans achat : ce n'est pas un « changement » mais une situation à régler, donc
+    // signalée à CHAQUE démarrage tant qu'elle dure (y compris au premier) — c'est le cœur de
+    // l'objectif : une marchandise entrée sans son achat, c'est une information en train de se perdre.
+    const orph = this.orphanStockLines();
+    if (orph.length) groups.push({ src: 'stockOrphan', label: 'Stock — entrées sans achat pêcheur', kind: 'operations', orphan: true,
+      items: orph.map(l => ({ type: 'orphan', ref: `${l.espece} ${l.calibre || ''}`.trim(), name: `${l.client} · ${l.poids} kg`, changes: [],
+        links: [`Fichier « ${l.file} », feuille « ${l.sheet} », ligne ${l.excelRow}`, 'Aucun achat pêcheur ne correspond : liez cette ligne depuis Achat pêcheur → « Lier une ligne de stock en attente »'] })) });
     if (groups.length) this.setState({ extChanges: { groups, total: groups.reduce((s, g) => s + g.items.length, 0) } });
   }
   ackExternalChanges() { this.setState({ extChanges: null }); }
@@ -7239,13 +7329,13 @@ class Component {
       openStyle: `padding:6px 12px;border-radius:8px;font-size:12px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.3)};cursor:pointer;font-family:inherit`,
       items: g.items.map(it => ({
         ref: it.ref || '—', name: it.name || '',
-        tag: it.type === 'suppression' ? 'LIGNE SUPPRIMÉE' : it.type === 'ajout' ? 'LIGNE AJOUTÉE' : 'MODIFIÉE',
-        tagStyle: `${badge}background:${it.type === 'suppression' ? '#fdeaea' : it.type === 'ajout' ? '#e7f5ec' : '#fef3c7'};color:${it.type === 'suppression' ? red : it.type === 'ajout' ? green : amber}`,
+        tag: it.type === 'suppression' ? 'LIGNE SUPPRIMÉE' : it.type === 'ajout' ? 'LIGNE AJOUTÉE' : it.type === 'orphan' ? 'SANS ACHAT' : 'MODIFIÉE',
+        tagStyle: `${badge}background:${it.type === 'suppression' || it.type === 'orphan' ? '#fdeaea' : it.type === 'ajout' ? '#e7f5ec' : '#fef3c7'};color:${it.type === 'suppression' || it.type === 'orphan' ? red : it.type === 'ajout' ? green : amber}`,
         changes: it.changes.map(c => ({ label: c.label, from: c.from, to: c.to })),
         hasChanges: it.changes.length > 0,
         links: (it.links || []).map(t => ({ text: t })),
         hasLinks: (it.links || []).length > 0,
-        linkIntro: it.type === 'suppression' ? 'Cette ligne était liée à :' : '',
+        linkIntro: it.type === 'suppression' ? 'Cette ligne était liée à :' : it.type === 'orphan' ? 'Marchandise entrée sans achat associé :' : '',
       })),
     }));
     const onExtAck = () => this.ackExternalChanges();
@@ -7450,6 +7540,28 @@ class Component {
     const onAchatCommit = () => this.commitAchatSaisie();
     const onAchatReset = () => this.resetAchatDraft();
     const achatSaveLabel = achatEditing ? "Enregistrer les modifications" : "Enregistrer l'achat";
+    // ---- Lignes de stock en attente : LISTE CLIQUABLE, jamais une saisie à retaper ----
+    // Une entrée de marchandise sans achat pêcheur est une information en train de se perdre : on la
+    // reprend d'un clic dans le formulaire, avec son espèce, son calibre, son poids et son prix.
+    const stockPend = this.orphanStockLines();
+    const stockPendCount = stockPend.length;
+    const hasStockPend = stockPendCount > 0;
+    const stockPendLabel = `🔗 Lier une ligne de stock en attente (${stockPendCount})`;
+    const stockPendStyle = `padding:9px 15px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:${amber};border:none;cursor:pointer;font-family:inherit`;
+    const onStockPickOpen = () => this.setState({ stockPick: true });
+    const onStockPickClose = () => this.setState({ stockPick: false });
+    const stockPickOpen = !!this.state.stockPick && hasStockPend;
+    const stockPickRows = stockPend.map((l, i) => ({
+      espece: l.espece, calibre: l.calibre || '—', client: l.client,
+      poids: `${this._vNum(l.poids).toLocaleString('fr-FR', { maximumFractionDigits: 2 })} kg`,
+      prix: l.prix ? this.fmt(l.prix) + ' /kg' : '—',
+      total: this.fmt(Math.round(this._vNum(l.poids) * this._vNum(l.prix) * 100) / 100),
+      source: `${l.file} · ligne ${l.excelRow}`,
+      onPick: () => this.useStockLine(i),
+      rowStyle: 'display:grid;grid-template-columns:minmax(90px,1fr) 70px minmax(110px,1.2fr) 88px 92px 92px;gap:8px;align-items:center;width:100%;text-align:left;padding:10px 12px;border:none;border-top:1px solid #f1f4f8;background:#fff;cursor:pointer;font-family:inherit;font-size:12.5px',
+    }));
+    const achatFromStock = !!(this.state.achatDraft && this.state.achatDraft.fromStock);
+    const achatFromStockNote = achatFromStock ? "Cet achat reprend une ligne de stock déjà présente dans le fichier de la semaine : le stock ne sera PAS réécrit, pour ne pas compter la marchandise deux fois." : '';
     const compPayModes = ['virement', 'cheque', 'liquide', 'autre'].map(k => { const PM = Component.PAYMODES[k]; const on = (ad.paiement || 'virement') === k; return { name: `${PM.ic} ${PM.lbl}`, onClick: () => this.setAchatField('paiement', k), style: on ? `padding:9px 16px;border-radius:9px;font-size:12.5px;font-weight:600;color:#fff;background:#b45309;border:1px solid #b45309;cursor:pointer;font-family:inherit` : `padding:9px 16px;border-radius:9px;font-size:12.5px;font-weight:500;color:#5b6b7f;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit` }; });
     const achatIsCheque = (ad.paiement || 'virement') === 'cheque';
     const achatIsAutre = (ad.paiement || 'virement') === 'autre';
@@ -9325,6 +9437,8 @@ class Component {
       onRestartDash, onRestartClose, onRestartApply,
       verifBannerOpen, verifBannerText, onVerifBannerApply, onVerifBannerHide,
       extOpen, extTitle, extIntro, extGroups, onExtAck,
+      hasStockPend, stockPendLabel, stockPendStyle, onStockPickOpen, onStockPickClose, stockPickOpen, stockPickRows, stockPendCount,
+      achatFromStock, achatFromStockNote,
       onHealthOpen: () => this.openHealthCheck(),
       isSaisieCompta, compTab, compIsAchat, compIsVente, compIsFourn, compIsPaiement,
       impayesAchats, paiementEmpty, paiementModeOpts, paiementIsPartiel, paiementIsCheque, paiementIsAutre, paiementIsComptant, paiementComptantSolde, paiementSelectedLabel,

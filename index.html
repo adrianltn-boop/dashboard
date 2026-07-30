@@ -553,6 +553,16 @@
                 </sc-if>
               </div>
 
+              <!-- Marchandise entrée au stock sans achat : on la reprend d'un CLIC, sans rien retaper. -->
+              <sc-if value="{{ hasStockPend }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 13px;margin-top:6px;border-radius:10px;background:#fff7ed;border:1px solid #fbd9b4;flex-wrap:wrap">
+                  <div style="font-size:12.5px;color:#8a5a1a;line-height:1.5">Des lignes de stock sont entrées <b>sans achat associé</b>. Reprenez-en une pour créer l'achat manquant.</div>
+                  <button style="{{ stockPendStyle }}" onclick="{{ onStockPickOpen }}">{{ stockPendLabel }}</button>
+                </div>
+              </sc-if>
+              <sc-if value="{{ achatFromStock }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:10px 13px;margin-top:8px;border-radius:10px;background:#eef6ff;border:1px solid #cfe0f7;font-size:12.5px;color:#1e4b7a;line-height:1.55">ℹ {{ achatFromStockNote }}</div>
+              </sc-if>
               <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;padding:14px 0 16px;flex-wrap:wrap;margin-top:6px;border-top:1px solid #eef1f6">
                 <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
                   <div style="font-size:13px;color:#69788c">Total à payer <b style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#0e1b2e;font-weight:700;margin-left:6px">{{ achatDraftTotal }}</b></div>
@@ -2751,6 +2761,35 @@
        Journal d'information : le fichier Excel reste la seule vérité, on ne propose donc PAS de
        refuser une modification (ce serait recréer une double vérité). Deux issues : « J'ai vu »,
        ou ouvrir le fichier pour corriger une fausse manip dans Excel. -->
+  <!-- ============ LIGNES DE STOCK EN ATTENTE — liste CLIQUABLE ============
+       Une ligne = un clic. Aucune ressaisie : espèce, calibre, poids et prix sont déjà lus dans le
+       fichier de stock, ils pré-remplissent le formulaire d'achat. -->
+  <sc-if value="{{ stockPickOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ prefixOverlayStyle }}" onclick="{{ onStockPickClose }}">
+      <div style="width:760px;max-width:95vw;max-height:86vh;overflow:auto;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit" onclick="{{ ctxStop }}">
+        <div style="padding:20px 22px 14px">
+          <div style="font-size:15px;font-weight:700;color:#0e1b2e">Lignes de stock en attente d'un achat</div>
+          <div style="font-size:12.5px;color:#69788c;margin-top:7px;line-height:1.6">Cette marchandise est entrée au stock sans achat pêcheur correspondant. <b>Cliquez sur une ligne</b> : le formulaire d'achat se remplit tout seul avec le pêcheur, l'espèce, le calibre, le poids et le prix. Le stock ne sera pas réécrit, la ligne existe déjà.</div>
+        </div>
+        <div style="display:grid;grid-template-columns:minmax(90px,1fr) 70px minmax(110px,1.2fr) 88px 92px 92px;gap:8px;padding:9px 12px;background:#f8fafc;border-top:1px solid #eef1f6;border-bottom:1px solid #eef1f6;font-size:10.5px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.3px">
+          <span>Espèce</span><span>Calibre</span><span>Pêcheur</span><span style="text-align:right">Poids</span><span style="text-align:right">Prix</span><span style="text-align:right">Total</span>
+        </div>
+        <sc-for list="{{ stockPickRows }}" as="s" hint-placeholder-count="4">
+          <button style="{{ s.rowStyle }}" onclick="{{ s.onPick }}" title="{{ s.source }}">
+            <span style="color:#0e1b2e;font-weight:600">{{ s.espece }}</span>
+            <span style="color:#69788c">{{ s.calibre }}</span>
+            <span style="color:#0e1b2e">{{ s.client }}</span>
+            <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#3a4a5e">{{ s.poids }}</span>
+            <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#69788c">{{ s.prix }}</span>
+            <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#0e1b2e">{{ s.total }}</span>
+          </button>
+        </sc-for>
+        <div style="display:flex;justify-content:flex-end;padding:16px 22px 20px;border-top:1px solid #eef1f6">
+          <button style="{{ agBtnGhost }}" onclick="{{ onStockPickClose }}">Fermer</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
   <sc-if value="{{ extOpen }}" hint-placeholder-val="{{ false }}">
     <div style="{{ prefixOverlayStyle }}">
       <div style="width:680px;max-width:94vw;max-height:86vh;overflow:auto;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px" onclick="{{ ctxStop }}">
