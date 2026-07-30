@@ -3861,6 +3861,125 @@ class Component {
     }
     return out;
   }
+  // ---------- Évaluateur de formule (VÉRIFICATION uniquement) ----------
+  // Ne sert JAMAIS à inventer une valeur : uniquement à recalculer une formule de son côté pour la
+  // comparer à celle qu'Excel a mise en cache. Si les deux concordent, la valeur peut être figée
+  // en confiance ; si elles divergent, on ne touche pas à la cellule.
+  // Couvre : nombres, références (B2, $B$2), plages via SOMME/SUM, + - * / , parenthèses,
+  // SIERREUR/IFERROR. Tout le reste renvoie null = « je ne sais pas vérifier ».
+  _evalFormula(f, valAt) {
+    let s = String(f || '').trim().replace(/^=/, '');
+    if (!s || s.length > 400) return null;
+    if (/[#"']/.test(s)) return null; // erreur Excel (#REF!) ou texte : hors de notre portée
+    let i = 0;
+    const skip = () => { while (i < s.length && s[i] === ' ') i++; };
+    const cellVal = ref => { const v = valAt(ref.replace(/\$/g, '')); if (v == null || v === '') return 0; const n = parseFloat(String(v).replace(',', '.')); return isFinite(n) ? n : null; };
+    let bad = false;
+    const parseExpr = () => { // + et −
+      let v = parseTerm(); if (v == null) return null;
+      for (;;) { skip(); const c = s[i];
+        if (c !== '+' && c !== '-') return v;
+        i++; const r = parseTerm(); if (r == null) return null;
+        v = c === '+' ? v + r : v - r; }
+    };
+    const parseTerm = () => { // × et ÷
+      let v = parseFactor(); if (v == null) return null;
+      for (;;) { skip(); const c = s[i];
+        if (c !== '*' && c !== '/') return v;
+        i++; const r = parseFactor(); if (r == null) return null;
+        if (c === '/' && Math.abs(r) < 1e-12) return null; // division par zéro : on ne tranche pas
+        v = c === '*' ? v * r : v / r; }
+    };
+    const parseFactor = () => {
+      skip();
+      if (s[i] === '-') { i++; const v = parseFactor(); return v == null ? null : -v; }
+      if (s[i] === '+') { i++; return parseFactor(); }
+      if (s[i] === '(') { i++; const v = parseExpr(); skip(); if (s[i] !== ')') { bad = true; return null; } i++; return v; }
+      // Fonction
+      const fn = /^([A-Za-zÀ-ÿ]+)\s*\(/.exec(s.slice(i));
+      if (fn) {
+        const name = this._norm(fn[1]); i += fn[0].length;
+        const args = [];
+        for (;;) {
+          skip();
+          // Plage A1:A10 → somme des cellules (seul usage attendu ici)
+          const rg = /^(\$?[A-Z]+\$?\d+):(\$?[A-Z]+\$?\d+)/.exec(s.slice(i));
+          if (rg) { i += rg[0].length; args.push({ range: [rg[1], rg[2]] }); }
+          else { const v = parseExpr(); if (v == null && bad) return null; args.push({ val: v }); }
+          skip();
+          if (s[i] === ';' || s[i] === ',') { i++; continue; }
+          if (s[i] === ')') { i++; break; }
+          bad = true; return null;
+        }
+        const sumRange = r => {
+          const a = /^\$?([A-Z]+)\$?(\d+)$/.exec(r[0].replace(/\$/g, '')), b = /^\$?([A-Z]+)\$?(\d+)$/.exec(r[1].replace(/\$/g, ''));
+          if (!a || !b || a[1] !== b[1]) return null; // plage multi-colonnes : non gérée
+          let t = 0; for (let n = Math.min(+a[2], +b[2]); n <= Math.max(+a[2], +b[2]); n++) { const v = cellVal(a[1] + n); if (v == null) return null; t += v; }
+          return t;
+        };
+        if (name === 'somme' || name === 'sum') {
+          let t = 0; for (const a of args) { const v = a.range ? sumRange(a.range) : a.val; if (v == null) return null; t += v; }
+          return t;
+        }
+        if (name === 'sierreur' || name === 'iferror' || name === 'sierror') {
+          const v = args[0] && !args[0].range ? args[0].val : null;
+          return v == null ? null : v; // le repli n'est utilisé qu'en cas d'erreur, cas qu'on ne tranche pas
+        }
+        return null; // fonction non gérée
+      }
+      // Référence de cellule
+      const ref = /^\$?[A-Z]+\$?\d+/.exec(s.slice(i));
+      if (ref) { i += ref[0].length; return cellVal(ref[0]); }
+      // Nombre
+      const num = /^\d+([.,]\d+)?/.exec(s.slice(i));
+      if (num) { i += num[0].length; return parseFloat(num[0].replace(',', '.')); }
+      bad = true; return null;
+    };
+    const out = parseExpr();
+    skip();
+    if (bad || out == null || i < s.length) return null; // pas entièrement consommé = pas compris
+    return Math.round(out * 1e6) / 1e6;
+  }
+  // Retire les balises <f> des cellules désignées en CONSERVANT leur valeur : la formule disparaît,
+  // le nombre reste. Le style, le format et tout le reste de la cellule sont intacts.
+  // cellsBySheet : { 'Nom de feuille': Set('B2', 'D5', …) }
+  async _devalueFormulas(buf, cellsBySheet) {
+    const files = await this.unzipAll(buf); const dec = new TextDecoder(); const enc = new TextEncoder();
+    const wbXml = dec.decode(files['xl/workbook.xml'] || new Uint8Array());
+    const relsXml = dec.decode(files['xl/_rels/workbook.xml.rels'] || new Uint8Array());
+    const relMap = this._relMapOf(relsXml);
+    const targetByName = {}; [...wbXml.matchAll(/<sheet[^>]*name="([^"]*)"[^>]*r:id="(rId\d+)"/g)].forEach(m => { targetByName[this.unxml(m[1])] = relMap[m[2]]; });
+    let done = 0;
+    for (const sheetName of Object.keys(cellsBySheet)) {
+      const target = targetByName[sheetName]; if (!target || !files[target]) continue;
+      const want = cellsBySheet[sheetName]; if (!want || !want.size) continue;
+      let xml = dec.decode(files[target]);
+      xml = xml.replace(/<c\b([^>]*?)>([\s\S]*?)<\/c>/g, (whole, attrs, body) => {
+        const ref = (attrs.match(/\br="([A-Z]+\d+)"/) || [, ''])[1];
+        if (!ref || !want.has(ref) || !/<f[\s>/]/.test(body)) return whole;
+        // On enlève la formule (y compris la forme partagée <f t="shared" …/>) et on garde <v>.
+        const sansF = body.replace(/<f\b[^>]*\/>/g, '').replace(/<f\b[^>]*>[\s\S]*?<\/f>/g, '');
+        if (!/<v>/.test(sansF)) return whole; // aucune valeur en cache : on ne vide surtout pas la cellule
+        done++;
+        return `<c${attrs}>${sansF}</c>`;
+      });
+      files[target] = enc.encode(xml);
+    }
+    if (!done) return null;
+    // La chaîne de calcul d'Excel référence les cellules en formule. En laisser une qui pointe vers
+    // des formules supprimées fait afficher « nous avons trouvé un problème » à l'ouverture : on la
+    // retire proprement, Excel la reconstruit tout seul au prochain calcul.
+    if (files['xl/calcChain.xml']) {
+      delete files['xl/calcChain.xml'];
+      const ct = dec.decode(files['[Content_Types].xml'] || new Uint8Array());
+      if (ct) files['[Content_Types].xml'] = enc.encode(ct.replace(/<Override[^>]*calcChain\.xml[^>]*\/>/g, ''));
+      if (relsXml) files['xl/_rels/workbook.xml.rels'] = enc.encode(relsXml.replace(/<Relationship[^>]*calcChain\.xml[^>]*\/>/g, ''));
+    }
+    const entries = Object.keys(files).map(name => ({ name, bytes: files[name] }));
+    const blob = this.zipBuild(entries, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    blob._devalued = done;
+    return blob;
+  }
   // Colonnes (index 0-based) portant une formule <f> sur chaque ligne séquentielle de la feuille,
   // lues directement du XML — readWorkbook ne restitue que les valeurs, pas la présence de formule.
   async _sheetFormulaCols(buf, sheetName) {
@@ -4276,7 +4395,7 @@ class Component {
       out.onSraClose = () => this.closeStockRoomAlert();
     }
     if (wp) {
-      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'verif' ? `Appliquer les corrections dans « ${wp.fileName} » ?` : wp.kind === 'paiementClient' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiementFourn' ? `Marquer la facture fournisseur « ${wp.refLabel} » comme payée ?` : wp.kind === 'avoirManuel' ? `Créer un avoir pour « ${wp.refLabel} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
+      out.wpHeading = wp.kind === 'stock' ? `Remplir le stock de la semaine dans « ${wp.fileName} » ?` : wp.kind === 'verif' ? `Appliquer les corrections dans « ${wp.fileName} » ?` : wp.kind === 'paiementClient' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'devalue' ? `Remplacer les formules par leur valeur dans « ${wp.fileName} » ?` : wp.kind === 'paiementFourn' ? `Marquer la facture fournisseur « ${wp.refLabel} » comme payée ?` : wp.kind === 'avoirManuel' ? `Créer un avoir pour « ${wp.refLabel} » ?` : wp.kind === 'cheque' ? `Compléter la ligne du chèque dans « ${wp.fileName} » ?` : wp.kind === 'annule' ? (wp.restore ? `Rétablir la ligne « ${wp.refLabel} » ?` : `Annuler la ligne « ${wp.refLabel} » ?`) : wp.kind === 'encaisse' ? `Marquer le chèque de la facture « ${wp.refLabel} » comme encaissé ?` : wp.kind === 'chqannule' ? `Annuler le chèque de la facture « ${wp.refLabel} » ?` : wp.kind === 'chqmodif' ? `Modifier le moyen de paiement de la facture « ${wp.refLabel} » ?` : wp.kind === 'paiement' ? `Enregistrer le paiement de la facture « ${wp.refLabel} » ?` : (wp.update ? `Mettre à jour le dossier ${wp.updateNum || ''} dans « ${wp.fileName} » ?` : `Ajouter cette ligne à « ${wp.fileName} » ?`);
       out.wpSubText = wp.kind === 'stock'
         ? `${wp.title || ''} — je remplis le poids et le prix par espèce/calibre. Le prix moyen se recalcule tout seul (formule non touchée). Sauvegarde datée avant l'écriture.`
         : wp.kind === 'verif'
@@ -4305,7 +4424,7 @@ class Component {
       out.wpFileName = wp.fileName; out.wpSheetName = wp.sheetName; out.wpExcelRow = wp.excelRow;
       out.wpRows = (wp.rows || []).map(r => ({ label: r.label, col: r.col, value: r.value }));
       out.wpStatus = wp.status || ''; out.wpError = wp.error || ''; out.wpBusy = wp.status === 'writing';
-      out.wpBtnLabel = wp.status === 'writing' ? 'Écriture…' : (wpLocked ? '↻ Réessayer' : wp.kind === 'annule' ? (wp.restore ? 'Confirmer le rétablissement' : "Confirmer l'annulation") : wp.kind === 'encaisse' ? 'Confirmer « Encaissé »' : wp.kind === 'chqannule' ? "Confirmer l'annulation" : wp.kind === 'chqmodif' ? 'Confirmer la modification' : wp.kind === 'paiement' || wp.kind === 'paiementFourn' ? 'Confirmer le paiement' : 'Confirmer et écrire');
+      out.wpBtnLabel = wp.status === 'writing' ? 'Écriture…' : (wpLocked ? '↻ Réessayer' : wp.kind === 'annule' ? (wp.restore ? 'Confirmer le rétablissement' : "Confirmer l'annulation") : wp.kind === 'encaisse' ? 'Confirmer « Encaissé »' : wp.kind === 'chqannule' ? "Confirmer l'annulation" : wp.kind === 'chqmodif' ? 'Confirmer la modification' : wp.kind === 'paiement' || wp.kind === 'paiementFourn' ? 'Confirmer le paiement' : wp.kind === 'devalue' ? 'Confirmer la conversion' : 'Confirmer et écrire');
       out.wpConfirmStyle = wp.status === 'writing'
         ? "padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#8ab89a;border:none;font-family:inherit;cursor:wait"
         : "padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#15803d;border:none;cursor:pointer;font-family:inherit";
@@ -4432,7 +4551,8 @@ class Component {
       }
       // 3) ÉCRITURE (garde anti-formule sur le chemin patch)
       let patched;
-      if (pw.editsBySheet) patched = await this.patchXlsxFile(buf, pw.editsBySheet, { refuseFormula: pw.refuseFormula, markStyle: true, allowFormulaCols: pw.allowFormulaCols, dateCols: pw.dateCols }); // écriture multi-feuilles (stock)
+      if (pw.devalue) { patched = await this._devalueFormulas(buf, pw.devalue); if (!patched) throw new Error('aucune formule convertible — rien n\'a été modifié'); } // formules → valeurs
+      else if (pw.editsBySheet) patched = await this.patchXlsxFile(buf, pw.editsBySheet, { refuseFormula: pw.refuseFormula, markStyle: true, allowFormulaCols: pw.allowFormulaCols, dateCols: pw.dateCols }); // écriture multi-feuilles (stock)
       else if (pw.mode === 'append') patched = await this._appendXlsxRow(buf, pw.sheetName, pw.excelRow, pw.colVals, pw.dateCols && pw.dateCols[pw.sheetName]);
       else { const edits = {}; edits[pw.sheetName] = {}; Object.keys(pw.colVals).forEach(ci => { edits[pw.sheetName][pw.previewIdx + ':' + ci] = pw.colVals[ci]; }); patched = await this.patchXlsxFile(buf, edits, { refuseFormula: pw.refuseFormula, markStyle: true, allowFormulaCols: pw.allowFormulaCols, dateCols: pw.dateCols }); }
       let patchedBuf = await patched.arrayBuffer();
@@ -4450,7 +4570,24 @@ class Component {
       // 4) RELECTURE DE CONTRÔLE (avant même d'écrire le disque : on vérifie le blob produit)
       const wbChk = await this.readWorkbook(patchedBuf.slice(0));
       const mismatches = [];
-      if (pw.editsBySheet) {
+      if (pw.devalue) {
+        // Conversion formules → valeurs : le contrôle est qu'AUCUNE valeur n'a bougé. Seules les
+        // formules doivent avoir disparu ; si un seul chiffre change, on refuse l'écriture.
+        const wbAvant = await this.readWorkbook(buf.slice(0));
+        Object.keys(pw.devalue).forEach(sn => {
+          const a = wbAvant.find(s => s.name === sn), b = wbChk.find(s => s.name === sn);
+          if (!a || !b) { mismatches.push(`feuille « ${sn} » introuvable après conversion`); return; }
+          const n = Math.max(a.rows.length, b.rows.length);
+          for (let r = 0; r < n && mismatches.length < 4; r++) {
+            const ra = a.rows[r] || [], rb = b.rows[r] || [];
+            const m = Math.max(ra.length, rb.length);
+            for (let c = 0; c < m; c++) {
+              const x = ra[c] == null ? '' : String(ra[c]), y = rb[c] == null ? '' : String(rb[c]);
+              if (x !== y) { mismatches.push(`${sn}!${this._colLetter(c + 1)}${r + 1} : ${x || '(vide)'} → ${y || '(vide)'}`); break; }
+            }
+          }
+        });
+      } else if (pw.editsBySheet) {
         (pw.verifyTargets || []).forEach(t => { if (skippedCols[t.sheetName] && skippedCols[t.sheetName].has(t.col)) return; const sh = wbChk.find(s => s.name === t.sheetName); const got = (sh && sh.rows[t.rowIdx]) ? sh.rows[t.rowIdx][t.col] : ''; const exp = String(t.val); const g = String(got == null ? '' : got); if (exp !== g && !(this._vNum(exp) === this._vNum(g) && exp !== '' && g !== '')) mismatches.push(`${t.sheetName}!${this._colLetter(t.col + 1)}${t.rowIdx + 1} attendu ${exp} ≠ lu ${g}`); });
       } else {
         const shChk = wbChk.find(s => s.name === pw.sheetName);
@@ -6464,6 +6601,71 @@ class Component {
       this.setState({ formulaScan: { running: false, done: true, files: res, total, casse, connues, erreur: (e && e.message) || 'erreur' } });
     }
   }
+  // Aperçu de la conversion « formules → valeurs » d'un fichier. RÈGLE ABSOLUE : on ne convertit
+  // QUE les cellules dont la valeur est certaine. Pour chacune, on recalcule la formule de notre
+  // côté et on la compare à celle mise en cache par Excel :
+  //   · les deux concordent            → convertie (valeur sûre, doublement établie) ;
+  //   · notre évaluateur ne comprend pas → convertie AUSSI, mais avec la valeur d'Excel telle quelle,
+  //     et signalée à part pour que tu saches lesquelles ne seront plus recalculées par personne ;
+  //   · les deux divergent             → NON convertie (quelque chose nous échappe) ;
+  //   · aucune valeur en cache          → NON convertie (on ne viderait pas une cellule).
+  async requestDevaluePreview(kind) {
+    const hi = this._writableHandleFor(kind);
+    if (!hi || !hi.handle) { this.setState({ msg: { kind: 'error', text: `Fichier « ${this.writeSourceLabel(kind)} » non connecté.` } }); return; }
+    try {
+      const okPerm = await this._ensureWritePermission(hi.handle);
+      if (!okPerm) { this.setState({ msg: { kind: 'error', text: `Autorisation d'écriture refusée sur « ${hi.name} ».` } }); return; }
+      const file = await hi.handle.getFile();
+      const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
+      const buf = await file.arrayBuffer();
+      const files = await this.unzipAll(buf.slice(0)); const dec = new TextDecoder();
+      const wbXml = dec.decode(files['xl/workbook.xml'] || new Uint8Array());
+      const relMap = this._relMapOf(dec.decode(files['xl/_rels/workbook.xml.rels'] || new Uint8Array()));
+      const sheets = [...wbXml.matchAll(/<sheet[^>]*name="([^"]*)"[^>]*r:id="(rId\d+)"/g)].map(m => ({ name: this.unxml(m[1]), target: relMap[m[2]] }));
+      const cellsBySheet = {}; const detail = [];
+      let nOk = 0, nCache = 0, nEcart = 0, nVide = 0;
+      for (const sh of sheets) {
+        if (!sh.target || !files[sh.target]) continue;
+        const xml = dec.decode(files[sh.target]);
+        // Valeurs de la feuille, pour que l'évaluateur puisse résoudre les références.
+        const vals = {}; const cellRe = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g; let cm;
+        while (cm = cellRe.exec(xml)) {
+          const ref = (cm[1].match(/\br="([A-Z]+\d+)"/) || [, ''])[1]; if (!ref) continue;
+          const v = ((cm[2] || '').match(/<v>([\s\S]*?)<\/v>/) || [, ''])[1];
+          if (v !== '') vals[ref] = v;
+        }
+        const at = r => vals[r];
+        cellRe.lastIndex = 0;
+        while (cm = cellRe.exec(xml)) {
+          const body = cm[2] || ''; if (!/<f[\s>/]/.test(body)) continue;
+          const ref = (cm[1].match(/\br="([A-Z]+\d+)"/) || [, ''])[1]; if (!ref) continue;
+          const f = this.unxml((body.match(/<f[^>]*>([\s\S]*?)<\/f>/) || [, ''])[1]);
+          const cache = (body.match(/<v>([\s\S]*?)<\/v>/) || [, ''])[1];
+          if (cache === '' || /#/.test(cache)) { nVide++; detail.push({ sheet: sh.name, ref, f, statut: 'ignoree', note: cache === '' ? 'aucune valeur calculée' : `erreur ${cache}` }); continue; }
+          const mine = this._evalFormula(f, at);
+          const cn = parseFloat(String(cache).replace(',', '.'));
+          if (mine != null && isFinite(cn) && Math.abs(mine - cn) > 0.005) { nEcart++; detail.push({ sheet: sh.name, ref, f, statut: 'ecart', note: `Excel dit ${cache}, je calcule ${mine}` }); continue; }
+          (cellsBySheet[sh.name] = cellsBySheet[sh.name] || new Set()).add(ref);
+          if (mine != null) { nOk++; detail.push({ sheet: sh.name, ref, f, statut: 'sure', note: `valeur ${cache} confirmée` }); }
+          else { nCache++; detail.push({ sheet: sh.name, ref, f, statut: 'cache', note: `valeur ${cache} d'Excel, non revérifiable` }); }
+        }
+      }
+      const total = nOk + nCache;
+      if (!total) { this.setState({ msg: { kind: nEcart || nVide ? 'error' : 'ok', text: nEcart || nVide ? `Aucune formule convertible dans « ${hi.name} » : ${nEcart} écart(s), ${nVide} sans valeur exploitable.` : `Aucune formule à convertir dans « ${hi.name} ».` } }); return; }
+      this._pendingWrite = { kind, buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: Object.keys(cellsBySheet).join(', '), devalue: cellsBySheet, after: () => this.runFormulaScan() };
+      this.setState({ writePreview: { kind: 'devalue', fileName: hi.name, sheetName: Object.keys(cellsBySheet).join(', '), excelRow: null, status: null,
+        title: `${total} formule(s) remplacées par leur valeur`,
+        rows: [
+          { label: '✔ Valeurs confirmées par recalcul', col: '—', value: `${nOk} cellule(s) — je retrouve exactement le résultat d'Excel` },
+          { label: '≈ Valeurs reprises d\'Excel sans recalcul', col: '—', value: `${nCache} cellule(s) — formule trop complexe pour moi : la valeur est celle d'Excel, mais PLUS PERSONNE ne la recalculera ensuite` },
+          { label: '✖ Laissées en formule (écart détecté)', col: '—', value: `${nEcart} cellule(s) — mon calcul ne correspond pas à Excel, on n'y touche pas` },
+          { label: '✖ Laissées en formule (rien à figer)', col: '—', value: `${nVide} cellule(s) — sans valeur calculée ou en erreur` },
+        ] } });
+      this._devalueDetail = detail;
+    } catch (e) {
+      this.setState({ msg: { kind: 'error', text: `Analyse impossible : ${(e && e.message) || 'erreur'}. Rien n'a été modifié.` } });
+    }
+  }
   // Le tableau de bord sait-il recalculer cette colonne par lui-même ? Seules ces formules-là
   // pourront un jour être remplacées par leur valeur sans que la cellule ne se fige : la règle est
   // déjà écrite dans le code et rejouée à chaque écriture.
@@ -7433,6 +7635,11 @@ class Component {
       : `${fsTotal} cellule(s) en formule — ${fsConnues} que le tableau de bord sait déjà recalculer, ${fsTotal - fsConnues} dont la règle lui est inconnue${fsCasse ? `, dont ${fsCasse} cassée(s) (#REF!)` : ''}.`;
     const fsFiles = (fs2 && fs2.files ? fs2.files : []).map(f => ({
       label: f.label, name: f.absent ? 'non connecté' : (f.erreur ? `illisible : ${f.erreur}` : f.name),
+      // Conversion proposée seulement là où il y a effectivement des formules à convertir.
+      peutConvertir: !f.absent && !f.erreur && f.sheets.length > 0,
+      convertLabel: `Remplacer les formules par leur valeur — ${f.label}`,
+      onConvert: () => this.requestDevaluePreview(f.kind),
+      convertStyle: `padding:8px 14px;border-radius:9px;font-size:12.5px;font-weight:700;color:#fff;background:${amber};border:none;cursor:pointer;font-family:inherit`,
       vide: !f.sheets.length,
       videTxt: f.absent ? 'Fichier non connecté — rien à analyser.' : (f.erreur ? 'Lecture impossible.' : 'Aucune formule dans ce fichier.'),
       sheets: f.sheets.map(s => ({

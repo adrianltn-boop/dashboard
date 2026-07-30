@@ -2253,6 +2253,12 @@
                 <sc-if value="{{ f.vide }}" hint-placeholder-val="{{ false }}">
                   <div style="padding:12px 14px;font-size:12.5px;color:#9aa7b8">{{ f.videTxt }}</div>
                 </sc-if>
+                <sc-if value="{{ f.peutConvertir }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding:11px 14px;border-top:1px solid #f4f6fa;background:#fff7ed;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+                    <div style="font-size:12px;color:#8a5a1a;line-height:1.5">Un aperçu détaillé vous sera montré avant toute écriture, et une sauvegarde datée est faite automatiquement.</div>
+                    <button style="{{ f.convertStyle }}" onclick="{{ f.onConvert }}">{{ f.convertLabel }}</button>
+                  </div>
+                </sc-if>
                 <sc-for list="{{ f.sheets }}" as="s" hint-placeholder-count="2">
                   <div style="padding:10px 14px;border-top:1px solid #f4f6fa">
                     <div style="font-size:12.5px;font-weight:600;color:#3a4a5e;margin-bottom:6px">Feuille « {{ s.sheet }} »</div>
