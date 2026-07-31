@@ -7720,6 +7720,7 @@ class Component {
     const prev = this._loadSeenSnap();
     const own = !!this._ownWrite; if (own) this._ownWrite = false;
     const groups = [];
+    const resyncs = []; // fichiers dont la photo de référence était visiblement caduque
     // Premier démarrage (pas de photo de référence) ou écriture faite par le tableau de bord
     // lui-même : on ne compare pas. Sans ça, tout l'historique apparaîtrait comme « ajouté » au
     // premier lancement, et chaque enregistrement déclencherait une alerte.
@@ -7741,6 +7742,21 @@ class Component {
         if (b[k]) return;
         items.push({ type: 'suppression', ref: k, name: a[k].__name || '', changes: [], links: spec.linked ? this._achatLinks(k, a[k]) : [] });
       });
+      // GARDE-FOU « photo de référence caduque ». Au-delà d'un seuil, on ne liste RIEN.
+      // Vécu le 31/07 : « 1818 modifications faites en dehors du tableau de bord », toutes en
+      // LIGNE AJOUTÉE, sur des factures anciennes que personne n'avait touchées — 1818, c'est le
+      // fichier entier. La comparaison protégeait déjà le tout premier démarrage (prev nul) et les
+      // sources vides, mais pas le cas d'une photo devenue caduque : poste différent, données
+      // locales réinitialisées, ou lecture qui remonte soudain beaucoup plus de lignes qu'avant
+      // (colonne clé enfin détectée, feuille complète relue). Le journal doit rester lisible :
+      // s'il noie un vrai changement sous mille faux, on cesse de le lire et il ne sert plus à rien.
+      // Seuil : 30 % des lignes de la source, ou 50 lignes, le plus GRAND des deux.
+      const taille = Math.max(Object.keys(a).length, Object.keys(b).length);
+      const seuil = Math.max(50, Math.ceil(taille * 0.3));
+      if (items.length >= seuil) {
+        resyncs.push({ label: spec.label, nb: items.length, taille });
+        return; // photo mise à jour plus bas ; rien n'est demandé à l'utilisatrice
+      }
       if (items.length) groups.push({ src: spec.src, label: spec.label, kind: spec.kind, items });
     });
     this._saveSeenSnap(cur); // la photo est mise à jour même si on signale : on n'alerte qu'une fois
@@ -7753,9 +7769,14 @@ class Component {
         links: [`Fichier « ${l.file} », feuille « ${l.sheet} », ligne ${l.excelRow}`, 'Aucun achat pêcheur ne correspond : liez cette ligne depuis Achat pêcheur → « Lier une ligne de stock en attente »'] })) });
     const total = groups.reduce((s, g) => s + g.items.length, 0);
     if (groups.length) this.setState({ extChanges: { groups, total } });
+    // Message FRANC, sans rien demander : la nouvelle photo vient d'être enregistrée ci-dessus.
+    if (resyncs.length) {
+      const det = resyncs.map(r => `${r.label} (${r.nb} lignes sur ${r.taille})`).join(', ');
+      this.setState({ msg: { kind: 'info', text: `Ce fichier semble avoir été relu de zéro ou remplacé : ${det}. Je n'affiche pas ces lignes comme des modifications — ce serait faux — et j'enregistre la nouvelle référence. Le prochain contrôle repartira de là.` } });
+    }
     // Mémorisé pour le bandeau de relecture : il doit pouvoir redire ce qui a changé même après un
     // « J'ai vu », sans recalculer ni dupliquer la modale (voir relectureAuto / extGroups).
-    this._lastDetect = { groups, total };
+    this._lastDetect = { groups, total, resyncs };
     return this._lastDetect;
   }
   ackExternalChanges() { this.setState({ extChanges: null }); }
