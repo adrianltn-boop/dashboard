@@ -501,6 +501,15 @@
                 <span style="display:flex;gap:5px;justify-content:flex-end"><button style="{{ payRowBtnStyle }}" onclick="{{ r.onEdit }}" title="Modifier">✎</button></span>
               </div>
             </sc-for>
+            <sc-if value="{{ payPager.show }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 4px;border-top:1px solid #f1f4f8">
+                <span style="font-size:12px;color:#8291a5">{{ payPager.info }}</span>
+                <div style="display:flex;gap:8px">
+                  <button style="{{ payPager.prevStyle }}" onclick="{{ payPager.onPrev }}">◀</button>
+                  <button style="{{ payPager.nextStyle }}" onclick="{{ payPager.onNext }}">▶</button>
+                </div>
+              </div>
+            </sc-if>
             <sc-if value="{{ payListEmpty }}" hint-placeholder-val="{{ false }}">
               <div style="padding:26px 4px;text-align:center;color:#9aa7b8;font-size:12.5px">{{ payEmptyMsg }}</div>
             </sc-if>
