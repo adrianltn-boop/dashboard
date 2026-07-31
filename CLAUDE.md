@@ -216,6 +216,29 @@
   le fichier fait foi. Sans cette 2e passe, un correctif
   ne vaut que pour l'avenir et laisse les doublons déjà
   présents chez l'utilisatrice.
+- « 7000 et plus », TROISIÈME signalement : le correctif de
+  20dbcfc a été REJOUÉ dans les conditions de Faustine
+  (saisies locales portant des numéros absents du fichier,
+  doublons déjà créés, saisie sans numéro). Il tient : le
+  doublon accroché au 7023 disparaît par la 2e passe de
+  dédoublonnage (signature métier), la vraie ligne du fichier
+  est conservée, et le bouton de nettoyage retire le reste.
+  Ce qui manquait n'était pas du code mais du SIGNALEMENT :
+  une saisie locale que le fichier ne recoupe NI par le
+  numéro NI par la signature reste visible (on n'efface
+  jamais d'office une vente peut-être réelle), et rien ne le
+  disait — Faustine la retrouvait dans ses chiffres.
+  LIVRÉ : bandeau orange sur le tableau de bord dès qu'il
+  reste des saisies fantômes — nombre, part de doublons,
+  numéros fautifs cités, nettoyage en un clic, masquable
+  pour la session (alertsHidden.fantomes). Un problème
+  silencieux qui revient trois fois est un problème de
+  signalement autant que de code.
+- PIÈGE rencontré en posant ce bandeau : `fantomesInfo` était
+  déclaré tout en bas de renderVals alors que les alertes du
+  tableau de bord sont construites bien plus haut. Le
+  déplacer était OBLIGATOIRE (zone morte temporelle : une
+  seule portée pour toutes les const de renderVals).
 - Bouton « Saisies de vente fantômes » (Paramètres) :
   ne JAMAIS l'activer quand `state.ventes` est vide ou
   nul — toutes les saisies passeraient pour fantômes et

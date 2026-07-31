@@ -203,6 +203,17 @@
 
         <sc-if value="{{ isOverview }}" hint-placeholder-val="{{ true }}">
           <div style="padding:14px 24px 0">
+            <sc-if value="{{ fantomesBanniere }}" hint-placeholder-val="{{ false }}">
+              <div style="{{ fantomesBanniereStyle }}" data-help="Des ventes mémorisées par le tableau de bord n'existent pas dans votre fichier Excel : elles gonflent vos chiffres. Le bouton ouvre la liste, vous décidez, et seule la mémoire du tableau de bord est nettoyée." data-help-title="Saisies de vente fantômes">
+                <span style="font-size:17px;flex-shrink:0">🧹</span>
+                <div style="flex:1 1 320px;min-width:0">
+                  <div style="font-size:13px;font-weight:700;color:#9a3412">{{ fantomesBanniereTitre }}</div>
+                  <div style="font-size:12px;color:#7c4a1e;margin-top:4px;line-height:1.55">{{ fantomesBanniereTexte }}</div>
+                </div>
+                <button style="{{ fantomesBanniereBtnStyle }}" onclick="{{ onFantomesBanniere }}">Examiner et nettoyer</button>
+                <button title="Masquer cette alerte pour la session" style="{{ fantomesBanniereHideStyle }}" onclick="{{ onFantomesBanniereHide }}">✕</button>
+              </div>
+            </sc-if>
             <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px" data-help="Boutons de saisie rapide : lancez directement un achat pêcheur, une vente, l'enregistrement d'un paiement ou l'agenda, sans passer par le menu." data-help-title="Saisie rapide">
               <sc-for list="{{ cockpitActions }}" as="a" hint-placeholder-count="4">
                 <button style="{{ a.style }}" onclick="{{ a.onClick }}">{{ a.label }}</button>

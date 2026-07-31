@@ -385,7 +385,7 @@ class Component {
   static PAY_OVERRIDE_KEY = 'avPaymentOverrides';
   static MAP_KEY = 'avMappings';
   static AVWMAP_KEY = 'avWriteMap';
-  static APP_VERSION = 'version 27'; // affichée sous le nom — permet de vérifier qu'on est sur le bon fichier
+  static APP_VERSION = 'version 28'; // affichée sous le nom — permet de vérifier qu'on est sur le bon fichier
   static CMP_KEY = 'avComptable';
   static GRENKE_KEY = 'avGrenke';
   static GLINK_KEY = 'avGrenkeLinks';
@@ -8720,6 +8720,28 @@ class Component {
       cockAct('💳 Enregistrer un paiement', '#1a56db', { view: 'Relance' }),
       cockAct('📅 Agenda', '#6d28d9', { view: 'Agenda' }),
     ];
+    // Saisies de vente fantômes (mémoïsé : compare toutes les saisies locales au fichier source,
+    // inutile de refaire ce travail à chaque frappe clavier). DÉCLARÉ ICI, avant les alertes du
+    // tableau de bord qui s'en servent — PIÈGE de la « zone morte temporelle » de renderVals : ses
+    // centaines de const partagent UNE portée, une const lue avant sa ligne lève un ReferenceError.
+    const fantomesInfo = this._memo('fantomes', [this.state.ventes, this.state.ventesSaisie], () => this.saisiesFantomes());
+    // BANDEAU du tableau de bord : des saisies locales que le fichier source ne connaît pas (les
+    // fameux « 7000 et plus ») faussent les chiffres en silence. Elles ne peuvent pas être effacées
+    // d'office — certaines sont peut-être de vraies ventes pas encore écrites — mais on refuse
+    // désormais de laisser Faustine les découvrir dans ses totaux : on le DIT, et le nettoyage est
+    // à un clic. Trois signalements dans le carnet d'erreurs pour le même sujet, c'est autant un
+    // problème de signalement qu'un problème de code.
+    const fantLignes = fantomesInfo.pret ? fantomesInfo.lignes : [];
+    const fantDoublons = fantLignes.filter(v => v._motif === 'doublon').length;
+    const fantNums = fantLignes.map(v => String(v.num || '').trim()).filter(Boolean);
+    const fantomesBanniere = !!(fantLignes.length && !(this.state.alertsHidden || {}).fantomes);
+    const fantomesBanniereTitre = `${fantLignes.length} saisie${fantLignes.length > 1 ? 's' : ''} de vente que votre fichier ne connaît pas`;
+    const fantomesBanniereTexte = `${fantDoublons ? `${fantDoublons} ${fantDoublons > 1 ? 'sont des doublons' : 'est un doublon'} d'une vente déjà présente dans le fichier` : 'Aucune n’est un doublon repéré'}${fantNums.length ? ` (numéros ${fantNums.slice(0, 6).join(', ')}${fantNums.length > 6 ? '…' : ''})` : ''}. Tant qu'elles sont là, elles comptent dans vos chiffres. Le nettoyage ne touche que la mémoire du tableau de bord, jamais vos fichiers Excel.`;
+    const fantomesBanniereStyle = 'display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;padding:13px 16px;border-radius:12px;border:1px solid #f0c8a0;background:#fff7ed;margin-bottom:12px';
+    const fantomesBanniereBtnStyle = 'flex-shrink:0;border:none;background:#b45309;color:#fff;padding:9px 15px;border-radius:9px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit';
+    const fantomesBanniereHideStyle = 'flex-shrink:0;width:22px;height:22px;border-radius:7px;border:none;background:rgba(14,27,46,.06);color:#69788c;font-size:12px;cursor:pointer;font-family:inherit;line-height:1';
+    const onFantomesBanniere = () => this.openFantomes();
+    const onFantomesBanniereHide = () => this.setState({ alertsHidden: { ...(this.state.alertsHidden || {}), fantomes: true } });
     // Chaque alerte a une croix ✕ : masquée pour la session (revient à la prochaine ouverture).
     const alertsHidden = this.state.alertsHidden || {};
     const alertCard = (hideKey, icon, tone, bg, bd, text, sub, patch, cta) => ({ icon, tone, bg, bd, text, sub, cta, onClick: () => this.setState(patch), onHide: () => this.setState({ alertsHidden: { ...(this.state.alertsHidden || {}), [hideKey]: true } }) });
@@ -11476,10 +11498,6 @@ class Component {
 
     const ctxStop = e => { if (e) e.stopPropagation(); };
 
-    // Saisies de vente fantômes (mémoïsé : compare toutes les saisies locales au fichier source,
-    // inutile de refaire ce travail à chaque frappe clavier).
-    const fantomesInfo = this._memo('fantomes', [this.state.ventes, this.state.ventesSaisie], () => this.saisiesFantomes());
-
     // ---- DOCUMENTS ÉDITÉS : pop-up « Imprimer ou PDF ? » et réglages par type ----
     // Le nom proposé est modifiable AVANT l'édition : c'est ce nom que Chrome/Edge reprend dans
     // « Enregistrer au format PDF » (via le <title> du document).
@@ -11560,6 +11578,7 @@ class Component {
       showReport, reportBtnStyle, onOpenReport, reportOpen, onCloseReport, onGenerateReport, reportSections, reportNote, onReportNote, reportStop, reportNotesOn, reportPeriodLabel: periodLabel,
       reportHeader, onReportHeader, reportHeaderSave, onToggleSaveHeader, onSaveReport, reportGhostStyle,
       showOpenSource, openSourceLabel, openSourceStyle, onOpenSource,
+      fantomesBanniere, fantomesBanniereTitre, fantomesBanniereTexte, fantomesBanniereStyle, fantomesBanniereBtnStyle, fantomesBanniereHideStyle, onFantomesBanniere, onFantomesBanniereHide,
       kpis, treasury, cockpitActions, cockpitAlerts, cockpitAlertsEmpty, tableTitle, resultLabel, categories, filtered, moreLabel, rowPad, sideCards, dashEmpty, noteText, onNoteChange,
       q, onSearch, searchStyle, txPager,
       isAchatView, isGenericTable, achatRows,
