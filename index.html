@@ -458,7 +458,7 @@
           <div style="font-size:14px;font-weight:700;color:#0e1b2e;margin-bottom:12px">Enregistrement d'un paiement</div>
           <div style="display:flex;gap:12px;flex-wrap:wrap">
             <div style="flex:0 0 88px"><label style="{{ payLbl }}">ID Facture</label><input style="{{ payInputN }};background:#f4f7fb;color:#69788c" value="{{ payDraft.id }}" readonly></div>
-            <div style="flex:1 1 140px"><label style="{{ payLbl }}">Numéro facture</label><input style="{{ payInput }}" value="{{ payDraft.num }}" oninput="{{ onPayNum }}" placeholder="ex. F-2026-142"></div>
+            <div style="flex:1 1 140px"><label style="{{ payLbl }}">Numéro facture <span style="font-weight:400;text-transform:none;letter-spacing:0">(ou ID)</span></label><input style="{{ payInput }}" value="{{ payDraft.num }}" oninput="{{ onPayNum }}" placeholder="ex. F-2026-142"></div>
             <div style="flex:2 1 200px"><label style="{{ payLbl }}">Nom client</label><input style="{{ payInput }}" value="{{ payDraft.client }}" oninput="{{ onPayClient }}" placeholder="Nom du client"></div>
             <div style="flex:1 1 120px"><label style="{{ payLbl }}">Montant TTC</label><input style="{{ payInputN }}" type="text" inputmode="decimal" value="{{ payDraft.ttc }}" oninput="{{ onPayTtc }}" placeholder="0"></div>
             <div style="flex:1 1 110px"><label style="{{ payLbl }}">Avoir</label><input style="{{ payInputN }}" type="text" inputmode="decimal" value="{{ payDraft.avoir }}" oninput="{{ onPayAvoir }}" placeholder="0"></div>
@@ -470,6 +470,10 @@
             <div style="flex:1 1 130px"><label style="{{ payLbl }}">Date du paiement</label><input style="{{ payInput }}" type="date" value="{{ payDraft.datePay }}" onchange="{{ onPayDatePay }}" onblur="{{ onDateBlur }}"></div>
             <div style="flex:1 1 150px"><label style="{{ payLbl }}">État (calculé)</label><div style="{{ payInput }};display:flex;align-items:center;background:#f4f7fb"><span style="{{ payDraftEtatStyle }}">{{ payDraft.etat }}</span></div></div>
           </div>
+          <sc-if value="{{ payLookupShow }}" hint-placeholder-val="{{ false }}">
+            <div style="{{ payLookupStyle }}">{{ payLookupText }}</div>
+          </sc-if>
+          <div style="font-size:11.5px;color:#8291a5;margin-top:8px">{{ payRegleHint }}</div>
           <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;margin-top:14px;padding-top:12px;border-top:1px solid #f1f4f8;flex-wrap:wrap">
             <div style="font-size:13px;color:#69788c">Solde restant <b style="font-family:'IBM Plex Mono',monospace;font-size:17px;color:#0e1b2e;margin-left:6px">{{ payDraftSolde }}</b> <span style="font-size:11.5px;color:#9aa7b8">(TTC − avoir − réglé)</span></div>
             <div style="display:flex;gap:8px"><button style="{{ payResetStyle }}" onclick="{{ onPayReset }}">Réinitialiser</button><button style="{{ paySaveStyle }}" onclick="{{ onPayCommit }}">{{ paySaveLabel }}</button></div>

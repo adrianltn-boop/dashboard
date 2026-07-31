@@ -290,6 +290,38 @@
   d'état, _refreshChqLiveStatus) ne peint pas le formulaire
   en rouge : sans ça, la simple sélection d'une facture
   affichait une erreur avant tout clic sur un bouton.
+- Suivi de paiement, AUTO-REMPLISSAGE par le n° de facture
+  (demande de Faustine : « que je ne rentre que le
+  paiement »). « ID Facture » et « Numéro de facture » sont
+  DEUX colonnes distinctes du fichier de ventes
+  (writeFieldsFor('ventes')) et RIEN ne permet de déduire
+  l'une de l'autre : les lignes anciennes, saisies à la main
+  dans Excel, ont souvent un ID vide ou sans rapport (c'est
+  d'ailleurs pour ça que requestPaiementClientPreview
+  cherche la ligne par ID PUIS par numéro). On n'écrase donc
+  JAMAIS la colonne ID et on n'invente aucun identifiant :
+  la RECHERCHE accepte l'un OU l'autre (_factureParRef, clé
+  invoiceKey), et l'ID affiché est celui de la facture
+  trouvée. Une facture repérée dans l'onglet « Factures »
+  mais absente du suivi n'a PAS d'ID : on le dit, on n'en
+  fabrique pas (règle des « 7000 »).
+  Rien trouvé ⇒ RIEN de pré-rempli, et ce qu'un numéro
+  précédent avait rempli est effacé (`_auto` / `_idAvant`
+  dans le brouillon) — sinon l'écran montrerait les données
+  d'une AUTRE facture sous le numéro courant.
+  Ces clés internes ne sortent jamais du brouillon :
+  commitPay reconstruit `rec` champ par champ.
+- commitPay : `+d.id || _payNextId()` renvoyait NaN sur un
+  ID NON NUMÉRIQUE (fréquent sur les lignes anciennes) et le
+  remplaçait par un numéro FABRIQUÉ, qui ne correspondait
+  alors à aucune ligne du fichier. Même famille que les
+  « 7000 ». L'ID est repris tel quel, chaîne comprise.
+- Le champ « Montant réglé » du suivi est un TOTAL cumulé
+  (c'est lui qui part dans la colonne Excel), pas le dernier
+  encaissement. L'auto-remplissage le pré-remplit avec le
+  déjà-réglé du fichier et l'écrit noir sur blanc sous le
+  formulaire : sans cette phrase, saisir « le chèque du
+  jour » écraserait les règlements précédents.
 - Journal des modifications, photo de référence caduque :
   au-delà de 30 % des lignes de la source OU 50 lignes
   (le plus grand des deux), ne RIEN lister. Poste

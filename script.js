@@ -224,7 +224,7 @@ class Component {
     heures: {}, heuresMois: {}, filePaths: {}, annule: {}, hRoster: [], hFocus: null, hMode: 'semaine', hRange: null, hCollapse: {}, hDelAsk: null, hNuit: false,
     empDocs: {}, empDelDoc: null, bankSalaryEmp: '', bankSalaryMonth: '',
     agenda: [], agendaMonth: null, agendaEdit: null, agendaDelAsk: null,
-    payTrack: [], payDraft: null,
+    payTrack: [], payDraft: null, payLookup: null,
     restartRun: null, verifPending: null, extChanges: null, relecture: null, venteAvoirAsk: null, venteAvoirDispo: null, avoirManuel: null, ficheTiers: null,
     ventesSaisie: [], venteDraft: null,
     grenkeMan: [], grkDraft: null, grkDelAsk: null,
@@ -385,7 +385,7 @@ class Component {
   static PAY_OVERRIDE_KEY = 'avPaymentOverrides';
   static MAP_KEY = 'avMappings';
   static AVWMAP_KEY = 'avWriteMap';
-  static APP_VERSION = 'version 26'; // affichée sous le nom — permet de vérifier qu'on est sur le bon fichier
+  static APP_VERSION = 'version 27'; // affichée sous le nom — permet de vérifier qu'on est sur le bon fichier
   static CMP_KEY = 'avComptable';
   static GRENKE_KEY = 'avGrenke';
   static GLINK_KEY = 'avGrenkeLinks';
@@ -911,9 +911,62 @@ class Component {
   _payNextId() { const ids = this.payTrackRows().map(r => +r.id || 0); return (ids.length ? Math.max(...ids) : 141) + 1; }
   _payTodayIso() { const T = Component.TODAY; return `${T.y}-${this.dd(T.m)}-${this.dd(T.d)}`; }
   payDefault() { return { id: this._payNextId(), num: '', client: '', ttc: '', avoir: '', dateFac: this._payTodayIso(), dateEch: '', regle: '', datePay: '', etat: Component.ETAT_ATTENTE, editing: false }; }
-  setPayField(k, v) { const d = this.state.payDraft || this.payDefault(); this.setState({ payDraft: { ...d, [k]: v } }); }
-  resetPayDraft() { this.setState({ payDraft: this.payDefault() }); this.refreshPayIdFacture(); }
-  editPayRow(id) { const r = this.payTrackRows().find(x => String(x.id) === String(id)); if (!r) return; this.setState({ payDraft: { ...r, ttc: r.ttc === '' ? '' : String(r.ttc), avoir: r.avoir === '' ? '' : String(r.avoir), regle: r.regle === '' ? '' : String(r.regle), editing: true } }); }
+  setPayField(k, v) {
+    const d = this.state.payDraft || this.payDefault(); const patch = { ...d, [k]: v };
+    if (k === 'num') { this._payAutoFill(patch); return; }
+    this.setState({ payDraft: patch });
+  }
+  // ---------- Auto-remplissage depuis le numéro de facture ----------
+  // Demande de Faustine : « quand je rentre le numéro de facture, que toutes les informations de la
+  // facture se mettent automatiquement, pour que je ne rentre que le paiement ».
+  //
+  // POINT DE CONCEPTION : « ID Facture » et « Numéro de facture » sont DEUX colonnes distinctes du
+  // fichier de ventes (writeFieldsFor('ventes')), et RIEN ne permet de déduire l'une de l'autre —
+  // les anciennes lignes saisies à la main dans Excel ont souvent un ID vide, ou sans rapport.
+  // On n'écrase donc JAMAIS la colonne ID du fichier et on ne fabrique AUCUN identifiant (règle des
+  // « 7000 » : une clé interne ne doit ni s'afficher comme un ID, ni atteindre une cellule Excel).
+  // Ce qui est livré : la RECHERCHE accepte l'un OU l'autre, et l'ID affiché est celui de la facture
+  // réellement trouvée.
+  //
+  // Source : la feuille « Suivi des paiements » relue du fichier (payTrack) en priorité — elle porte
+  // le règlement, l'avoir et l'échéance. Repli sur l'onglet « Factures » (state.ventes) pour les
+  // factures qui n'ont pas encore de ligne de suivi.
+  _factureParRef(saisi) {
+    const k = this.invoiceKey(saisi); if (!k) return null;
+    const rows = this.payTrackRows();
+    const hit = rows.find(r => this.invoiceKey(r.num) === k) || rows.find(r => this.invoiceKey(r.id) === k);
+    if (hit) return { source: 'suivi', id: hit.id == null ? '' : hit.id, num: hit.num || '', client: hit.client || '', ttc: +hit.ttc || 0, avoir: +hit.avoir || 0, dateFac: hit.dateFac || '', dateEch: hit.dateEch || '', regle: +hit.regle || 0, datePay: hit.datePay || '' };
+    const f = (this.state.ventes || []).find(x => this.invoiceKey(x.ref) === k);
+    // Pas d'ID inventé pour ce repli : la facture n'a pas (encore) de ligne dans le suivi.
+    if (f) return { source: 'factures', id: '', num: f.ref || '', client: f.partner || '', ttc: Math.abs(+f.ttc || 0), avoir: 0, dateFac: f.d || '', dateEch: f.due || '', regle: +f.paid || 0, datePay: '' };
+    return null;
+  }
+  _payAutoFill(patch) {
+    const ref = String(patch.num == null ? '' : patch.num).trim();
+    const trouve = ref ? this._factureParRef(ref) : null;
+    const dejaAuto = !!patch._auto;
+    if (!trouve) {
+      // Rien trouvé : on ne pré-remplit RIEN de faux, et on retire ce qu'un numéro précédent avait
+      // rempli automatiquement (le laisser afficherait les données d'une AUTRE facture).
+      const nettoye = dejaAuto
+        ? { ...patch, client: '', ttc: '', avoir: '', dateFac: '', dateEch: '', regle: '', datePay: '', id: patch._idAvant != null ? patch._idAvant : patch.id, _auto: null, _idAvant: null }
+        : { ...patch, _auto: null };
+      this.setState({ payDraft: nettoye, payLookup: ref ? { found: false, ref } : null });
+      return;
+    }
+    const p = { ...patch,
+      id: (trouve.id !== '' && trouve.id != null) ? trouve.id : patch.id,
+      client: trouve.client, ttc: trouve.ttc ? String(trouve.ttc) : '',
+      avoir: trouve.avoir ? String(trouve.avoir) : '',
+      dateFac: trouve.dateFac, dateEch: trouve.dateEch,
+      regle: trouve.regle ? String(trouve.regle) : '',
+      datePay: trouve.datePay,
+      _auto: this.invoiceKey(ref), _idAvant: dejaAuto ? patch._idAvant : patch.id };
+    const solde = Math.round((trouve.ttc - trouve.avoir - trouve.regle) * 100) / 100;
+    this.setState({ payDraft: p, payLookup: { found: true, ref, ...trouve, solde } });
+  }
+  resetPayDraft() { this.setState({ payDraft: this.payDefault(), payLookup: null }); this.refreshPayIdFacture(); }
+  editPayRow(id) { const r = this.payTrackRows().find(x => String(x.id) === String(id)); if (!r) return; const solde = Math.round(((+r.ttc || 0) - (+r.avoir || 0) - (+r.regle || 0)) * 100) / 100; this.setState({ payDraft: { ...r, ttc: r.ttc === '' ? '' : String(r.ttc), avoir: r.avoir === '' ? '' : String(r.avoir), regle: r.regle === '' ? '' : String(r.regle), editing: true, _auto: null, _idAvant: null }, payLookup: { found: true, ref: r.num || String(r.id), source: 'suivi', id: r.id, num: r.num || '', client: r.client || '', ttc: +r.ttc || 0, avoir: +r.avoir || 0, dateFac: r.dateFac || '', dateEch: r.dateEch || '', regle: +r.regle || 0, datePay: r.datePay || '', solde } }); }
   commitPay() {
     const d = this.state.payDraft || this.payDefault();
     const client = (d.client || '').trim();
@@ -923,7 +976,11 @@ class Component {
     // paramètre qui rendait les états périmés — un paiement enregistré ne mettait pas à jour l'état
     // en fonction de ce qui était réellement réglé/avoir. Même règle que _venteEtat/_etatAttendu.
     const etat = this._paySuiviEtat(num(d.ttc), num(d.avoir), num(d.regle), d.dateEch || '', this._payTodayIso());
-    const rec = { id: +d.id || this._payNextId(), num: (d.num || '').trim(), client, ttc: num(d.ttc), avoir: num(d.avoir), dateFac: d.dateFac || '', dateEch: d.dateEch || '', regle: num(d.regle), datePay: d.datePay || '', etat };
+    // L'ID est REPRIS TEL QUEL (chaîne comprise). `+d.id` renvoyait NaN sur un ID non numérique —
+    // fréquent sur les lignes anciennes — et le remplaçait par un numéro FABRIQUÉ (_payNextId), qui
+    // ne correspondait alors à aucune ligne du fichier (même famille que le bug des « 7000 »).
+    const idRepris = String(d.id == null ? '' : d.id).trim();
+    const rec = { id: idRepris || this._payNextId(), num: (d.num || '').trim(), client, ttc: num(d.ttc), avoir: num(d.avoir), dateFac: d.dateFac || '', dateEch: d.dateEch || '', regle: num(d.regle), datePay: d.datePay || '', etat };
     // Circuit A — le fichier Excel fait foi : la vue locale n'est alimentée qu'APRÈS une écriture
     // confirmée et vérifiée (voir _payAfterWrite). Si l'écriture n'est pas réglée/connectée, on
     // conserve l'ancien comportement purement local pour ne pas bloquer la saisie.
@@ -9072,6 +9129,20 @@ class Component {
     const onPayDatePay = dateH(e => this.setPayField('datePay', e.target.value));
     const onPayCommit = () => this.commitPay();
     const onPayReset = () => this.resetPayDraft();
+    // ─ Auto-remplissage depuis le n° de facture : ce qui a été reconnu, ou franchement rien ─
+    const payLk = this.state.payLookup;
+    const payLookupShow = !!payLk;
+    const payLookupOk = !!(payLk && payLk.found);
+    const payLookupStyle = payLookupOk
+      ? 'margin-top:10px;padding:9px 12px;border-radius:9px;border:1px solid #cfe8d8;background:#eaf7ef;color:#166534;font-size:12.5px;font-weight:600;line-height:1.5'
+      : 'margin-top:10px;padding:9px 12px;border-radius:9px;border:1px solid #f0c8c8;background:#fdeaea;color:#b91c1c;font-size:12.5px;font-weight:600;line-height:1.5';
+    const payLookupText = !payLk ? ''
+      : payLk.found
+        ? `✓ Facture n°${payLk.num || '—'} reconnue${payLk.id !== '' && payLk.id != null ? ` (ID Facture ${payLk.id})` : ' (aucun ID Facture dans le suivi)'} — ${payLk.client || 'client non renseigné'} · TTC ${this.fmt(payLk.ttc)}${payLk.avoir ? ` · avoir ${this.fmt(payLk.avoir)}` : ''} · déjà réglé ${this.fmt(payLk.regle)} · solde ${this.fmt(payLk.solde)}${payLk.dateEch ? ` · échéance ${this._isoToFr(payLk.dateEch)}` : ''}. Il ne reste qu'à saisir le règlement.`
+        : `Aucune facture ne porte le numéro « ${payLk.ref} » dans le fichier de ventes — ni comme numéro de facture, ni comme ID Facture. Rien n'a été pré-rempli : vérifiez le numéro, ou complétez les champs à la main pour créer la ligne.`;
+    const payRegleHint = payLookupOk
+      ? `« Montant réglé » est le TOTAL réglé sur cette facture (déjà ${this.fmt(payLk.regle)} d'après le fichier) : ajoutez-y votre encaissement.`
+      : '« Montant réglé » est le total réglé sur la facture, pas seulement le dernier encaissement.';
     const paySaveLabel = payEditing ? 'Mettre à jour' : '＋ Ajouter la facture';
     const payEmpty = ptRows0.length === 0;
     const payListEmpty = payTrackList.length === 0;
@@ -11529,6 +11600,7 @@ class Component {
       facPager,
       relanceRows, creditSummary, creditRows, creditsEmpty, payPager,
       isSuivi, payTrackList, paySummary, payEmpty, payListEmpty, payEmptyMsg, payDraft, payDraftEtatStyle, payEditing, onPayCommit, onPayReset, paySaveLabel,
+      payLookupShow, payLookupOk, payLookupStyle, payLookupText, payRegleHint,
       onPayNum, onPayClient, onPayTtc, onPayAvoir, onPayDateFac, onPayDateEch, onPayRegle, onPayDatePay,
       payInput, payInputN, payLbl, paySaveStyle, payResetStyle, payRowBtnStyle, payDraftSolde,
       venteAvoirAskOpen, venteAvoirAskText, onVenteAvoirConfirm, onVenteAvoirCancel,
