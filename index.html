@@ -1807,6 +1807,12 @@
     <!-- ============ STOCK (bibliothèque) ============ -->
     <sc-if value="{{ isStock }}" hint-placeholder-val="{{ false }}">
       <div style="padding:0 24px 24px" data-screen-label="Stock" data-help="{{ viewHelp }}" data-help-title="{{ viewTitle }}">
+        <sc-if value="{{ stockRecalcShow }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ stockRecalcStyle }}" data-help="Les totaux de vos fichiers de stock sont recalculés à chaque fois que vous ouvrez cet onglet, à partir des seules cases que vous remplissez à la main. Si quelqu'un ajoute une ligne directement dans Excel, l'écart apparaît ici." data-help-title="Recalcul du stock">
+            <span style="min-width:0"><b>{{ stockRecalcLabel }}</b> — {{ stockRecalcTexte }}</span>
+            <button style="{{ stockRecalcBtnStyle }}" onclick="{{ onStockRecalc }}" title="Relire les fichiers et recalculer tous les totaux">↻ Recalculer</button>
+          </div>
+        </sc-if>
         <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap" data-help="Le hub Stock : « Stock actuel » (ce que vous avez, en direct), « Marges par espèce » (rentabilité par crustacé) et « Historique » (vos inventaires Excel semaine par semaine)." data-help-title="Hub Stock">
           <sc-for list="{{ stockHubTabs }}" as="t" hint-placeholder-count="3"><button style="{{ t.style }}" onclick="{{ t.onClick }}">{{ t.name }}</button></sc-for>
         </div>

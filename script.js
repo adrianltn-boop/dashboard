@@ -6839,6 +6839,9 @@ class Component {
     for (const [name, h] of await this.listFilesDeep(dir, 3)) { if (/\.(xlsx|xlsm)$/i.test(name) && this.matchPrefix(name, prefix)) files.push({ name, handle: h }); }
     if (!files.length) { if (!silent) this.setState({ msg: { kind: 'error', text: `Aucun fichier commençant par « ${prefix} » dans « ${dir.name} ».` } }); return; }
     const list = []; const listEspeces = []; const stockChecks = []; const entryLines = []; let maxMod = 0; this._stockHandles = {};
+    // Contrôle de structure et écart des totaux : calculés dans la MÊME passe de lecture, pour ne
+    // pas relire les fichiers une seconde fois à chaque venue sur l'onglet Stock.
+    const controles = [];
     for (const f of files) {
       try {
         const file = await f.handle.getFile(); maxMod = Math.max(maxMod, file.lastModified);
@@ -6855,6 +6858,11 @@ class Component {
         listEspeces.push({ file: f.name, sem, ...esp });
         // Lignes d'entrée détaillées : servent à repérer une marchandise entrée sans achat associé.
         try { entryLines.push(...this.stockEntryLines(wb, f.name)); } catch (e) { /* feuille atypique : on n'insiste pas */ }
+        try {
+          const conf = this.controleStructureStock(wb, f.name);
+          const drift = this.ecartsTotauxStock(wb);
+          controles.push({ file: f.name, sem, sansModele: !!conf.sansModele, ecartsStruct: conf.ecarts || [], ecartsTotaux: drift.ecarts || [], totalVentes: drift.calc.totalVentes, nonCalculables: drift.calc.nonCalculables || [] });
+        } catch (e) { console.error('[controle stock]', f.name, e); }
         this._stockHandles[f.name] = f.handle;
       }
       catch (e) { /* fichier verrouillé : on réessaiera */ }
@@ -6863,11 +6871,23 @@ class Component {
     listEspeces.sort((a, b) => (a.sem < b.sem ? 1 : -1));
     this._stockDir = dir; this._stockMax = maxMod;
     const stockErrors = stockChecks.filter(c => c && c.status !== 'Conforme');
-    const patchStock = { stock: list, stockName: dir.name, folderStock: { name: dir.name, count: files.length, prefix }, stockEspeces: listEspeces, stockChecks, stockLines: entryLines };
+    controles.sort((a, b) => (a.sem < b.sem ? 1 : -1));
+    const patchStock = { stock: list, stockName: dir.name, folderStock: { name: dir.name, count: files.length, prefix }, stockEspeces: listEspeces, stockChecks, stockLines: entryLines, stockControles: controles, stockRecalculAt: Date.now() };
     if (!silent) patchStock.msg = stockErrors.length ? { kind: 'error', text: `${stockErrors.length} fichier(s) Stock présentent un écart ou un récapitulatif ambigu. Consultez l'alerte Stock.` } : { kind: 'success', text: `Dossier Stock « ${dir.name} » — ${list.length} inventaire(s), récapitulatifs conformes aux feuilles détaillées.` };
     this.setState(patchStock);
     this.saveJSON(Component.STK_KEY, { name: dir.name, rows: list });
     this.saveJSON(Component.STKESP_KEY, { name: dir.name, rows: listEspeces });
+  }
+  // Recalcul complet à chaque venue sur l'onglet Stock. Les totaux étant des valeurs et non des
+  // formules, ils ne se corrigent pas seuls : on relit les fichiers et on recompare à chaque fois,
+  // pour qu'une saisie faite entre-temps dans Excel soit visible immédiatement.
+  async rafraichirStock() {
+    if (!this._stockDir || this._stockRecalcEnCours) return;
+    this._stockRecalcEnCours = true;
+    this.setState({ stockRecalcul: true });
+    try { await this.refreshStockFolder(this._stockDir, true); }
+    catch (e) { console.error('[rafraichirStock]', e); }
+    finally { this._stockRecalcEnCours = false; this.setState({ stockRecalcul: false }); }
   }
   async openHandleFile(handle, name) { try { const file = typeof handle.getFile === 'function' ? await handle.getFile() : handle; const nm = name || file.name || 'document';
     this._previewHandle = (typeof handle.createWritable === 'function') ? handle : null;
@@ -9943,7 +9963,7 @@ class Component {
         subItems: (active && visItems.length > 1) ? visItems.map(it => ({
           name: (it.view === 'Messages' && msgUnread) ? `${it.name} (${msgUnread})` : it.name,
           help: NAVHELP[it.view] || '',
-          onClick: () => { this.setState({ view: it.view, cat: 'Toutes', q: '', page: 0, ...(it.set || {}) }); if (it.view === 'Messages') this.markMessagesRead(); if (it.view === 'SaisieCompta') this.openCompForm((it.set && it.set.compTab) || this.state.compTab || 'Achat'); },
+          onClick: () => { this.setState({ view: it.view, cat: 'Toutes', q: '', page: 0, ...(it.set || {}) }); if (it.view === 'Messages') this.markMessagesRead(); if (it.view === 'SaisieCompta') this.openCompForm((it.set && it.set.compTab) || this.state.compTab || 'Achat'); if (it.view === 'Stock') this.rafraichirStock(); },
           // Plus de cas particulier « Stock allumé quand on est sur Comptabilité analytique » :
           // « Marges par espèce » est désormais une entrée de menu à part entière, qui s'allume seule.
           tabStyle: navItemActive(it)
@@ -10749,6 +10769,33 @@ class Component {
     // Dédiée à l'aperçu d'écriture (writePreview) : peut afficher beaucoup de lignes (écritures
     // multi-feuilles) — plafonnée à 70vh avec défilement interne pour ne jamais dépasser l'écran.
     const wpCardStyle = 'width:460px;max-width:100%;max-height:70vh;overflow-y:auto;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px';
+    // ---- bandeau de recalcul du Stock ----
+    // Les totaux du classeur sont des valeurs, pas des formules : on les recalcule à chaque venue
+    // sur l'onglet et on affiche franchement l'état, plutôt que de laisser croire qu'ils sont à jour.
+    const ctrlStock = this.state.stockControles || [];
+    const ecTotaux = ctrlStock.reduce((a, c) => a.concat((c.ecartsTotaux || []).filter(e => !e.vide).map(e => ({ ...e, file: c.file }))), []);
+    const ecVides = ctrlStock.reduce((a, c) => a + (c.ecartsTotaux || []).filter(e => e.vide).length, 0);
+    const ecStruct = ctrlStock.reduce((a, c) => a.concat((c.ecartsStruct || []).filter(e => e.grave).map(e => ({ ...e, file: c.file }))), []);
+    const nonCalc = ctrlStock.reduce((a, c) => a + (c.nonCalculables || []).length, 0);
+    const sansModele = ctrlStock.length > 0 && ctrlStock.every(c => c.sansModele);
+    const stockRecalcOn = !!this.state.stockRecalcul;
+    const stockRecalcAt = this.state.stockRecalculAt;
+    const stockRecalcLabel = stockRecalcOn ? 'Recalcul en cours…'
+      : (stockRecalcAt ? 'Recalculé à ' + new Date(stockRecalcAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : 'Pas encore recalculé');
+    const nb2 = v => (Math.round((Number(v) || 0) * 100) / 100).toLocaleString('fr-FR');
+    const stockRecalcShow = ctrlStock.length > 0 || stockRecalcOn;
+    const stockRecalcSoucis = ecTotaux.length > 0 || ecStruct.length > 0 || nonCalc > 0 || sansModele;
+    const stockRecalcTexte = sansModele
+      ? "Aucun fichier modèle n'est enregistré : le contrôle de structure est inactif. Enregistrez votre modèle depuis Paramètres pour l'activer."
+      : ecStruct.length ? `${ecStruct.length} écart${ecStruct.length > 1 ? 's' : ''} de structure par rapport au modèle — ${ecStruct.slice(0, 2).map(e => `${e.feuille} : ${e.texte}`).join(' ; ')}${ecStruct.length > 2 ? '…' : ''}`
+      : ecTotaux.length ? `${ecTotaux.length} total${ecTotaux.length > 1 ? 'aux' : ''} ne correspond${ecTotaux.length > 1 ? 'ent' : ''} plus aux lignes saisies — ${ecTotaux.slice(0, 2).map(e => `${e.feuille}, ${e.quoi} : ${nb2(e.lu)} au lieu de ${nb2(e.attendu)}`).join(' ; ')}${ecTotaux.length > 2 ? '…' : ''}`
+      : nonCalc ? `${nonCalc} feuille${nonCalc > 1 ? 's' : ''} d'une autre génération : structure non reconnue, totaux non recalculés.`
+      : ecVides ? `Tout correspond. ${ecVides} case${ecVides > 1 ? 's' : ''} de total ${ecVides > 1 ? 'sont' : 'est'} encore vide${ecVides > 1 ? 's' : ''}.`
+      : 'Tous les totaux correspondent aux lignes saisies.';
+    const stockRecalcStyle = `margin-bottom:14px;padding:11px 14px;border-radius:11px;font-size:12.5px;line-height:1.55;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;border:1px solid ${stockRecalcSoucis ? '#fbd9b4' : '#cfe6d3'};background:${stockRecalcSoucis ? '#fff7ed' : '#eef6ef'};color:${stockRecalcSoucis ? '#8a5a1a' : '#1d6a34'}`;
+    const stockRecalcBtnStyle = `padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.35)};cursor:pointer;white-space:nowrap`;
+    const onStockRecalc = () => this.rafraichirStock();
+
     const ctxStop = e => { if (e) e.stopPropagation(); };
 
     // ---- DOCUMENTS ÉDITÉS : pop-up « Imprimer ou PDF ? » et réglages par type ----
@@ -10792,6 +10839,7 @@ class Component {
     const pwv = this._pwRenderVals();
 
     return {
+      stockRecalcShow, stockRecalcLabel, stockRecalcTexte, stockRecalcStyle, stockRecalcBtnStyle, onStockRecalc, stockRecalcOn,
       docPrintOpen, docPrintName, docPrintLabel, onDocPrintName, onDocPrintCancel, onDocPrintPrint,
       onDocPrintPdf, onDocPrintPreview, onDocPrintSettings, docPrintBtnStyle, docPrintGhostStyle, docPrintInputStyle,
       docTypeRows, docNomInputStyle, fichePrintStyle, ficheRowPrintStyle,

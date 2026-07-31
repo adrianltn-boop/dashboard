@@ -204,6 +204,21 @@
   est signalée « vide », pas « fausse ». Tolérance de
   5 millièmes pour les arrondis.
 
+## Recalcul du stock
+- rafraichirStock() est appelé à CHAQUE entrée dans
+  l'onglet Stock (handler de navigation) et pose un
+  verrou _stockRecalcEnCours contre les appels
+  concurrents.
+- Le contrôle de structure et l'écart des totaux sont
+  calculés DANS la passe de lecture de
+  refreshStockFolder — jamais dans une seconde lecture
+  des fichiers, qui doublerait les entrées/sorties.
+- Le bandeau dit toujours l'état réel : heure du
+  dernier recalcul, écarts de structure, totaux
+  divergents, cases vides, feuilles non reconnues,
+  absence de modèle. Ne jamais afficher un état vert
+  par défaut quand rien n'a été contrôlé.
+
 ## Documents édités (impression / PDF)
 - Un navigateur n'expose AUCUNE API d'imprimante :
   la Web Printing API de Chrome est réservée aux
