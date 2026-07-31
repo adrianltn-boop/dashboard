@@ -464,10 +464,10 @@
             <div style="flex:1 1 110px"><label style="{{ payLbl }}">Avoir</label><input style="{{ payInputN }}" type="text" inputmode="decimal" value="{{ payDraft.avoir }}" oninput="{{ onPayAvoir }}" placeholder="0"></div>
           </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:12px">
-            <div style="flex:1 1 130px"><label style="{{ payLbl }}">Date de facture</label><input style="{{ payInput }}" type="date" value="{{ payDraft.dateFac }}" oninput="{{ onPayDateFac }}"></div>
-            <div style="flex:1 1 130px"><label style="{{ payLbl }}">Date échéance</label><input style="{{ payInput }}" type="date" value="{{ payDraft.dateEch }}" oninput="{{ onPayDateEch }}"></div>
+            <div style="flex:1 1 130px"><label style="{{ payLbl }}">Date de facture</label><input style="{{ payInput }}" type="date" value="{{ payDraft.dateFac }}" onchange="{{ onPayDateFac }}" onblur="{{ onDateBlur }}"></div>
+            <div style="flex:1 1 130px"><label style="{{ payLbl }}">Date échéance</label><input style="{{ payInput }}" type="date" value="{{ payDraft.dateEch }}" onchange="{{ onPayDateEch }}" onblur="{{ onDateBlur }}"></div>
             <div style="flex:1 1 120px"><label style="{{ payLbl }}">Montant réglé</label><input style="{{ payInputN }}" type="text" inputmode="decimal" value="{{ payDraft.regle }}" oninput="{{ onPayRegle }}" placeholder="0"></div>
-            <div style="flex:1 1 130px"><label style="{{ payLbl }}">Date du paiement</label><input style="{{ payInput }}" type="date" value="{{ payDraft.datePay }}" oninput="{{ onPayDatePay }}"></div>
+            <div style="flex:1 1 130px"><label style="{{ payLbl }}">Date du paiement</label><input style="{{ payInput }}" type="date" value="{{ payDraft.datePay }}" onchange="{{ onPayDatePay }}" onblur="{{ onDateBlur }}"></div>
             <div style="flex:1 1 150px"><label style="{{ payLbl }}">État (calculé)</label><div style="{{ payInput }};display:flex;align-items:center;background:#f4f7fb"><span style="{{ payDraftEtatStyle }}">{{ payDraft.etat }}</span></div></div>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;margin-top:14px;padding-top:12px;border-top:1px solid #f1f4f8;flex-wrap:wrap">
@@ -530,7 +530,7 @@
               <div style="display:flex;gap:12px;flex-wrap:wrap">
                 <div style="flex:2 1 220px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Pêcheur</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" list="comp-pecheurs" value="{{ achatDraft.pecheur }}" oninput="{{ onAchatPecheur }}" placeholder="Tapez le début du nom…"></div>
                 <div style="flex:1 1 150px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">N° facture <span style="{{ venteNumHintStyle }}">{{ achatNumHint }}</span></label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" value="{{ achatDraft.num }}" oninput="{{ onAchatNum }}" placeholder="lu du fichier — modifiable"></div>
-                <div style="flex:1 1 140px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Date</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" type="date" value="{{ achatDraft.date }}" oninput="{{ onAchatDate }}"></div>
+                <div style="flex:1 1 140px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Date</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" type="date" value="{{ achatDraft.date }}" onchange="{{ onAchatDate }}" onblur="{{ onDateBlur }}"></div>
               </div>
               <div style="display:grid;grid-template-columns:1.3fr 1fr 92px 96px 100px 28px;gap:8px;padding:12px 2px 4px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3">
                 <span>Espèce</span><span>Calibre</span><span style="text-align:right">Poids (kg)</span><span style="text-align:right">Prix €/kg</span><span style="text-align:right">Total</span><span></span>
@@ -594,7 +594,7 @@
             <div style="padding:14px 18px 4px">
               <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">
                 <div><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">N° de facture <span style="{{ venteNumHintStyle }}">{{ venteNumHint }}</span></label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" value="{{ venteDraft.num }}" oninput="{{ onVSNum }}" placeholder="lu du fichier — modifiable"></div>
-                <div><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Date</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" type="date" value="{{ venteDraft.date }}" oninput="{{ onVSDate }}"></div>
+                <div><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Date</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" type="date" value="{{ venteDraft.date }}" onchange="{{ onVSDate }}" onblur="{{ onDateBlur }}"></div>
                 <div><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Délai (0–30 j)</label><select style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" value="{{ venteDraft.delai }}" onchange="{{ onVSDelai }}"><sc-for list="{{ venteDelaiOptions }}" as="o" hint-placeholder-count="5"><option value="{{ o.value }}">{{ o.label }}</option></sc-for></select></div>
                 <div><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Date prévue</label><input style="width:100%;box-sizing:border-box;border:1px solid #e9edf4;background:#f4f7fb;color:#69788c;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" value="{{ venteDraft.datePrev }}" readonly></div>
                 <div><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">ID facture <span style="{{ venteNumHintStyle }}">{{ venteIdHint }}</span></label><input style="width:100%;box-sizing:border-box;border:1px solid #e9edf4;background:#f4f7fb;color:#69788c;border-radius:9px;padding:9px 11px;font-size:13px;font-family:'IBM Plex Mono',monospace;text-align:right" value="{{ venteDraft.idFacture }}" placeholder="lu du fichier" readonly></div>
@@ -656,7 +656,7 @@
               <div style="display:flex;gap:12px;flex-wrap:wrap">
                 <div style="flex:2 1 240px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Fournisseur</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" value="{{ fournDraft.fournisseur }}" oninput="{{ onFournFourn }}" placeholder="Nom du fournisseur…"></div>
                 <div style="flex:1 1 150px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">N° de facture</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" value="{{ fournDraft.num }}" oninput="{{ onFournNum }}" placeholder="option."></div>
-                <div style="flex:1 1 140px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Date</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" type="date" value="{{ fournDraft.date }}" oninput="{{ onFournDate }}"></div>
+                <div style="flex:1 1 140px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Date</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" type="date" value="{{ fournDraft.date }}" onchange="{{ onFournDate }}" onblur="{{ onDateBlur }}"></div>
                 <div style="flex:1 1 130px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Montant</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:'IBM Plex Mono',monospace;text-align:right" type="text" inputmode="decimal" value="{{ fournDraft.montant }}" oninput="{{ onFournMontant }}" placeholder="0"></div>
               </div>
               <div style="font-size:11.5px;color:#8291a5;margin-top:10px">La facture ira dans la feuille du <b>mois de la date</b>, dans le bloc choisi ci-dessus. Un aperçu vous sera montré avant toute écriture.</div>
@@ -1747,9 +1747,9 @@
                   <sc-for list="{{ arYearOptions }}" as="o" hint-placeholder-count="4"><option value="{{ o.value }}">{{ o.label }}</option></sc-for>
                 </select>
                 <span style="font-size:12.5px;color:#69788c">Du</span>
-                <input type="date" style="{{ hDateStyle }}" value="{{ arFrom }}" onchange="{{ onArFrom }}">
+                <input type="date" style="{{ hDateStyle }}" value="{{ arFrom }}" onchange="{{ onArFrom }}" onblur="{{ onDateBlur }}">
                 <span style="font-size:12.5px;color:#69788c">au</span>
-                <input type="date" style="{{ hDateStyle }}" value="{{ arTo }}" onchange="{{ onArTo }}">
+                <input type="date" style="{{ hDateStyle }}" value="{{ arTo }}" onchange="{{ onArTo }}" onblur="{{ onDateBlur }}">
               </div>
               <div style="flex:1;min-width:12px"></div>
               <span style="font-size:12px;color:#9aa7b8;max-width:360px">Cliquez une date pour ouvrir le calendrier. Toutes les semaines de la période s'affichent ci-dessous.</span>
@@ -2337,7 +2337,7 @@
               <div style="flex:1 1 200px;min-width:180px">
                 <label style="font-size:12px;color:#69788c;font-weight:500;display:block;margin-bottom:6px">{{ o.label }}</label>
                 <div style="display:flex;align-items:center;gap:8px">
-                  <input type="number" style="{{ inputStyle }}" value="{{ o.value }}" onchange="{{ o.onChange }}">
+                  <input type="text" inputmode="decimal" style="{{ inputStyle }}" value="{{ o.value }}" onchange="{{ o.onChange }}">
                   <span style="font-size:12.5px;color:#8291a5;min-width:16px">{{ o.unit }}</span>
                 </div>
               </div>
@@ -2794,7 +2794,7 @@
         <div style="display:flex;gap:10px;margin-top:12px">
           <div style="flex:1">
             <div style="font-size:12px;font-weight:600;color:#3a4a5e;margin-bottom:5px">Date</div>
-            <input type="date" style="{{ agInputStyle }}" value="{{ agEditValues.date }}" oninput="{{ onAgDate }}">
+            <input type="date" style="{{ agInputStyle }}" value="{{ agEditValues.date }}" onchange="{{ onAgDate }}" onblur="{{ onDateBlur }}">
           </div>
           <div style="width:120px">
             <div style="font-size:12px;font-weight:600;color:#3a4a5e;margin-bottom:5px">Heure</div>
@@ -3654,8 +3654,8 @@
 
   <!-- ============ CRÉDIT : saisie manuelle ============ -->
   <sc-if value="{{ credEditOpen }}" hint-placeholder-val="{{ false }}">
-    <div style="{{ prefixOverlayStyle }}" onclick="{{ onCredCancel }}">
-      <div style="{{ grenkeLinkCardStyle }}" onclick="{{ ctxStop }}">
+    <div style="{{ prefixOverlayStyle }}" onmousedown="{{ ovDown }}" onclick="{{ onCredBackdrop }}">
+      <div style="{{ grenkeLinkCardStyle }}" onclick="{{ ctxStop }}" onmousedown="{{ ctxStop }}">
         <div style="font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">Crédits &amp; assurances</div>
         <div style="font-size:16px;font-weight:600;color:#0e1b2e;margin-top:5px">{{ credEditTitle }}</div>
         <div style="margin-top:16px">
@@ -3676,21 +3676,21 @@
         <div style="display:flex;gap:12px;margin-top:12px">
           <div style="flex:1">
             <label style="{{ credLabelStyle }}">Montant total (€)</label>
-            <input type="number" style="{{ credInputStyle }}" value="{{ credVals.total }}" oninput="{{ onCredTotal }}" placeholder="0">
+            <input type="text" inputmode="decimal" style="{{ credInputStyle }}" value="{{ credVals.total }}" oninput="{{ onCredTotal }}" placeholder="0,00">
           </div>
           <div style="flex:1">
             <label style="{{ credLabelStyle }}">Déjà remboursé (€)</label>
-            <input type="number" style="{{ credInputStyle }}" value="{{ credVals.paid }}" oninput="{{ onCredPaid }}" placeholder="0">
+            <input type="text" inputmode="decimal" style="{{ credInputStyle }}" value="{{ credVals.paid }}" oninput="{{ onCredPaid }}" placeholder="0,00">
           </div>
         </div>
         <div style="display:flex;gap:12px;margin-top:12px">
           <div style="flex:1">
             <label style="{{ credLabelStyle }}">Mensualité (€)</label>
-            <input type="number" style="{{ credInputStyle }}" value="{{ credVals.mens }}" oninput="{{ onCredMens }}" placeholder="0">
+            <input type="text" inputmode="decimal" style="{{ credInputStyle }}" value="{{ credVals.mens }}" oninput="{{ onCredMens }}" placeholder="0,00">
           </div>
           <div style="flex:1">
             <label style="{{ credLabelStyle }}">Prochaine échéance</label>
-            <input type="date" style="{{ credInputStyle }}" value="{{ credVals.next }}" oninput="{{ onCredNext }}">
+            <input type="date" style="{{ credInputStyle }}" value="{{ credVals.next }}" onchange="{{ onCredNext }}" onblur="{{ onDateBlur }}">
           </div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:20px">

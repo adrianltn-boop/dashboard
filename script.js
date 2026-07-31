@@ -8006,7 +8006,22 @@ class Component {
   openCredEdit(i) { const c = this._credits()[i]; if (!c) return; this.setState({ credEdit: { i, label: c.label || '', ent: c.ent || '', type: c.type || 'Crédit', total: c.total != null ? String(c.total) : '', paid: c.paid != null ? String(c.paid) : '', mens: c.mens != null ? String(c.mens) : '', next: c.next || '' } }); }
   closeCred() { this.setState({ credEdit: null }); }
   setCredField(k, v) { this.setState({ credEdit: { ...(this.state.credEdit || {}), [k]: v } }); }
-  commitCred() { const e = this.state.credEdit; if (!e) return; const label = (e.label || '').trim(); if (!label) return; const num = v => { const n = parseFloat(String(v == null ? '' : v).replace(',', '.').replace(/[^\d.-]/g, '')); return isFinite(n) ? n : 0; }; const rec = { label, ent: (e.ent || '').trim(), type: e.type === 'Assurance' ? 'Assurance' : 'Crédit', total: num(e.total), paid: num(e.paid), mens: num(e.mens), next: e.next || '' }; const arr = this._credits(); if (e.i >= 0) arr[e.i] = { ...arr[e.i], ...rec }; else arr.push(rec); this.saveCredits(arr); this.setState({ credEdit: null }); }
+  // Une saisie de crédit non vide ne doit JAMAIS disparaître sur un clic malheureux : Faustine
+  // signalait « parfois ça se ferme tout seul sans que j'aie enregistré ni fini ». Le fond de la
+  // modale ne referme donc plus que lorsque RIEN n'a été tapé ; sinon il le dit et garde la fiche.
+  _credDirty() { const e = this.state.credEdit; if (!e) return false; return ['label', 'ent', 'total', 'paid', 'mens', 'next'].some(k => String(e[k] == null ? '' : e[k]).trim() !== ''); }
+  credBackdrop() { if (this._credDirty()) { this.setState({ msg: { kind: 'info', text: 'Votre saisie est conservée. Utilisez « Enregistrer » pour la valider, ou « Annuler » pour l\u2019abandonner.' } }); return; } this.closeCred(); }
+  // _vNum : la saisie est FRANÇAISE, donc à la virgule (« 412,50 »). parseFloat('12,50') vaut 12 et,
+  // sur un <input type="number">, Chrome refusait carrément la virgule et renvoyait une valeur VIDE
+  // — d'où le montant qui « revenait à zéro ». Les champs sont désormais des champs texte.
+  commitCred() {
+    const e = this.state.credEdit; if (!e) return;
+    const label = (e.label || '').trim();
+    if (!label) { this.setState({ msg: { kind: 'error', text: 'Indiquez au moins un intitulé (ex. « Crédit camion réfrigéré ») avant d\u2019enregistrer.' } }); return; }
+    const rec = { label, ent: (e.ent || '').trim(), type: e.type === 'Assurance' ? 'Assurance' : 'Crédit', total: this._vNum(e.total), paid: this._vNum(e.paid), mens: this._vNum(e.mens), next: e.next || '' };
+    const arr = this._credits(); if (e.i >= 0) arr[e.i] = { ...arr[e.i], ...rec }; else arr.push(rec);
+    this.saveCredits(arr); this.setState({ credEdit: null, msg: { kind: 'success', text: `« ${label} » enregistré : mensualité ${this.fmt(rec.mens)}${rec.next ? ', prochaine échéance le ' + rec.next.split('-').reverse().join('/') : ''}.` } });
+  }
   deleteCred(i) { const arr = this._credits(); if (i < 0 || i >= arr.length) { this.setState({ credEdit: null }); return; } arr.splice(i, 1); this.saveCredits(arr); this.setState({ credEdit: null }); }
   // Bouton \u00ab \u27f3 Rafra\u00eechir \u00bb : m\u00eame circuit que la relecture automatique, en mode FORC\u00c9 (on oublie
   // les horodatages connus et on relit tout). Un seul chemin de relecture, donc un seul verrou et un
@@ -8111,6 +8126,24 @@ class Component {
 
   renderVals() {
     const C = Component;
+    // Enveloppe de TOUTES les saisies de date : la valeur part bien dans l'état, mais sans
+    // ré-affichage (voir setState/_renderQuiet), sinon le champ est détruit en pleine frappe.
+    // `onDateBlur` remet tout à jour dès que l'utilisatrice quitte le champ.
+    const dateH = fn => e => { this._renderQuiet = true; try { fn(e); } finally { this._renderQuiet = false; } };
+    // Sortie d'un champ date : on remet l'affichage à jour (date prévue, filtres…). MAIS jamais
+    // tout de suite — le « blur » a lieu à l'APPUI de la souris, et remplacer tout le DOM entre
+    // l'appui et le relâchement détruirait le bouton visé : le clic serait purement perdu (le
+    // bouton « Enregistrer » ne répondait plus). On attend donc la fin du clic en cours (écoute en
+    // remontée, après le gestionnaire du bouton), avec une temporisation de secours si
+    // l'utilisatrice quitte le champ au clavier.
+    const onDateBlur = () => {
+      this._renderQuiet = false;
+      if (this._dateFlush) return;
+      this._dateFlush = true;
+      const flush = () => { this._dateFlush = false; try { document.removeEventListener('click', flush); } catch (e) {} clearTimeout(this._dateFlushT); this.setState({}); };
+      try { document.addEventListener('click', flush); } catch (e) {}
+      this._dateFlushT = setTimeout(flush, 400);
+    };
     const demo = this.state.demoMode !== false;
     const amountMode = this.state.amountMode === 'HT' ? 'HT' : 'TTC';
     const accent = this.entCfg().accent;
@@ -8189,7 +8222,7 @@ class Component {
     const fournEditing = !!fournDraft.editing;
     const onFournFourn = e => this.setFournField('fournisseur', e.target.value);
     const onFournNum = e => this.setFournField('num', e.target.value);
-    const onFournDate = e => this.setFournField('date', e.target.value);
+    const onFournDate = dateH(e => this.setFournField('date', e.target.value));
     const onFournMontant = e => this.setFournField('montant', e.target.value);
     const onFournCommit = () => this.commitFournSaisie();
     const onFournReset = () => this.resetFournDraft();
@@ -8248,7 +8281,7 @@ class Component {
     const agCatOptions = Component.AGENDA_CATS.map(c => ({ value: c.key, label: c.key }));
     const agRecurOptions = [{ value: 'none', label: 'Ponctuel (une seule fois)' }, { value: 'weekly', label: 'Chaque semaine' }, { value: 'monthly', label: 'Chaque mois' }];
     const onAgTitle = e => this.setAgendaField('title', e.target.value);
-    const onAgDate = e => this.setAgendaField('date', e.target.value);
+    const onAgDate = dateH(e => this.setAgendaField('date', e.target.value));
     const onAgTime = e => this.setAgendaField('time', e.target.value);
     const onAgCat = e => this.setAgendaField('cat', e.target.value);
     const onAgRecur = e => this.setAgendaField('recur', e.target.value);
@@ -8709,7 +8742,9 @@ class Component {
     // side cards
     const barsItem = (label, right, pct, detail, rightColor) => ({ label, right, pct, detail, bar: accent, rightColor: rightColor || accent });
     const O = this.state.obj || {};
-    const num = (v, d) => { const n = Number(v); return isFinite(n) && n > 0 ? n : d; };
+    // _vNum et non Number() : l'objectif est saisi à la française (« 32 000,50 »), que Number()
+    // rendrait NaN — l'objectif serait alors remplacé en silence par la valeur par défaut.
+    const num = (v, d) => { if (v == null || String(v).trim() === '') return d; const n = this._vNum(v); return isFinite(n) && n > 0 ? n : d; };
     const tCAm = num(O.caM, this.props.objectifCAMensuel ?? 32000), tCAa = num(O.caA, this.props.objectifCAAnnuel ?? 260000), tTaux = num(O.taux, this.props.objectifTauxMarge ?? 25), tVm = num(O.vM, this.props.objectifVentesMensuel ?? 7);
     const targets = ({ 'Cette semaine': { ca: Math.round(tCAm / 4), ventes: Math.max(1, Math.round(tVm / 4)) }, 'Ce mois': { ca: tCAm, ventes: tVm }, 'Trimestre': { ca: Math.round(tCAa / 4), ventes: tVm * 3 }, 'Année': { ca: tCAa, ventes: tVm * 12 } })[this.state.period] || { ca: tCAm, ventes: tVm };
     const objectifs = { title: 'Objectifs — ' + periodLabel, isBars: true, isRank: false, items: [barsItem('Objectif CA', this.pctStr(S.ca / targets.ca * 100), this.pctStr(S.ca / targets.ca * 100), `${this.fmt(S.ca)} / ${this.fmt(targets.ca)}`), barsItem('Taux de marge', this.pctStr(S.taux / tTaux * 100), this.pctStr(S.taux / tTaux * 100), `${tauxStr} % / objectif ${tTaux} %`), barsItem('Ventes réalisées', this.pctStr(S.nbV / targets.ventes * 100), this.pctStr(S.nbV / targets.ventes * 100), `${S.nbV} / ${targets.ventes} ventes`)] };
@@ -8867,10 +8902,10 @@ class Component {
     const onPayClient = e => this.setPayField('client', e.target.value);
     const onPayTtc = e => this.setPayField('ttc', e.target.value);
     const onPayAvoir = e => this.setPayField('avoir', e.target.value);
-    const onPayDateFac = e => this.setPayField('dateFac', e.target.value);
-    const onPayDateEch = e => this.setPayField('dateEch', e.target.value);
+    const onPayDateFac = dateH(e => this.setPayField('dateFac', e.target.value));
+    const onPayDateEch = dateH(e => this.setPayField('dateEch', e.target.value));
     const onPayRegle = e => this.setPayField('regle', e.target.value);
-    const onPayDatePay = e => this.setPayField('datePay', e.target.value);
+    const onPayDatePay = dateH(e => this.setPayField('datePay', e.target.value));
     const onPayCommit = () => this.commitPay();
     const onPayReset = () => this.resetPayDraft();
     const paySaveLabel = payEditing ? 'Mettre à jour' : '＋ Ajouter la facture';
@@ -9184,7 +9219,7 @@ class Component {
     const achatEditing = !!(this.state.achatDraft && this.state.achatDraft.editing);
     const onAchatNum = e => this.setAchatField('num', e.target.value);
     const onAchatPecheur = e => this.setAchatField('pecheur', e.target.value);
-    const onAchatDate = e => this.setAchatField('date', e.target.value);
+    const onAchatDate = dateH(e => this.setAchatField('date', e.target.value));
     const onAchatAddLigne = () => this.addAchatLigne();
     const onAchatCommit = () => this.commitAchatSaisie();
     const onAchatReset = () => this.resetAchatDraft();
@@ -9254,7 +9289,7 @@ class Component {
     const venteEditing = !!(this.state.venteDraft && this.state.venteDraft.editing);
     const onVSNum = e => this.setVenteField('num', e.target.value);
     const onVSClient = e => this.setVenteField('client', e.target.value);
-    const onVSDate = e => this.setVenteField('date', e.target.value);
+    const onVSDate = dateH(e => this.setVenteField('date', e.target.value));
     const onVSDelai = e => this.setVenteField('delai', e.target.value);
     const onVSTvaIrl = e => this.setVenteField('tvaIrl', e.target.value);
     const onVSTvaFr = e => this.setVenteField('tvaFr', e.target.value);
@@ -9421,11 +9456,17 @@ class Component {
     const onCredTotal = e => this.setCredField('total', e.target.value);
     const onCredPaid = e => this.setCredField('paid', e.target.value);
     const onCredMens = e => this.setCredField('mens', e.target.value);
-    const onCredNext = e => this.setCredField('next', e.target.value);
+    const onCredNext = dateH(e => this.setCredField('next', e.target.value));
     const onCredTypeCredit = () => this.setCredField('type', 'Crédit');
     const onCredTypeAssur = () => this.setCredField('type', 'Assurance');
     const onCredCommit = () => this.commitCred();
     const onCredCancel = () => this.closeCred();
+    // Fond de la modale : ne referme que si rien n'a été tapé, ET seulement si le clic a bien
+    // COMMENCÉ sur le fond. Sans le second garde-fou, une sélection de texte commencée dans un
+    // champ et relâchée à côté de la carte déclenche un « click » dont la cible est le fond —
+    // la fiche disparaissait alors sans avoir été enregistrée.
+    const onCredBackdrop = e => { if (e && (e.target !== e.currentTarget || this._ovDown !== e.currentTarget)) return; this.credBackdrop(); };
+    const ovDown = e => { this._ovDown = e ? e.target : null; };
     const onCredDelete = () => this.deleteCred(credF.i);
     const credCommitStyle = `padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit`;
     const credDeleteStyle = 'padding:9px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#b91c1c;background:#fff;border:1px solid #f0c9c9;cursor:pointer;font-family:inherit';
@@ -11039,8 +11080,8 @@ class Component {
     const hToday = new Date();
     const arFrom = (this.state.hRange && this.state.hRange.from) || this.hISO(new Date(hToday.getFullYear(), hToday.getMonth(), 1));
     const arTo = (this.state.hRange && this.state.hRange.to) || this.hISO(new Date(hToday.getFullYear(), hToday.getMonth() + 1, 0));
-    const onArFrom = e => this.setState({ hRange: { from: e.target.value, to: arTo } });
-    const onArTo = e => this.setState({ hRange: { from: arFrom, to: e.target.value } });
+    const onArFrom = dateH(e => this.setState({ hRange: { from: e.target.value, to: arTo } }));
+    const onArTo = dateH(e => this.setState({ hRange: { from: arFrom, to: e.target.value } }));
     const arBase = this.hParse(arFrom);
     const arMonthValue = String(arBase.getMonth() + 1);
     const arYearValue = String(arBase.getFullYear());
@@ -11321,7 +11362,7 @@ class Component {
       onGrkNum, onGrkCust, onGrkTtc, onGrkP1, onGrkP2, onGrkCharge, onGrkCom, onGrkCommit, onGrkReset,
       gmDelOpen, gmDelName, onGrkDelConfirm, onGrkDelCancel,
       credPayAskOpen, credPayAskLabel, credPayAskMens, credPayAskHasBank, credPayAskMsg, onCredPayConfirm, onCredPayCancel,
-      onCredNew, credAddStyle, credEditOpen, credIsEdit, credEditTitle, credVals, credTypeIsCredit, credTypeCreditStyle, credTypeAssurStyle, onCredLabel, onCredEnt, onCredTotal, onCredPaid, onCredMens, onCredNext, onCredTypeCredit, onCredTypeAssur, onCredCommit, onCredCancel, onCredDelete, credCommitStyle, credDeleteStyle, credInputStyle, credLabelStyle,
+      onCredNew, credAddStyle, credEditOpen, credIsEdit, credEditTitle, credVals, credTypeIsCredit, credTypeCreditStyle, credTypeAssurStyle, onCredLabel, onCredEnt, onCredTotal, onCredPaid, onCredMens, onCredNext, onCredTypeCredit, onCredTypeAssur, onCredCommit, onCredCancel, onCredDelete, onCredBackdrop, ovDown, onDateBlur, credCommitStyle, credDeleteStyle, credInputStyle, credLabelStyle,
       recoStats, recoRows, recoNote, recoKeyTabs, recoKeyHint, recoEmpty,
       blCards, blRows, blCount, blStatus: this.state.blStatus, blSelectStyle, onBlStatus, modelBtnStyle, onOpenModel, blEmpty,
       blLibRows, blLibCount, blLibEmpty, blTypeChips,
@@ -11368,7 +11409,13 @@ class Component {
   setState(update, cb) {
     var patch = (typeof update === 'function') ? update(this.state) : update;
     this.state = Object.assign({}, this.state, patch);
-    if (this.__scheduleRender) this.__scheduleRender();
+    // `_renderQuiet` : l'état est bien mis à jour, mais AUCUN ré-affichage n'est déclenché.
+    // Réservé à la saisie d'une date au clavier — voir _dateH. Le rendu complet remplace tout le
+    // DOM (__app.replaceChildren) : le champ date en cours de frappe est détruit et recréé, ce qui
+    // ramène le curseur au premier segment. Chrome émettant « change » DÈS que la date devient
+    // momentanément valide (« 2 » de 2026 → an 0002), la date se remettait à zéro à chaque tentative
+    // et devenait tout simplement impossible à saisir. Le rattrapage se fait à la sortie du champ.
+    if (this.__scheduleRender && !this._renderQuiet) this.__scheduleRender();
     if (cb) cb();
   }
 }
