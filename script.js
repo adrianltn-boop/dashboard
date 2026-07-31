@@ -239,7 +239,7 @@ class Component {
     caPeriod: 'mois', analytique: null, setupOpen: false,
     paymentOverrides: {}, payResolveRef: null,
     writeMap: {}, paramWrite: null, writePreview: null, writeTest: null, healthCheck: null,
-    alertsHidden: {}, stockModelName: null, srcMenuOpen: {}, advOpen: false,
+    alertsHidden: {}, stockModelName: null, srcMenuOpen: {}, advOpen: false, fantomesAsk: null,
   };
 
   static OPS_KEY = 'avOps';
@@ -1015,13 +1015,28 @@ class Component {
   saveGrenkeMan(arr) { this.setState({ grenkeMan: arr }); this.saveJSON(Component.GRKMAN_KEY, arr); }
   _vNum(v) { const n = parseFloat(String(v == null ? '' : v).replace(',', '.').replace(/[^\d.-]/g, '')); return isFinite(n) ? n : 0; }
   _addDaysIso(iso, days) { if (!iso) return ''; const p = String(iso).split('-').map(Number); const d = new Date(p[0], (p[1] || 1) - 1, p[2] || 1); d.setDate(d.getDate() + (+days || 0)); return d.getFullYear() + '-' + this.dd(d.getMonth() + 1) + '-' + this.dd(d.getDate()); }
-  _venteNextId() { const fromFile = (this.state.ventes || []).map(r => +String(r.ref || '').replace(/\D/g, '') || 0); const ids = [...fromFile, ...this.venteSaisieRows().map(r => +r.id || 0), ...this.payTrackRows().map(r => +r.id || 0)]; return (ids.length ? Math.max(...ids) : 0) + 1; }
+  // Clé INTERNE d'une saisie de vente locale. Ce N'EST PAS un numéro de facture et ce n'est PAS un
+  // ID Facture : rien de tout ça ne doit être fabriqué localement (RÈGLE MÉTIER « premier numéro non
+  // utilisé dans le fichier Excel source, jamais depuis les saisies locales seules »).
+  // BUG CORRIGÉ (les fameux « 7000 et plus ») : cette clé était calculée sur les CHIFFRES des n° de
+  // facture du fichier (`state.ventes`) et sur les ID du suivi de paiement (qui sont eux aussi le
+  // contenu du fichier). Sur le classeur réel de Faustine elle valait donc 7023, et ce 7023 :
+  //   · s'affichait dans le formulaire de vente comme « ID facture » (champ figé, faux) ;
+  //   · servait de référence de repli « FV-7023 » à la liste des opérations — une facture qui
+  //     n'existe dans AUCUN fichier source ;
+  //   · faisait diverger la saisie locale de la ligne Excel, donc la vente ressortait EN DOUBLE
+  //     (le dédoublonnage se fait par numéro de facture).
+  // Elle est désormais purement locale et PRÉFIXÉE (« L12 ») : impossible à confondre avec un
+  // numéro de facture, impossible à écrire dans Excel (voir _refEcrivable).
+  _venteNextId() { const n = this.venteSaisieRows().reduce((mx, r) => Math.max(mx, +String(r.id == null ? '' : r.id).replace(/^L/i, '') || 0), 0); return 'L' + (n + 1); }
+  // Une clé interne (« L12 », « FV-… », « AP-… ») ne doit JAMAIS partir dans une cellule Excel.
+  _refEcrivable(num) { const s = String(num == null ? '' : num).trim(); return /^(L\d+|FV-.*|AP-.*)$/i.test(s) ? '' : s; }
   compEmptyLigne() { const e = Object.keys(Component.ESP)[0]; return { espece: e, calibre: (Component.ESP[e] || ['Standard'])[0], poids: '', prixKg: '' }; }
   // Le compte rendu de la dernière écriture (compFan) n'est PLUS effacé quand on revient sur le même
   // formulaire : il disparaissait dès qu'on quittait l'écran et qu'on y revenait, alors que c'est
   // justement le récapitulatif qu'on veut relire pour vérifier que tout est passé. Il ne s'efface
   // qu'en changeant de type de saisie, ou par sa croix de fermeture.
-  openCompForm(mode) { this.setState({ compTab: mode, ...(mode === this.state.compTab ? {} : { compFan: null }) }); if (mode === 'Achat') { this.resetAchatDraft(); this.refreshAchatInvoiceNumber(); this._refreshChequiersLive(); } else if (mode === 'Fournisseur') this.resetFournDraft(); else if (mode === 'Paiement') { this.setState({ paiementDraft: null }); this._refreshChequiersLive(); } else { this.resetVenteDraft(); this.refreshVenteInvoiceNumber(); this.refreshVenteIdFacture(); } }
+  openCompForm(mode) { this.setState({ compTab: mode, ...(mode === this.state.compTab ? {} : { compFan: null }) }); if (mode === 'Achat') { this.resetAchatDraft(); this.refreshAchatInvoiceNumber(); this._refreshChequiersLive(); } else if (mode === 'Fournisseur') this.resetFournDraft(); else if (mode === 'Paiement') { this.setState({ paiementDraft: null }); this._refreshChequiersLive(); } else { this.resetVenteDraft(); this.refreshVenteNumeros(); } }
   // RÈGLE 5 (achat pêcheur) : lit le n° de facture pré-imprimé de la prochaine ligne à remplir
   // (colonne « N° de facture ») et le propose, modifiable. Non bloquant si non réglé/connecté.
   async refreshAchatInvoiceNumber() {
@@ -1071,8 +1086,27 @@ class Component {
       const loc = await this._locateAppendTarget(buf.slice(0), cfg.sheetName, fields.map(x => cfg.cols[x.key]), cfg.firstDataIdx != null ? cfg.firstDataIdx : (hdrIdx + 1), venteDateColIdx);
       const row = sh.rows[loc.previewIdx] || [];
       const preNum = String(row[invCol] == null ? '' : row[invCol]).trim();
-      if (preNum) { const d = this.state.venteDraft; if (d && !d.editing) this.setState({ venteDraft: { ...d, num: preNum, numFromFile: true, numRow: loc.excelRow } }); }
+      // L'ID Facture est lu SUR LA MÊME LIGNE que le numéro : c'est la demande de Faustine
+      // (« le numéro doit être repris du fichier source correspondant à l'ID de la facture »).
+      // Les deux venaient auparavant de deux repérages différents et pouvaient désigner deux lignes.
+      const idCol = cfg.cols.idFacture;
+      const preId = (idCol != null && idCol >= 0) ? String(row[idCol] == null ? '' : row[idCol]).trim() : '';
+      const d = this.state.venteDraft;
+      if (d && !d.editing && (preNum || preId)) {
+        const patch = { ...d, numRow: loc.excelRow };
+        if (preNum) { patch.num = preNum; patch.numFromFile = true; }
+        if (preId) { patch.idFacture = preId; patch.idFromFile = true; }
+        this.setState({ venteDraft: patch });
+      }
     } catch (e) { /* non bloquant : on garde le n° courant */ }
+  }
+  // Les deux numéros du fichier, dans l'ordre : le n° pré-imprimé de la ligne cible d'abord, puis,
+  // SEULEMENT s'il n'y a pas d'ID Facture pré-imprimé sur cette même ligne, le « dernier ID + 1 ».
+  // Séquentiel : les deux rafraîchissements écrivaient dans le même brouillon et se marchaient dessus.
+  async refreshVenteNumeros() {
+    await this.refreshVenteInvoiceNumber();
+    const d = this.state.venteDraft;
+    if (d && !d.editing && !String(d.idFacture || '').trim()) await this.refreshVenteIdFacture();
   }
   // ID Facture (colonne dédiée, ex. colonne I) : PAS pré-imprimé comme le n° de facture — calculé
   // comme dernier ID existant + 1, lu directement dans le fichier (même logique que _venteNextId(),
@@ -1203,7 +1237,9 @@ class Component {
     const ttc = Math.round((ht + tvaIrl + tvaFr) * 100) / 100;
     const delai = Math.max(0, Math.min(30, Math.round(this._vNum(d.delai))));
     const datePrev = this._addDaysIso(d.date, delai);
-    const id = +d.id || this._venteNextId();
+    // `d.id` est une clé locale préfixée (« L12 ») : `+d.id` vaudrait NaN et fabriquerait une
+    // nouvelle clé à chaque enregistrement, ce qui casserait le lien avec le suivi de paiement.
+    const id = d.id || this._venteNextId();
     const grenke = (d.grenke && this._vNum(d.grenke.montant) > 0) ? d.grenke : null;
     const avoirRaw = (d.avoirActif && this._vNum(d.avoir) > 0) ? this._vNum(d.avoir) : 0;
     // Aucune information ne doit se perdre : si l'avoir tapé dépasse le TTC de CETTE facture (ex.
@@ -1281,7 +1317,52 @@ class Component {
     // afterClose, exécuté par confirmAppendWrite juste après la fermeture de CETTE modale — ordre
     // garanti, sans dépendre du temps que met refreshVenteInvoiceNumber (I/O réelle) ci-dessous.
     this.setState({ venteDraft: this.venteDefault(), compFan: { mode: 'vente', title: `Vente de ${lignes.length} espèce${lignes.length > 1 ? 's' : ''} à ${client}`, cards } });
-    await this.refreshVenteInvoiceNumber(); // BUG 2 — après la ligne vierge ET après la réinitialisation du draft
+    await this.refreshVenteNumeros(); // BUG 2 — après la ligne vierge ET après la réinitialisation du draft
+  }
+  // ---------- Nettoyage des saisies de vente « fantômes » (données LOCALES uniquement) ----------
+  // Une saisie de vente n'est censée exister dans le tableau de bord QUE parce qu'une ligne a été
+  // écrite dans le fichier Excel (circuit A : aperçu → écriture → relecture de contrôle). Une saisie
+  // locale que le fichier source ne connaît pas — ni par son numéro, ni par sa signature métier
+  // (client + date + montant) — est donc un résidu : c'est le cas des ventes restées accrochées à un
+  // numéro fabriqué localement (« 7000 et plus »), qui s'affichaient en double à côté de la vraie
+  // ligne du fichier. Ce nettoyage ne touche QUE le stockage local du navigateur, JAMAIS Excel.
+  _venteSigLocale(v) {
+    const p = String(v.date || '').split('-').map(Number);
+    return [this.nrm(v.client || ''), p[0] || 0, p[1] || 0, p[2] || 0, Math.round(Math.abs(this._vNum(v.ttc)) * 100)].join('|');
+  }
+  saisiesFantomes() {
+    const src = this.state.ventes;
+    // Garde-fou indispensable : sans fichier source chargé, TOUTES les saisies passeraient pour des
+    // fantômes et le bouton effacerait des données parfaitement valides.
+    if (!Array.isArray(src) || !src.length) return { pret: false, raison: 'Le fichier des ventes n’est pas chargé : impossible de savoir ce qui existe vraiment. Connectez-le dans Paramètres, puis revenez ici.', lignes: [] };
+    const refs = new Set(src.map(f => this.nrm(f.ref)).filter(Boolean));
+    const sigs = new Set(src.map(f => { const o = this.pIso(f.d); return [this.nrm(f.partner || ''), o.y, o.m, o.d, Math.round(Math.abs(this._vNum(f.ttc)) * 100)].join('|'); }));
+    // Deux familles, toutes deux « absentes du fichier source » par leur NUMÉRO :
+    //  · doublon    — la même vente existe bien dans le fichier (client + date + montant), mais sous
+    //                 son vrai numéro : la saisie locale en est la copie au numéro fabriqué ;
+    //  · introuvable — rien ne lui correspond dans le fichier, ni numéro ni signature.
+    const lignes = [];
+    this.venteSaisieRows().forEach(v => {
+      const num = this.nrm(v.num || '');
+      if (num && refs.has(num)) return; // le fichier porte ce numéro : la saisie est légitime
+      lignes.push({ ...v, _motif: sigs.has(this._venteSigLocale(v)) ? 'doublon' : 'introuvable' });
+    });
+    return { pret: true, raison: '', lignes };
+  }
+  openFantomes() { this.setState({ fantomesAsk: this.saisiesFantomes() }); }
+  closeFantomes() { this.setState({ fantomesAsk: null }); }
+  // Retire les saisies fantômes ET leurs satellites locaux (ligne de suivi de paiement et fiche
+  // Grenke créées par la même saisie). Le suivi de paiement n'est purgé que des lignes que le
+  // fichier ne connaît pas : celles relues d'Excel doivent rester intactes.
+  confirmFantomes() {
+    const f = this.saisiesFantomes();
+    if (!f.pret || !f.lignes.length) { this.setState({ fantomesAsk: null }); return; }
+    const ids = new Set(f.lignes.map(v => String(v.id)));
+    const refsSrc = new Set((this.state.ventes || []).map(x => this.nrm(x.ref)).filter(Boolean));
+    this.saveVenteSaisie(this.venteSaisieRows().filter(v => !ids.has(String(v.id))));
+    this.savePayTrack(this.payTrackRows().filter(p => !(ids.has(String(p.id)) && !refsSrc.has(this.nrm(p.num || '')))));
+    this.saveGrenkeMan(this.grenkeManRows().filter(g => !(g.fromVente && ids.has(String(g.id)))));
+    this.setState({ fantomesAsk: null, msg: { kind: 'success', text: `${f.lignes.length} saisie${f.lignes.length > 1 ? 's' : ''} fantôme${f.lignes.length > 1 ? 's' : ''} retirée${f.lignes.length > 1 ? 's' : ''} du tableau de bord. Vos fichiers Excel n'ont pas été touchés.` } });
   }
   // ---------- Enregistrement des paiements Grenke (manuel, structure feuille « Grenke ») ----------
   _grkNextId() { const ids = [...this.grenkeManRows().map(r => +r.id || 0), ...this.venteSaisieRows().map(r => +r.id || 0), ...this.payTrackRows().map(r => +r.id || 0)]; return (ids.length ? Math.max(...ids) : 141) + 1; }
@@ -2783,7 +2864,10 @@ class Component {
     if (/financ|accept|valid|dossier/.test(s)) return Component.GRK_FINANCE;
     return null;
   }
-  venteWriteValues(rec) { const delai = Math.max(0, Math.min(30, Math.round(this._vNum(rec.delai)))); return { idFacture: rec.idFacture || '', ref: rec.num || '', partner: rec.client || '', date: rec.date || '', ht: rec.ht, tvaIr: rec.tvaIrl, tvaFr: rec.tvaFr, grenke: rec.grenke ? rec.grenke.montant : '', ttc: rec.ttc, delai: delai ? (delai + ' jrs') : '', datePrev: rec.datePrev || '', status: this._venteEtat(rec, this._vNum(rec.avoir)) }; }
+  // `_refEcrivable` : le repli LOCAL (clé interne « L12 », « FV-… ») ne doit jamais atterrir dans la
+  // colonne n° de facture — c'est exactement ainsi que des factures « 7000 et plus » inexistantes
+  // se seraient retrouvées dans le fichier source.
+  venteWriteValues(rec) { const delai = Math.max(0, Math.min(30, Math.round(this._vNum(rec.delai)))); return { idFacture: this._refEcrivable(rec.idFacture), ref: this._refEcrivable(rec.num), partner: rec.client || '', date: rec.date || '', ht: rec.ht, tvaIr: rec.tvaIrl, tvaFr: rec.tvaFr, grenke: rec.grenke ? rec.grenke.montant : '', ttc: rec.ttc, delai: delai ? (delai + ' jrs') : '', datePrev: rec.datePrev || '', status: this._venteEtat(rec, this._vNum(rec.avoir)) }; }
   // N° de facture sans son préfixe (« INV-5720 » → « 5720 ») — format attendu par l'onglet Grenke.
   _numSansPrefixe(num) { return String(num == null ? '' : num).trim().replace(/^[^0-9]+/, ''); }
 
@@ -8203,10 +8287,23 @@ class Component {
       // --- Saisies manuelles (Saisie comptable) : injectées ici, dédoublonnées par n° de facture (priorité à la saisie manuelle) ---
       const isoYMD = iso => { const p = String(iso || '').split('-'); return { y: +p[0] || Component.TODAY.y, m: +p[1] || Component.TODAY.m, d: +p[2] || Component.TODAY.d }; };
       const ptById = {}; (this.state.payTrack || []).forEach(p => { ptById[String(p.id)] = p; });
-      const vSai = (this.state.ventesSaisie || []).map(v => { const o = isoYMD(v.date); const pt = ptById[String(v.id)]; const regle = pt ? (+pt.regle || 0) : 0; const ttc = +v.ttc || 0; const et = pt ? String(pt.etat || '') : ''; const isPaid = /pay|sold/i.test(et) || regle >= ttc - 0.5; const isLate = !isPaid && /retard/i.test(et); return { y: o.y, m: o.m, d: o.d, ref: v.num || ('FV-' + v.id), type: 'Vente', partner: v.client, cat: 'Ventes', amt: ttc, ht: +v.ht || ttc, paid: regle, reste: Math.max(0, ttc - regle), status: isPaid ? 'Payée' : isLate ? 'Retard' : 'Non payée', manual: true }; });
+      const vSai = (this.state.ventesSaisie || []).map(v => { const o = isoYMD(v.date); const pt = ptById[String(v.id)]; const regle = pt ? (+pt.regle || 0) : 0; const ttc = +v.ttc || 0; const et = pt ? String(pt.etat || '') : ''; const isPaid = /pay|sold/i.test(et) || regle >= ttc - 0.5; const isLate = !isPaid && /retard/i.test(et); return { y: o.y, m: o.m, d: o.d, ref: v.num || String(v.id || ''), type: 'Vente', partner: v.client, cat: 'Ventes', amt: ttc, ht: +v.ht || ttc, paid: regle, reste: Math.max(0, ttc - regle), status: isPaid ? 'Payée' : isLate ? 'Retard' : 'Non payée', manual: true }; });
       const aSai = (this.state.achatsSaisie || []).map(a => { const o = isoYMD(a.date); const total = +a.total || 0; const cat = (a.lignes && a.lignes[0] && a.lignes[0].espece) ? a.lignes[0].espece : 'Pêche'; return { y: o.y, m: o.m, d: o.d, ref: a.num || ('AP-' + a.id), type: 'Achat', partner: a.pecheur, cat, amt: -total, paid: total, reste: 0, status: 'Payé', manual: true }; });
+      // Dédoublonnage en DEUX passes.
+      // 1) Par NUMÉRO de facture, la saisie manuelle l'emporte (comportement historique).
+      // 2) RATTRAPAGE des doublons DÉJÀ créés : une saisie locale dont le numéro ne correspond à
+      //    aucune ligne du fichier, mais dont la SIGNATURE MÉTIER (type + tiers + date + montant)
+      //    se retrouve dans le fichier, est la même vente vue deux fois — typiquement l'ancienne
+      //    saisie restée sur une clé locale « FV-7023 » alors que le fichier porte le vrai numéro.
+      //    Le fichier fait foi : c'est la ligne LOCALE qui disparaît, pas celle du fichier.
+      //    (Sans cette passe, la correction ne vaudrait que pour les ventes à venir : les lignes
+      //    déjà en double dans le navigateur de Faustine resteraient affichées deux fois.)
+      const sigOp = r => [r.type, this.nrm(r.partner || ''), r.y, r.m, r.d, Math.round(Math.abs(r.amt || 0) * 100)].join('|');
       const manualRefs = new Set([...vSai, ...aSai].map(r => this.nrm(r.ref)).filter(Boolean));
-      const opsAll = [...vSai, ...aSai, ...baseAll.filter(r => !(r.ref && manualRefs.has(this.nrm(r.ref))))];
+      const fileKept = baseAll.filter(r => !(r.ref && manualRefs.has(this.nrm(r.ref))));
+      const fileSigs = new Set(fileKept.map(sigOp));
+      const manuelsKept = [...vSai, ...aSai].filter(r => !fileSigs.has(sigOp(r)));
+      const opsAll = [...manuelsKept, ...fileKept];
       const ops = opsAll.filter(r => !hiddenOps[this.opHideKey(r)]);
       ops.sort((a, b) => (b.y * 10000 + b.m * 100 + b.d) - (a.y * 10000 + a.m * 100 + a.d));
       return { ops, opsAllLen: opsAll.length };
@@ -9135,7 +9232,9 @@ class Component {
     const vTtc = Math.round((vHt + vTvaIrl + vTvaFr) * 100) / 100;
     const vDelaiN = Math.max(0, Math.min(30, Math.round(this._vNum(vd.delai))));
     const vPrevIso = vd.datePrev || this._addDaysIso(vd.date, vDelaiN);
-    const venteDraft = { id: vd.id, num: vd.num || '', client: vd.client || '', date: vd.date || '', delai: String(vDelaiN), datePrev: vPrevIso ? ptFrDate(vPrevIso) : '—', tvaIrl: vd.tvaIrl === 0 ? '' : (vd.tvaIrl || ''), tvaFr: vd.tvaFr === 0 ? '' : (vd.tvaFr || ''), avoir: vd.avoir === 0 ? '' : (vd.avoir || '') };
+    // `idFacture` (lu dans le fichier) et NON `vd.id` (clé interne) : le champ « ID facture » du
+    // formulaire affichait la clé locale, d'où le fameux 7023 vu par Faustine. Voir _venteNextId.
+    const venteDraft = { id: vd.id, idFacture: vd.idFacture || '', num: vd.num || '', client: vd.client || '', date: vd.date || '', delai: String(vDelaiN), datePrev: vPrevIso ? ptFrDate(vPrevIso) : '—', tvaIrl: vd.tvaIrl === 0 ? '' : (vd.tvaIrl || ''), tvaFr: vd.tvaFr === 0 ? '' : (vd.tvaFr || ''), avoir: vd.avoir === 0 ? '' : (vd.avoir || '') };
     const venteAvoirActif = !!vd.avoirActif;
     // Case « Avoir » = CONSOMMATION d'un avoir existant. On affiche le disponible (lecture seule) et
     // le montant à utiliser (saisi), plafonné au disponible.
@@ -9149,6 +9248,7 @@ class Component {
     // Solde restant du brouillon, recalculé à chaque frappe : TTC − avoir à utiliser.
     const venteDraftSolde = this.fmt(Math.round((vTtc - (venteAvoirActif ? vAvoirUtil : 0)) * 100) / 100);
     const venteNumHint = (vd.numFromFile && vd.num) ? `✓ prochaine facture du fichier${vd.numRow ? ' · ligne ' + vd.numRow : ''}` : '';
+    const venteIdHint = (vd.idFromFile && vd.idFacture) ? '✓ du fichier' : '';
     const venteNumHintStyle = 'font-size:10.5px;font-weight:600;color:#0e7a46;text-transform:none;letter-spacing:0;margin-left:8px';
     const venteDraftHt = this.fmt(vHt); const venteDraftTtc = this.fmt(vTtc);
     const venteEditing = !!(this.state.venteDraft && this.state.venteDraft.editing);
@@ -11057,6 +11157,10 @@ class Component {
 
     const ctxStop = e => { if (e) e.stopPropagation(); };
 
+    // Saisies de vente fantômes (mémoïsé : compare toutes les saisies locales au fichier source,
+    // inutile de refaire ce travail à chaque frappe clavier).
+    const fantomesInfo = this._memo('fantomes', [this.state.ventes, this.state.ventesSaisie], () => this.saisiesFantomes());
+
     // ---- DOCUMENTS ÉDITÉS : pop-up « Imprimer ou PDF ? » et réglages par type ----
     // Le nom proposé est modifiable AVANT l'édition : c'est ce nom que Chrome/Edge reprend dans
     // « Enregistrer au format PDF » (via le <title> du document).
@@ -11141,6 +11245,27 @@ class Component {
       q, onSearch, searchStyle, txPager,
       isAchatView, isGenericTable, achatRows,
       trashOpen, trashLabel, onTrashCancel, onTrashConfirm, trashConfirmStyle, hiddenAchatsChip, hiddenGrenkeChip,
+      // Nettoyage des saisies de vente fantômes (voir saisiesFantomes) — données LOCALES seulement.
+      fantomesCount: fantomesInfo.pret ? fantomesInfo.lignes.length : 0,
+      fantomesPret: fantomesInfo.pret,
+      fantomesRaison: fantomesInfo.raison,
+      fantomesBtnLabel: fantomesInfo.pret ? (fantomesInfo.lignes.length ? `🧹 Examiner ${fantomesInfo.lignes.length} saisie${fantomesInfo.lignes.length > 1 ? 's' : ''} fantôme${fantomesInfo.lignes.length > 1 ? 's' : ''}` : '✓ Aucune saisie fantôme') : 'Fichier des ventes non chargé',
+      fantomesBtnStyle: (fantomesInfo.pret && fantomesInfo.lignes.length)
+        ? 'padding:9px 16px;border-radius:9px;font-size:13px;font-weight:600;color:#b45309;background:#fff;border:1px solid #f0dcae;cursor:pointer;font-family:inherit;white-space:nowrap'
+        : 'padding:9px 16px;border-radius:9px;font-size:13px;font-weight:600;color:#9aa7b8;background:#f7f9fc;border:1px solid #e9edf4;cursor:default;font-family:inherit;white-space:nowrap',
+      onFantomesOpen: () => { if (fantomesInfo.pret && fantomesInfo.lignes.length) this.openFantomes(); },
+      fantomesOpen: !!this.state.fantomesAsk,
+      fantomesRows: (this.state.fantomesAsk && this.state.fantomesAsk.lignes ? this.state.fantomesAsk.lignes : []).map(v => ({
+        num: v.num || `(sans numéro · clé interne ${v.id})`, client: v.client || '—',
+        date: v.date ? ptFrDate(v.date) : '—', ttc: this.fmt(this._vNum(v.ttc)),
+        motif: v._motif === 'doublon' ? 'doublon — cette vente existe dans le fichier sous son vrai numéro' : 'introuvable dans le fichier des ventes',
+        motifStyle: v._motif === 'doublon'
+          ? 'font-size:10.5px;font-weight:600;color:#b45309;background:#fff4e5;border:1px solid #f0dcae;border-radius:6px;padding:2px 7px;white-space:nowrap'
+          : 'font-size:10.5px;font-weight:600;color:#b91c1c;background:#fdeaea;border:1px solid #f1d4d4;border-radius:6px;padding:2px 7px;white-space:nowrap',
+      })),
+      onFantomesConfirm: () => this.confirmFantomes(),
+      onFantomesCancel: () => this.closeFantomes(),
+      fantomesConfirmStyle: 'padding:9px 16px;border-radius:9px;font-size:13px;font-weight:600;color:#fff;background:#b45309;border:none;cursor:pointer;font-family:inherit',
       resetAskOpen: !!this.state.resetAsk,
       onResetAsk: () => this.setState({ resetAsk: true }),
       onResetCancel: () => this.setState({ resetAsk: null }),
@@ -11186,7 +11311,7 @@ class Component {
       achatPaiementImmediat, onAchatImmediatToggle,
       compPayModes, achatIsCheque, achatIsAutre, onAchatObservation, onAchatChequier, onAchatChequeNum, chequierOptions, achatChqHint,
       venteDraft, venteDraftLignes, venteDraftHt, venteDraftTtc, venteDraftSolde, venteDelaiOptions, venteEditing, vsSaveLabel,
-      onVSNum, onVSClient, onVSDate, onVSDelai, onVSTvaIrl, onVSTvaFr, onVSCommit, onVSReset, onVenteAddLigne, venteNumHint, venteNumHintStyle,
+      onVSNum, onVSClient, onVSDate, onVSDelai, onVSTvaIrl, onVSTvaFr, onVSCommit, onVSReset, onVenteAddLigne, venteNumHint, venteNumHintStyle, venteIdHint,
       venteAvoirActif, onVSAvoirToggle, onVSAvoir, venteAvoirDispoShow, venteAvoirDispoText, venteAvoirTrop, venteAvoirAlerte,
       avoirManuelOpen, avoirManuelAsk, avoirManuelForm, avoirManuelClient, avoirManuelMontant, avoirManuelText,
       onAvoirManuelStart, onAvoirManuelMontant, onAvoirManuelSave, onAvoirManuelCancel,

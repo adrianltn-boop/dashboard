@@ -597,7 +597,7 @@
                 <div><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Date</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" type="date" value="{{ venteDraft.date }}" oninput="{{ onVSDate }}"></div>
                 <div><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Délai (0–30 j)</label><select style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" value="{{ venteDraft.delai }}" onchange="{{ onVSDelai }}"><sc-for list="{{ venteDelaiOptions }}" as="o" hint-placeholder-count="5"><option value="{{ o.value }}">{{ o.label }}</option></sc-for></select></div>
                 <div><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Date prévue</label><input style="width:100%;box-sizing:border-box;border:1px solid #e9edf4;background:#f4f7fb;color:#69788c;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" value="{{ venteDraft.datePrev }}" readonly></div>
-                <div><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">ID facture</label><input style="width:100%;box-sizing:border-box;border:1px solid #e9edf4;background:#f4f7fb;color:#69788c;border-radius:9px;padding:9px 11px;font-size:13px;font-family:'IBM Plex Mono',monospace;text-align:right" value="{{ venteDraft.id }}" readonly></div>
+                <div><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">ID facture <span style="{{ venteNumHintStyle }}">{{ venteIdHint }}</span></label><input style="width:100%;box-sizing:border-box;border:1px solid #e9edf4;background:#f4f7fb;color:#69788c;border-radius:9px;padding:9px 11px;font-size:13px;font-family:'IBM Plex Mono',monospace;text-align:right" value="{{ venteDraft.idFacture }}" placeholder="lu du fichier" readonly></div>
               </div>
               <div style="max-width:440px;padding-top:14px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Client</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" list="comp-clients" value="{{ venteDraft.client }}" oninput="{{ onVSClient }}" placeholder="Tapez le début du nom…"></div>
               <div style="display:grid;grid-template-columns:1.3fr 1fr 92px 96px 100px 28px;gap:8px;padding:12px 2px 4px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3">
@@ -2186,6 +2186,17 @@
           </div>
         </div>
 
+        <div style="background:#fff;border:1px solid #e9edf4;border-radius:14px;box-shadow:0 1px 2px rgba(16,32,54,.04);padding:20px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap">
+          <div style="min-width:0;flex:1 1 420px">
+            <span style="font-size:14px;font-weight:600;color:#0e1b2e">Saisies de vente fantômes</span>
+            <div style="font-size:12.5px;color:#8291a5;margin-top:6px;line-height:1.6;max-width:720px">Une vente n'est mémorisée par le tableau de bord que parce qu'une ligne a été écrite dans votre fichier Excel. Celles que le fichier ne connaît plus — ni par leur numéro, ni par le trio client + date + montant — sont des résidus : ce sont elles qui faisaient apparaître vos ventes <b>en double</b>, une fois avec le bon numéro et une fois avec un numéro fabriqué (7000 et plus). Ce nettoyage ne touche que la mémoire du tableau de bord, <b>jamais vos fichiers Excel</b>.</div>
+            <sc-if value="{{ fantomesRaison }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size:12px;font-weight:600;margin-top:8px;color:#b45309">{{ fantomesRaison }}</div>
+            </sc-if>
+          </div>
+          <button style="{{ fantomesBtnStyle }}" onclick="{{ onFantomesOpen }}">{{ fantomesBtnLabel }}</button>
+        </div>
+
         <button style="{{ advToggleStyle }}" onclick="{{ onToggleAdv }}">{{ advToggleLabel }}</button>
 
         <sc-if value="{{ advOpen }}" hint-placeholder-val="{{ false }}">
@@ -3690,6 +3701,33 @@
             <button style="{{ prefixCancelStyle }}" onclick="{{ onCredCancel }}">Annuler</button>
             <button style="{{ credCommitStyle }}" onclick="{{ onCredCommit }}">Enregistrer</button>
           </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ============ NETTOYAGE DES SAISIES DE VENTE FANTÔMES (données locales) ============ -->
+  <sc-if value="{{ fantomesOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ prefixOverlayStyle }}" onclick="{{ onFantomesCancel }}">
+      <div style="{{ grenkeLinkCardStyle }}" onclick="{{ ctxStop }}">
+        <div style="font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">Nettoyage</div>
+        <div style="font-size:16px;font-weight:600;color:#0e1b2e;margin-top:5px">{{ fantomesCount }} saisie(s) de vente introuvable(s) dans le fichier</div>
+        <div style="font-size:12.5px;color:#69788c;margin-top:10px;line-height:1.6">Ces ventes sont mémorisées par le tableau de bord mais votre fichier Excel des ventes ne les connaît pas : ni leur numéro de facture, ni le trio client + date + montant n'y figurent. Ce sont elles qui faisaient apparaître certaines ventes deux fois. Les retirer ne modifie <b>que</b> la mémoire du tableau de bord — <b>votre fichier Excel n'est pas touché</b>. Si l'une d'elles vous semble réelle, annulez et vérifiez d'abord dans Excel.</div>
+        <div style="margin-top:14px;max-height:44vh;overflow:auto;border:1px solid #eef1f6;border-radius:10px">
+          <sc-for list="{{ fantomesRows }}" as="f" hint-placeholder-count="3">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 12px;border-bottom:1px solid #f6f8fc">
+              <div style="min-width:0">
+                <div style="font-size:12.5px;font-weight:600;color:#0e1b2e;font-family:'IBM Plex Mono',monospace">{{ f.num }}</div>
+                <div style="font-size:11.5px;color:#8291a5;margin-top:2px">{{ f.client }} · {{ f.date }}</div>
+                <div style="margin-top:4px"><span style="{{ f.motifStyle }}">{{ f.motif }}</span></div>
+              </div>
+              <div style="font-size:12.5px;font-weight:700;color:#0e1b2e;font-family:'IBM Plex Mono',monospace;white-space:nowrap">{{ f.ttc }}</div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px">
+          <button style="{{ prefixCancelStyle }}" onclick="{{ onFantomesCancel }}">Annuler</button>
+          <button style="{{ fantomesConfirmStyle }}" onclick="{{ onFantomesConfirm }}">Retirer ces saisies du tableau de bord</button>
         </div>
       </div>
     </div>
