@@ -296,7 +296,10 @@
                   <span style="color:#0e1b2e;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.partner }}</span>
                   <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#0e1b2e">{{ t.paidStr }}</span>
                   <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:{{ t.resteColor }}">{{ t.resteStr }}</span>
-                  <span><button style="{{ t.statusButtonStyle }}" onclick="{{ t.onResolve }}" title="{{ t.statusTitle }}">{{ t.status }}</button></span>
+                  <!-- Achats pêcheur : le statut n'est PAS un bouton. Ces lignes ne fournissent ni
+                       statusButtonStyle ni onResolve — le <button> s'affichait donc nu, dans la
+                       police et le cadre par défaut du navigateur, et ne faisait rien au clic. -->
+                  <span><span style="{{ t.statusStyle }}" title="{{ t.statusTitle }}">{{ t.status }}</span></span>
                   <span style="text-align:center;display:flex;gap:4px;justify-content:center;align-items:center">
                     <sc-if value="{{ t.notAnnulled }}" hint-placeholder-val="{{ true }}">
                       <button style="{{ t.trashStyle }}" onclick="{{ t.onTrash }}" title="Masquer cette ligne (corbeille)">🗑</button>

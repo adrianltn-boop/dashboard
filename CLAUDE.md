@@ -91,6 +91,13 @@
   circuit requestPaiementFournPreview. Et le
   Commentaire Grenke, qui n'avait aucune colonne
   et était détruit au nettoyage de la fiche locale.
+- Statut des achats pêcheur : rendu par un <span>,
+  jamais par un <button>. Ces lignes ne fournissent ni
+  statusButtonStyle ni onResolve — le bouton s'affichait
+  nu (police et cadre par défaut du navigateur) et ne
+  faisait rien au clic. Vérifier qu'un placeholder de
+  style existe VRAIMENT dans le constructeur de lignes
+  avant de le poser dans le gabarit.
 - Détection de la colonne commentaire : ne JAMAIS
   tester includes('com') — « customer » contient
   aussi « com », le commentaire écraserait le nom
