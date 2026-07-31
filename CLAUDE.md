@@ -131,6 +131,66 @@
   réparation Excel, et accrochée à une cellule donc
   décalée dès qu'on trie). La ligne reste intacte,
   seulement barrée et grisée.
+- États des dossiers Grenke : même règle que les
+  ETAT_* du suivi de paiement. Vocabulaire UNIQUE
+  (GRK_FINANCE / GRK_ATTENTE / GRK_PARTIEL /
+  GRK_SOLDE), état TOUJOURS déduit par _grenkeEtat
+  (montant financé, p1, p2, charges, restant dû,
+  réception), JAMAIS recopié de la cellule Excel.
+  GRENKE_STATUT n'est plus une chaîne concurrente :
+  c'est GRK_ATTENTE. Avant, trois vocabulaires
+  coexistaient (« En attente paiement Grenke » écrit
+  dans Excel, « En cours » codé en dur à la création
+  d'une fiche — un mot absent de tous les fichiers —,
+  et `g.statut || '—'` à l'affichage) : le même
+  dossier portait trois états selon l'endroit d'où on
+  le regardait.
+- PIÈGE (même famille que ETAT_*) : ce que le tableau
+  de bord ÉCRIT et ce que la relecture ATTEND doivent
+  coïncider. Une ligne présente dans la feuille
+  « Grenke » est par définition un dossier transmis
+  (drapeau `transmis`) : sans lui, une vente écrite à
+  l'instant en GRK_ATTENTE ressortirait aussitôt « en
+  écart » vers GRK_FINANCE à chaque démarrage.
+- _grkEtatConnu : ORDRE des tests. « partiel » AVANT
+  les mots du solde, sinon « PARTIELLEMENT RÉGLÉ »
+  (qui contient « regle ») serait rattaché à SOLDÉ.
+  Les libellés hérités (« sold out », « En cours »,
+  « paid ») sont reconnus et rattachés à la constante
+  la plus proche ; un texte non reconnu est montré tel
+  quel dans l'aperçu, jamais deviné ni écrasé en
+  silence — la correction passe par _grenkeEcarts →
+  requestVerifPreview (aperçu, sauvegarde datée,
+  écriture, relecture de contrôle).
+- Cellule « Remains » VIDE n'est pas un zéro. La
+  traiter comme 0 ferait déclarer « soldé » un dossier
+  dont rien n'a été encaissé (même famille d'erreur
+  que « TTC moins réglé » sur les duplicata).
+- Tableau Grenke : UN SEUL, import Excel + saisies
+  locales fusionnés et dédoublonnés par n° de dossier
+  (la saisie l'emporte). Un dossier SANS numéro
+  exploitable reçoit une clé propre (`loc#id` /
+  `xl#rang`) : dédoublonner sur une clé vide ferait
+  disparaître toutes les lignes sans numéro sauf une.
+- PIÈGE renderVals (zone morte temporelle) : les
+  centaines de `const` de renderVals partagent UNE
+  portée. Réutiliser dans le bloc Grenke un style
+  déclaré plus bas (payRowBtnStyle) lève un
+  ReferenceError au premier rendu de l'onglet. Chaque
+  bloc déclare les styles qu'il pose.
+- Relecture automatique : un seul chemin
+  (relectureAuto), verrou `_relectureEnCours` comme
+  `_stockRecalcEnCours`. On compare d'abord
+  file.lastModified et on ne relit intégralement que
+  ce qui a bougé — relire tous les classeurs à chaque
+  tour figerait l'écran plusieurs secondes.
+  refreshFolders() force la relecture COMPLÈTE des
+  dossiers : réservé au mode forcé (bouton Rafraîchir).
+  Minuteries rendues (clearInterval) à la mise en
+  arrière-plan et sur beforeunload.
+- Le bandeau de relecture ne dit JAMAIS « aucun
+  changement » quand rien n'était connecté : il compte
+  les documents surveillés (`docs`) et le dit.
 
 ## Réglage de l'écriture (colonnes)
 - Les colonnes d'écriture sont DÉTECTÉES automatiquement

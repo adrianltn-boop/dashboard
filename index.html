@@ -80,6 +80,14 @@
           <button data-help="Bascule l'affichage de tous les montants entre TTC (toutes taxes comprises) et HT (hors taxes). Une fenêtre de confirmation s'ouvre pour éviter les bascules accidentelles — les fichiers ne sont jamais modifiés, seul l'affichage change." data-help-title="Affichage HT / TTC" style="{{ htTtcStyle }}" onclick="{{ onToggleHtTtc }}" title="Basculer l'affichage HT / TTC">{{ htTtcLabel }}</button>
         </sc-if>
         <button data-help="Relit immédiatement tous les fichiers Excel et dossiers connectés. En temps normal ce n'est pas nécessaire : la surveillance automatique détecte seule les changements toutes les 4 secondes." data-help-title="Rafraîchir" style="{{ refreshStyle }}" onclick="{{ onRefreshAll }}" title="Rafraîchir les données maintenant">⟳ Rafraîchir</button>
+        <sc-if value="{{ relectureBannerOpen }}" hint-placeholder-val="{{ false }}">
+          <span style="{{ relectureBannerStyle }}" data-help="Le tableau de bord relit vos documents tout seul : il compare d'abord la date de dernière modification de chaque fichier et ne relit en entier que ceux qui ont réellement bougé. Une relecture complète a lieu au retour sur cet onglet, et au minimum une fois par heure." data-help-title="Relecture automatique">
+            <span>🕑 {{ relectureBannerText }}</span>
+            <sc-if value="{{ relectureHasChanges }}" hint-placeholder-val="{{ false }}">
+              <button style="{{ relectureVoirStyle }}" onclick="{{ onRelectureVoir }}">Voir</button>
+            </sc-if>
+          </span>
+        </sc-if>
         <sc-if value="{{ verifBannerOpen }}" hint-placeholder-val="{{ false }}">
           <span style="display:inline-flex;align-items:center;gap:8px;padding:5px 10px;border-radius:9px;background:#fff7ed;border:1px solid #fbd9b4;font-size:12px;color:#b45309" title="{{ verifBannerText }}">
             <span>⚠ Corrections à valider</span>
@@ -922,7 +930,7 @@
     <sc-if value="{{ isGrenkeView }}" hint-placeholder-val="{{ false }}">
       <div style="padding:0 24px 24px">
         <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
-          <sc-for list="{{ gmSummary }}" as="s" hint-placeholder-count="3">
+          <sc-for list="{{ grenkeSummary }}" as="s" hint-placeholder-count="3">
             <div style="flex:1;min-width:180px;background:#fff;border:1px solid #e9edf4;border-left:3px solid {{ s.bar }};border-radius:12px;padding:13px 16px;box-shadow:0 1px 2px rgba(16,32,54,.04)">
               <div style="font-size:12px;color:#69788c;font-weight:500">{{ s.label }}</div>
               <div style="font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600;color:{{ s.valueColor }};margin-top:6px">{{ s.value }}</div>
@@ -932,7 +940,7 @@
         </div>
 
         <div style="background:#fff;border:1px solid #e9edf4;border-radius:14px;box-shadow:0 1px 2px rgba(16,32,54,.04);padding:16px 18px;margin-bottom:16px">
-          <div style="font-size:14px;font-weight:700;color:#0e1b2e;margin-bottom:12px">Enregistrement d'un paiement Grenke</div>
+          <div style="font-size:14px;font-weight:700;color:#0e1b2e;margin-bottom:12px">Fiche d'un dossier Grenke</div>
           <div style="display:flex;gap:12px;flex-wrap:wrap">
             <div style="flex:1 1 150px"><label style="{{ payLbl }}">N° facture</label><input style="{{ payInput }}" value="{{ grkDraft.num }}" oninput="{{ onGrkNum }}" placeholder="Invoice Number"></div>
             <div style="flex:2 1 200px"><label style="{{ payLbl }}">Client</label><input style="{{ payInput }}" list="vs-clients" value="{{ grkDraft.cust }}" oninput="{{ onGrkCust }}" placeholder="Customer"></div>
@@ -942,7 +950,7 @@
             <div style="flex:1 1 110px"><label style="{{ payLbl }}">1er paiement</label><input style="{{ payInputN }}" type="text" inputmode="decimal" value="{{ grkDraft.p1 }}" oninput="{{ onGrkP1 }}" placeholder="0"></div>
             <div style="flex:1 1 110px"><label style="{{ payLbl }}">2e paiement</label><input style="{{ payInputN }}" type="text" inputmode="decimal" value="{{ grkDraft.p2 }}" oninput="{{ onGrkP2 }}" placeholder="0"></div>
             <div style="flex:1 1 110px"><label style="{{ payLbl }}">Charges</label><input style="{{ payInputN }}" type="text" inputmode="decimal" value="{{ grkDraft.charge }}" oninput="{{ onGrkCharge }}" placeholder="0"></div>
-            <div style="flex:1 1 140px"><label style="{{ payLbl }}">Statut</label><select style="{{ payInput }}" value="{{ grkDraft.statut }}" onchange="{{ onGrkStatut }}"><sc-for list="{{ grkStatutOptions }}" as="o" hint-placeholder-count="4"><option value="{{ o.value }}">{{ o.label }}</option></sc-for></select></div>
+            <div style="flex:1 1 180px"><label style="{{ payLbl }}">État (calculé)</label><div style="padding:9px 0 0"><span style="{{ grkDraftEtatStyle }}">{{ grkDraftEtat }}</span></div></div>
           </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:12px">
             <div style="flex:3 1 260px"><label style="{{ payLbl }}">Commentaire</label><input style="{{ payInput }}" value="{{ grkDraft.com }}" oninput="{{ onGrkCom }}" placeholder="Note libre (com.)"></div>
@@ -953,38 +961,11 @@
           </div>
         </div>
 
-        <div style="background:#fff;border:1px solid #e9edf4;border-radius:14px;box-shadow:0 1px 2px rgba(16,32,54,.04);overflow:hidden;margin-bottom:16px">
-          <div style="padding:14px 20px;border-bottom:1px solid #eef1f6;font-size:14px;font-weight:600;color:#0e1b2e">Paiements Grenke enregistrés</div>
-          <div style="overflow-x:auto"><div style="min-width:1120px;padding:0 20px 8px">
-            <div style="display:grid;grid-template-columns:108px minmax(130px,1.3fr) 96px 92px 92px 96px 88px 96px 84px 1fr 64px;gap:8px;align-items:center;padding:12px 4px;font-size:10.5px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.3px">
-              <span>N° facture</span><span>Client</span><span style="text-align:right">Total TTC</span><span style="text-align:right">1er pmt</span><span style="text-align:right">2e pmt</span><span style="text-align:right">Restant</span><span style="text-align:right">Charges</span><span style="text-align:right">Total reçu</span><span>Statut</span><span>Com.</span><span></span>
-            </div>
-            <sc-for list="{{ gmList }}" as="r" hint-placeholder-count="6">
-              <div style="display:grid;grid-template-columns:108px minmax(130px,1.3fr) 96px 92px 92px 96px 88px 96px 84px 1fr 64px;gap:8px;align-items:center;padding:10px 4px;border-top:1px solid #f1f4f8;font-size:12.5px">
-                <span style="color:#3a4a5e;font-family:'IBM Plex Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.num }}</span>
-                <span style="color:#0e1b2e;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.cust }}</span>
-                <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600">{{ r.ttc }}</span>
-                <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#0e1b2e">{{ r.p1 }}</span>
-                <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#0e1b2e">{{ r.p2 }}</span>
-                <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:{{ r.remColor }}">{{ r.rem }}</span>
-                <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#69788c">{{ r.charge }}</span>
-                <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:#15803d">{{ r.recv }}</span>
-                <span><span style="{{ r.statutStyle }}">{{ r.statut }}</span></span>
-                <span style="color:#69788c;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.com }}</span>
-                <span style="display:flex;gap:5px;justify-content:flex-end"><button style="{{ payRowBtnStyle }}" onclick="{{ r.onEdit }}" title="Modifier">✎</button><button style="{{ payDelBtnStyle }}" onclick="{{ r.onDelete }}" title="Supprimer">🗑</button></span>
-              </div>
-            </sc-for>
-            <sc-if value="{{ gmEmpty }}" hint-placeholder-val="{{ false }}">
-              <div style="padding:26px 4px;text-align:center;color:#9aa7b8;font-size:12.5px">Aucun paiement Grenke enregistré. Saisissez-en un ci-dessus, ou cochez « Financement Grenke » sur une vente dans Saisie de vente.</div>
-            </sc-if>
-          </div></div>
-        </div>
-
         <div style="background:#fff;border:1px solid #e9edf4;border-radius:14px;box-shadow:0 1px 2px rgba(16,32,54,.04);overflow:hidden">
           <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #eef1f6;flex-wrap:wrap;gap:10px">
-            <div style="display:flex;align-items:baseline;gap:10px" data-help="Les dossiers financés par Grenke, lus dans la feuille « Grenke » de votre fichier de ventes : Total TTC, 1er et 2e paiement, charges, et Restant = Total − paiements − charges. Le bouton Lier rattache un dossier à la bonne facture interne si le n° ne correspond pas automatiquement." data-help-title="Financement Grenke">
-              <span style="font-size:14px;font-weight:600;color:#0e1b2e">Dossiers Grenke importés</span>
-              <span style="font-size:12px;color:#9aa7b8">lus dans la feuille « Grenke » de votre fichier de ventes</span>
+            <div style="display:flex;align-items:baseline;gap:10px" data-help="Tous vos dossiers Grenke en un seul tableau : ceux lus dans la feuille « Grenke » de votre fichier de ventes ET ceux saisis ici, dédoublonnés par numéro de dossier (la saisie l'emporte tant qu'elle n'est pas repartie dans Excel). L'État n'est jamais recopié du fichier : il se déduit du montant financé, des paiements, des charges et du restant dû. Le crayon ✎ ouvre la fiche du dossier, le bouton Lier le rattache à la bonne facture interne." data-help-title="Financement Grenke">
+              <span style="font-size:14px;font-weight:600;color:#0e1b2e">Dossiers Grenke</span>
+              <span style="font-size:12px;color:#9aa7b8">feuille « Grenke » du fichier de ventes + saisies, dédoublonnés par n° de dossier</span>
               <sc-if value="{{ hiddenGrenkeChip.show }}" hint-placeholder-val="{{ false }}">
                 <button style="{{ hiddenGrenkeChip.style }}" onclick="{{ hiddenGrenkeChip.onClick }}">{{ hiddenGrenkeChip.label }}</button>
               </sc-if>
@@ -997,26 +978,27 @@
             </div>
           </div>
           <div style="padding:0 20px 8px;overflow-x:auto">
-           <div style="min-width:1120px">
-            <div style="display:grid;grid-template-columns:70px 140px 78px minmax(120px,1fr) 92px 84px 84px 82px 78px 96px 84px 36px;gap:8px;align-items:center;padding:12px 4px">
-              <sc-for list="{{ grenkeHeaders }}" as="h" hint-placeholder-count="12">
+           <div style="min-width:1360px">
+            <div style="display:grid;grid-template-columns:74px 116px 74px minmax(100px,1fr) 90px 86px 86px 80px 76px 90px 172px minmax(70px,.7fr) 62px;gap:8px;align-items:center;padding:12px 4px">
+              <sc-for list="{{ grenkeHeaders }}" as="h" hint-placeholder-count="13">
                 <span style="{{ h.style }}" onclick="{{ h.onClick }}">{{ h.label }}</span>
               </sc-for>
             </div>
             <sc-for list="{{ grenkeTableRows }}" as="g" hint-placeholder-count="8">
-              <div style="display:grid;grid-template-columns:70px 140px 78px minmax(120px,1fr) 92px 84px 84px 82px 78px 96px 84px 36px;gap:8px;align-items:center;padding:{{ rowPad }};border-top:1px solid #f1f4f8;font-size:13px">
-                <span style="color:#3a4a5e;font-family:'IBM Plex Mono',monospace">{{ g.ref }}</span>
+              <div style="display:grid;grid-template-columns:74px 116px 74px minmax(100px,1fr) 90px 86px 86px 80px 76px 90px 172px minmax(70px,.7fr) 62px;gap:8px;align-items:center;padding:{{ rowPad }};border-top:1px solid #f1f4f8;font-size:13px">
+                <span style="color:#3a4a5e;font-family:'IBM Plex Mono',monospace;display:flex;align-items:center;gap:4px;min-width:0"><span style="overflow:hidden;text-overflow:ellipsis">{{ g.ref }}</span><sc-if value="{{ g.isLocal }}" hint-placeholder-val="{{ false }}"><span style="{{ g.srcStyle }}" title="Saisie non encore enregistrée dans le fichier Excel">{{ g.srcLabel }}</span></sc-if></span>
                 <span style="min-width:0"><button style="{{ g.linkStyle }}" onclick="{{ g.onLink }}" title="{{ g.linkTitle }}">{{ g.linkLabel }}</button></span>
                 <span style="color:#69788c;font-family:'IBM Plex Mono',monospace;font-size:12px">{{ g.date }}</span>
                 <span style="color:#0e1b2e;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ g.cust }}</span>
                 <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:#0e1b2e">{{ g.ttc }}</span>
                 <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#0e1b2e">{{ g.p1 }}</span>
                 <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#0e1b2e">{{ g.p2 }}</span>
-                <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:#b45309">{{ g.rem }}</span>
+                <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:{{ g.remColor }}">{{ g.rem }}</span>
                 <span style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#69788c">{{ g.charge }}</span>
                 <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;color:#0e1b2e">{{ g.total }}</span>
                 <span><span style="{{ g.statutStyle }}">{{ g.statut }}</span></span>
-                <span style="text-align:center"><button style="{{ g.trashStyle }}" onclick="{{ g.onTrash }}" title="Masquer cette ligne (corbeille)">🗑</button></span>
+                <span style="color:#69788c;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ g.com }}</span>
+                <span style="display:flex;gap:5px;justify-content:flex-end"><button style="{{ g.editStyle }}" onclick="{{ g.onEdit }}" title="Modifier ce dossier">✎</button><button style="{{ g.trashStyle }}" onclick="{{ g.onTrash }}" title="{{ g.trashTitle }}">🗑</button></span>
               </div>
             </sc-for>
             <sc-if value="{{ grenkePager.show }}" hint-placeholder-val="{{ false }}">
@@ -1029,7 +1011,7 @@
               </div>
             </sc-if>
             <sc-if value="{{ grenkeEmpty }}" hint-placeholder-val="{{ false }}">
-              <div style="{{ emptyStyle }}">Aucune ligne Grenke. Importez le fichier de ventes (feuille « Grenke ») depuis Paramètres.<div><button style="{{ emptyBtnStyle }}" onclick="{{ onGoImport }}">Ouvrir les Paramètres</button></div></div>
+              <div style="{{ emptyStyle }}">Aucun dossier Grenke. Saisissez-en un dans la fiche ci-dessus, cochez « Financement Grenke » sur une vente, ou importez le fichier de ventes (feuille « Grenke ») depuis Paramètres.<div><button style="{{ emptyBtnStyle }}" onclick="{{ onGoImport }}">Ouvrir les Paramètres</button></div></div>
             </sc-if>
            </div>
           </div>
@@ -3169,7 +3151,7 @@
     <div style="{{ prefixOverlayStyle }}" onclick="{{ onGrkDelCancel }}">
       <div style="width:420px;max-width:92vw;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px" onclick="{{ ctxStop }}">
         <div style="font-size:15px;font-weight:700;color:#0e1b2e">Supprimer ce paiement Grenke ?</div>
-        <div style="font-size:12.5px;color:#69788c;margin-top:8px;line-height:1.6">« {{ gmDelName }} » sera supprimé des paiements Grenke enregistrés. Cette action est irréversible.</div>
+        <div style="font-size:12.5px;color:#69788c;margin-top:8px;line-height:1.6">« {{ gmDelName }} » sera retiré de vos saisies Grenke. La ligne du fichier Excel, elle, n'est jamais touchée.</div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">
           <button style="{{ agBtnGhost }}" onclick="{{ onGrkDelCancel }}">Annuler</button>
           <button style="padding:9px 16px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:#b91c1c;border:none;cursor:pointer;font-family:inherit" onclick="{{ onGrkDelConfirm }}">Supprimer</button>

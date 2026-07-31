@@ -220,7 +220,7 @@ class Component {
     empDocs: {}, empDelDoc: null, bankSalaryEmp: '', bankSalaryMonth: '',
     agenda: [], agendaMonth: null, agendaEdit: null, agendaDelAsk: null,
     payTrack: [], payDraft: null,
-    restartRun: null, verifPending: null, extChanges: null, venteAvoirAsk: null, venteAvoirDispo: null, avoirManuel: null, ficheTiers: null,
+    restartRun: null, verifPending: null, extChanges: null, relecture: null, venteAvoirAsk: null, venteAvoirDispo: null, avoirManuel: null, ficheTiers: null,
     ventesSaisie: [], venteDraft: null,
     grenkeMan: [], grkDraft: null, grkDelAsk: null,
     achatsSaisie: [], achatDraft: null, chequiersLive: [], compTab: 'Achat', venteGrenke: null, compFan: null, paiementDraft: null, chqEditDraft: null, stockRoomAlert: null, avoirTotals: {}, stockLines: [], stockPick: false, chequierLines: [],
@@ -304,7 +304,18 @@ class Component {
   static EMPDOCS_KEY = 'avEmpDocs';
   static AGENDA_KEY = 'avAgenda';
   static PAYTRACK_KEY = 'avPayTrack';
-  static GRENKE_STATUT = 'En attente paiement Grenke'; // statut écrit dans Factures (ETAT) et dans l'onglet Grenke
+  // Vocabulaire UNIQUE des états d'un dossier Grenke — même principe que les constantes ETAT_* du
+  // suivi de paiement. Trois vocabulaires concurrents coexistaient auparavant sans arbitre :
+  // GRENKE_STATUT (« En attente paiement Grenke », écrit dans Excel), « En cours » (codé en dur à la
+  // création d'une fiche depuis une vente — un mot qui n'existait dans AUCUN fichier), et la cellule
+  // Excel recopiée telle quelle à l'affichage (une cellule vide devenait « — »). Résultat : le même
+  // dossier portait un état différent selon l'endroit où on le regardait, et la relecture ne pouvait
+  // rien vérifier. Désormais l'état est TOUJOURS déduit des montants et des dates par _grenkeEtat().
+  static GRK_FINANCE = 'FINANCÉ';               // dossier connu, montant financé, ni date de réception ni paiement
+  static GRK_ATTENTE = 'EN ATTENTE PAIEMENT GRENKE'; // dossier parti chez Grenke, rien reçu à ce jour
+  static GRK_PARTIEL = 'PARTIELLEMENT RÉGLÉ';   // un premier versement est arrivé, il reste un solde
+  static GRK_SOLDE = 'SOLDÉ';                   // restant dû nul : le dossier est clos
+  static GRENKE_STATUT = Component.GRK_ATTENTE; // statut écrit dans Factures (ETAT) et dans l'onglet Grenke
   static ETAT_AVOIR = 'AVOIR'; // état d'une facture d'avoir — surligné en bleu à l'écriture (voir _buildMarkStyler)
   // Vocabulaire UNIQUE des états « Suivi des paiements » — partagé par la création d'une vente
   // (_venteEtat), la saisie manuelle d'un paiement (commitPay/_paySuiviEtat) et la relecture de
@@ -720,12 +731,19 @@ class Component {
     try { const as = JSON.parse(localStorage.getItem(Component.ACHSAISIE_KEY) || 'null'); if (Array.isArray(as)) this.setState({ achatsSaisie: as }); } catch (e) {}
     try { const fs = JSON.parse(localStorage.getItem(Component.FOURN_KEY) || 'null'); if (Array.isArray(fs)) this.setState({ fournSaisie: fs }); } catch (e) {}
     try { this.restoreHandles(); } catch (e) {}
+    // Relecture des documents : minuterie horaire (filet), plus le retour sur l'onglet. Tout passe
+    // par relectureAuto, qui pose un verrou et ne relit que les fichiers dont l'horodatage a bougé.
     this._onVisible = () => {
-      if (document.hidden) this.stopWatching();
-      else if (this.state.autoRefresh) { this.startWatching(true); this.pollWatched(); this.refreshFolders(); }
+      if (document.hidden) { this.stopWatching(); this.stopRelecture(); return; }
+      this.startRelecture();
+      if (this.state.autoRefresh) { this.startWatching(true); this.relectureAuto(); }
     };
-    this._onFocus = () => { if (this.state.autoRefresh) { this.pollWatched(); this.refreshFolders(); } };
-    try { document.addEventListener('visibilitychange', this._onVisible); window.addEventListener('focus', this._onFocus); } catch (e) {}
+    this._onFocus = () => { if (this.state.autoRefresh) this.relectureAuto(); };
+    // Fermeture de l'onglet : on rend les minuteries (clearInterval), sans quoi elles survivraient
+    // à une navigation interne et réveilleraient le disque pour rien.
+    this._onUnload = () => { this.stopRelecture(); this.stopWatching(); };
+    try { document.addEventListener('visibilitychange', this._onVisible); window.addEventListener('focus', this._onFocus); window.addEventListener('beforeunload', this._onUnload); } catch (e) {}
+    this.startRelecture();
   }
   // ---------- helpers ----------
   hexToRgba(hex, a) { const h = hex.replace('#', ''); return `rgba(${parseInt(h.substring(0,2),16)},${parseInt(h.substring(2,4),16)},${parseInt(h.substring(4,6),16)},${a})`; }
@@ -1248,7 +1266,12 @@ class Component {
     if (pi >= 0) pt[pi] = ptRec; else pt.unshift(ptRec);
     this.savePayTrack(pt);
     const gm = this.grenkeManRows().slice(); const gi = gm.findIndex(x => String(x.id) === String(id));
-    if (grenke) { const g = { id, num: rec.num, cust: client, ttc: grenke.montant, p1: grenke.p1, p2: grenke.p2, charge: grenke.charges, statut: (gi >= 0 ? gm[gi].statut : 'En cours') || 'En cours', com: (gi >= 0 ? gm[gi].com : '') || '', fromVente: true }; if (gi >= 0) gm[gi] = g; else gm.unshift(g); this.saveGrenkeMan(gm); }
+    // L'état du dossier Grenke n'est plus inventé ici (« En cours », un mot qui n'existait dans
+    // aucun fichier Excel) : il se DÉDUIT des montants, comme partout ailleurs — voir _grenkeEtat.
+    // Le dossier est transmis à Grenke en même temps que la facture, d'où transmis: true.
+    if (grenke) { const g = { id, num: rec.num, cust: client, ttc: grenke.montant, p1: grenke.p1, p2: grenke.p2, charge: grenke.charges, com: (gi >= 0 ? gm[gi].com : '') || '', fromVente: true };
+      g.statut = this._grenkeEtat({ ...g, transmis: true }, rec.date);
+      if (gi >= 0) gm[gi] = g; else gm.unshift(g); this.saveGrenkeMan(gm); }
     else if (gi >= 0 && gm[gi].fromVente) { gm.splice(gi, 1); this.saveGrenkeMan(gm); }
     const espLbl = lignes.map(l => `${l.espece} ${l.calibre} −${l.poids} kg`).join(' · ');
     const cards = [{ l: '📦 Stock', v: espLbl }, { l: '🏷️ Facture client', v: `${rec.num} — ${client} · TTC ${this.fmt(ttc)} · ${delai === 0 ? 'comptant' : 'délai ' + delai + ' j'} · prévue ${this.dd((datePrev.split('-')[2] || 0))}/${this.dd((datePrev.split('-')[1] || 0))}` }, { l: '💳 Suivi de paiement', v: `Solde à encaisser ${this.fmt(ttc)}` }, { l: '📊 Analytique', v: `Chiffre d'affaires (HT) ${this.fmt(ht)}` }];
@@ -1262,7 +1285,7 @@ class Component {
   }
   // ---------- Enregistrement des paiements Grenke (manuel, structure feuille « Grenke ») ----------
   _grkNextId() { const ids = [...this.grenkeManRows().map(r => +r.id || 0), ...this.venteSaisieRows().map(r => +r.id || 0), ...this.payTrackRows().map(r => +r.id || 0)]; return (ids.length ? Math.max(...ids) : 141) + 1; }
-  grkDefault() { return { id: this._grkNextId(), num: '', cust: '', ttc: '', p1: '', p2: '', charge: '', statut: 'En cours', com: '', editing: false }; }
+  grkDefault() { return { id: this._grkNextId(), num: '', cust: '', ttc: '', p1: '', p2: '', charge: '', com: '', editing: false }; }
   setGrkField(k, v) {
     const d = this.state.grkDraft || this.grkDefault();
     const patch = { ...d, [k]: v };
@@ -1301,6 +1324,20 @@ class Component {
   }
   resetGrkDraft() { this.setState({ grkDraft: this.grkDefault() }); }
   editGrkRow(id) { const r = this.grenkeManRows().find(x => String(x.id) === String(id)); if (!r) return; this.setState({ grkDraft: { ...r, ttc: String(r.ttc == null ? '' : r.ttc), p1: String(r.p1 == null ? '' : r.p1), p2: String(r.p2 == null ? '' : r.p2), charge: String(r.charge == null ? '' : r.charge), editing: true } }); }
+  // Crayon ✎ du tableau unique : ouvre la fiche locale du dossier, qu'il vienne d'une saisie ou du
+  // fichier Excel. Une ligne importée n'a pas encore de fiche — on en prépare une, pré-remplie avec
+  // ce que dit le fichier. Ce qui sera enregistré repartira dans la MÊME ligne Excel
+  // (requestGrenkeUpdate retrouve le dossier par son numéro), sans jamais créer de doublon.
+  editGrenkeDossier(src) {
+    if (!src) return;
+    if (src.localId != null) { this.editGrkRow(src.localId); return; }
+    this.setState({ grkDraft: {
+      id: this._grkNextId(), num: String(src.ref || '').trim(), cust: String(src.cust || '').trim(),
+      ttc: String(src.ttc == null ? '' : src.ttc), p1: String(src.p1 == null || src.p1 === 0 ? '' : src.p1),
+      p2: String(src.p2 == null || src.p2 === 0 ? '' : src.p2), charge: String(src.charge == null || src.charge === 0 ? '' : src.charge),
+      com: String(src.com || ''), transmis: true, dateRecep: src.dateRecep || '', editing: true, fromExcel: true,
+    } });
+  }
   commitGrk() {
     const d = this.state.grkDraft || this.grkDefault();
     const cust = (d.cust || '').trim();
@@ -1308,7 +1345,10 @@ class Component {
     if (!cust || !(ttc > 0)) { this.setState({ msg: { kind: 'error', text: 'Indiquez au moins le client et le Total TTC du dossier Grenke.' } }); return; }
     const id = +d.id || this._grkNextId();
     const prev = this.grenkeManRows().find(x => String(x.id) === String(id));
-    const rec = { id, num: (d.num || '').trim(), cust, ttc, p1: this._vNum(d.p1), p2: this._vNum(d.p2), charge: this._vNum(d.charge), statut: d.statut || 'En cours', com: (d.com || '').trim(), fromVente: prev ? !!prev.fromVente : false };
+    const rec = { id, num: (d.num || '').trim(), cust, ttc, p1: this._vNum(d.p1), p2: this._vNum(d.p2), charge: this._vNum(d.charge), com: (d.com || '').trim(), fromVente: prev ? !!prev.fromVente : false, transmis: prev ? !!prev.transmis : !!d.transmis };
+    // État jamais saisi à la main : il découle des montants (voir _grenkeEtat). C'est justement la
+    // saisie libre de l'état qui le rendait périmé dès le paiement suivant.
+    rec.statut = this._grenkeEtat(rec, d.dateRecep || '');
     const arr = this.grenkeManRows().slice(); const i = arr.findIndex(x => String(x.id) === String(id));
     if (i >= 0) arr[i] = rec; else arr.unshift(rec);
     this.saveGrenkeMan(arr); this.setState({ grkDraft: this.grkDefault() });
@@ -1324,14 +1364,10 @@ class Component {
       const file = await hi.handle.getFile(); const buf = await file.arrayBuffer();
       const wb = await this.readWorkbook(buf);
       const gs = wb.find(s => /grenke/i.test(s.name)); if (!gs) return;
-      const norm = s => this._norm(s);
-      let hIdx = -1, cols = null;
-      for (let i = 0; i < Math.min(gs.rows.length, 10); i++) {
-        const h = (gs.rows[i] || []).map(norm);
-        const inv = h.findIndex(x => x.includes('invoice'));
-        if (inv >= 0) { hIdx = i; cols = { inv, cust: h.findIndex(x => x.includes('customer')), ttc: h.findIndex(x => x.includes('total ttc')), p1: h.findIndex(x => x.includes('1er')), p2: h.findIndex(x => x.includes('2e')), charge: h.findIndex(x => x.includes('charge')), statut: h.findIndex(x => x.includes('statut')), com: h.findIndex(x => this._isComHeader(x)) }; break; }
-      }
-      if (!cols || cols.inv < 0) return;
+      // Repérage PARTAGÉ avec la relecture des états (_grenkeEcarts) : une seule détection de
+      // colonnes, sinon l'écriture et le contrôle finiraient par ne plus viser la même cellule.
+      const gloc = this._grenkeSheetCols(gs); if (!gloc || gloc.cols.inv < 0) return;
+      const hIdx = gloc.headerIdx, cols = gloc.cols;
       const key = this.gNumKey(rec.num);
       let rowIdx = -1;
       if (key) for (let r = hIdx + 1; r < gs.rows.length; r++) { if (this.gNumKey(String((gs.rows[r] || [])[cols.inv] ?? '')) === key) { rowIdx = r; break; } }
@@ -2699,6 +2735,53 @@ class Component {
     if (a > 0.005 || r > 0.005) return Component.ETAT_PARTIELLE; // un premier règlement (ou avoir partiel) est déjà enregistré
     if (dateEchIso && todayIso && dateEchIso < todayIso) return Component.ETAT_RETARD;
     return Component.ETAT_ATTENTE;
+  }
+  // ---------- Dossiers Grenke : état UNIQUE, toujours déduit ----------
+  // Équivalent de _paySuiviEtat/_etatAttendu pour l'onglet Grenke. L'état d'un dossier n'est JAMAIS
+  // recopié depuis la cellule Excel : il se DÉDUIT du montant financé, des deux paiements, des
+  // charges, du restant dû et de la date de réception. C'est la seule façon d'avoir le même mot au
+  // même endroit dans le tableau, dans la fiche de saisie, dans ce qu'on écrit dans Excel et dans
+  // ce que la relecture attend — l'ancien affichage `g.statut || '—'` transformait une cellule vide
+  // en tiret et rendait toute vérification impossible.
+  // `d` accepte indifféremment une ligne lue dans Excel (ref/ttc/p1/p2/charge/rem) ou une fiche
+  // locale (num/ttc/p1/p2/charge). `dateRecep` est la date de réception du dossier chez Grenke (ISO
+  // ou objet {y,m,d}) ; `d.transmis` dit la même chose autrement — une ligne QUI FIGURE dans la
+  // feuille « Grenke » du fichier de ventes est, par définition, un dossier déjà transmis, même si
+  // la feuille ne porte aucune colonne de date. Sans ce drapeau, une vente écrite à l'instant
+  // (marquée « EN ATTENTE PAIEMENT GRENKE » par _venteEtat) ressortirait aussitôt « en écart » à la
+  // relecture suivante — exactement le piège déjà rencontré sur les états du suivi de paiement.
+  _grenkeEtat(d, dateRecep) {
+    const o = d || {};
+    const n = v => { const x = this._vNum(v); return isFinite(x) ? x : 0; };
+    const ttc = n(o.ttc), p1 = n(o.p1), p2 = n(o.p2), ch = n(o.charge);
+    const recu = Math.round((p1 + p2) * 100) / 100;
+    // Restant dû : la valeur du fichier (colonne « Remains ») prime quand elle existe réellement,
+    // sinon on la recalcule. Une cellule vide n'est PAS un zéro (elle ne veut pas dire « soldé »).
+    const remBrut = (o.rem === '' || o.rem == null) ? null : n(o.rem);
+    const rem = remBrut != null ? Math.round(remBrut * 100) / 100 : Math.round((ttc - p1 - p2 - ch) * 100) / 100;
+    if (ttc <= 0.005 && recu <= 0.005) return Component.GRK_FINANCE; // dossier ouvert sans montant : rien à attendre encore
+    if (rem <= 0.005) return Component.GRK_SOLDE;
+    if (recu > 0.005) return Component.GRK_PARTIEL;
+    // Rien reçu : c'est la réception du dossier qui distingue « parti chez Grenke » de « financé ».
+    const dr = (dateRecep && typeof dateRecep === 'object') ? !!dateRecep.y : !!String(dateRecep == null ? '' : dateRecep).trim();
+    return (o.transmis || dr) ? Component.GRK_ATTENTE : Component.GRK_FINANCE;
+  }
+  // Rattache un libellé d'état DÉJÀ présent dans le fichier de l'utilisatrice à la constante la plus
+  // proche. Les fichiers réels contiennent des valeurs héritées (« sold out », « En cours », « paid »,
+  // une cellule vide…) : sans cette table de correspondance, la relecture proposerait de corriger un
+  // état pourtant juste, et Faustine verrait défiler des écarts fantômes à chaque démarrage.
+  // Renvoie null quand le texte n'évoque AUCUN état connu : il est alors montré tel quel dans
+  // l'aperçu de correction, jamais réécrit en silence.
+  _grkEtatConnu(txt) {
+    const s = this._norm(String(txt == null ? '' : txt));
+    if (!s) return null;
+    // ORDRE IMPORTANT : « partiellement réglé » contient « regle », il doit donc être testé AVANT
+    // les mots du solde, sinon un dossier partiel serait rattaché à « SOLDÉ ».
+    if (/partiel|partial|acompte/.test(s)) return Component.GRK_PARTIEL;
+    if (/sold|paye|paid|regle|clotur|termin|complet|encaiss/.test(s)) return Component.GRK_SOLDE;
+    if (/attente|pending|en cours|encours|progress|relanc/.test(s)) return Component.GRK_ATTENTE;
+    if (/financ|accept|valid|dossier/.test(s)) return Component.GRK_FINANCE;
+    return null;
   }
   venteWriteValues(rec) { const delai = Math.max(0, Math.min(30, Math.round(this._vNum(rec.delai)))); return { idFacture: rec.idFacture || '', ref: rec.num || '', partner: rec.client || '', date: rec.date || '', ht: rec.ht, tvaIr: rec.tvaIrl, tvaFr: rec.tvaFr, grenke: rec.grenke ? rec.grenke.montant : '', ttc: rec.ttc, delai: delai ? (delai + ' jrs') : '', datePrev: rec.datePrev || '', status: this._venteEtat(rec, this._vNum(rec.avoir)) }; }
   // N° de facture sans son préfixe (« INV-5720 » → « 5720 ») — format attendu par l'onglet Grenke.
@@ -4416,6 +4499,69 @@ class Component {
       const attendu = Math.round((ttc - avoir - regle) * 100) / 100;
       const actuel = Math.round((this._vNum(brut) || 0) * 100) / 100;
       if (Math.abs(attendu - actuel) > 0.005) out.push({ sheetName: sloc.sheetName, rowIdx: r, col: c.solde, ref: num || client, actuel, attendu, solde: true });
+    }
+    return out;
+  }
+  // ---------- Onglet « Grenke » : repérage des colonnes par LIBELLÉ (jamais par coordonnée) ----------
+  // Un SEUL repérage, partagé par l'écriture d'un paiement (requestGrenkeUpdate) et par la relecture
+  // des états (_grenkeEcarts) : deux détections séparées finiraient tôt ou tard par ne plus viser la
+  // même colonne, et le contrôle vérifierait alors une cellule que l'écriture ne touche jamais.
+  // PIÈGE (déjà rencontré ailleurs) : _norm appelle toLowerCase — une cellule d'en-tête peut
+  // contenir un NOMBRE, d'où le String() systématique.
+  _grenkeSheetCols(gs) {
+    if (!gs || !Array.isArray(gs.rows)) return null;
+    for (let i = 0; i < Math.min(gs.rows.length, 10); i++) {
+      const h = (gs.rows[i] || []).map(x => this._norm(String(x == null ? '' : x)));
+      const pick = (...ks) => { for (const k of ks) { const idx = h.findIndex(x => x && x.includes(k)); if (idx >= 0) return idx; } return -1; };
+      const inv = pick('invoice', 'n° facture', 'numero');
+      if (inv < 0) continue;
+      return { headerIdx: i, cols: {
+        inv,
+        cust: pick('customer', 'client', 'nom'),
+        ttc: pick('total ttc', 'ttc'),
+        p1: pick('1er', '1st', 'payment 1', 'paiement 1', 'premier'),
+        p2: pick('2e', '2nd', 'payment 2', 'paiement 2', 'deuxieme'),
+        rem: pick('remains', 'restant', 'reste'),
+        charge: pick('charge', 'fee'),
+        recv: pick('total received', 'received', 'recu'),
+        statut: pick('statut', 'status'),
+        date: pick('date'),
+        com: h.findIndex(x => this._isComHeader(x)),
+      } };
+    }
+    return null;
+  }
+  // Écarts d'état dans l'onglet « Grenke » : compare la cellule Statut à l'état DÉDUIT des montants
+  // (_grenkeEtat). Même mécanique que _etatsEcarts/_soldesEcarts — on calcule, on propose, on
+  // n'écrit qu'après confirmation et sauvegarde datée. Trois cas sont distingués pour que
+  // l'utilisatrice comprenne ce qu'on lui propose : un libellé hérité qui veut déjà dire la même
+  // chose (« sold out » → SOLDÉ, simple harmonisation), un libellé qui dit autre chose (vraie
+  // correction), et un texte que personne ne sait interpréter (montré tel quel, jamais deviné).
+  _grenkeEcarts(wb) {
+    const gs = (wb || []).find(s => this._norm(String(s.name || '')).indexOf('grenke') >= 0); if (!gs) return [];
+    const loc = this._grenkeSheetCols(gs); if (!loc || loc.cols.statut < 0) return [];
+    const c = loc.cols; const rows = gs.rows; const out = [];
+    for (let r = loc.headerIdx + 1; r < rows.length; r++) {
+      const rr = rows[r] || [];
+      const ref = c.inv >= 0 ? String(rr[c.inv] == null ? '' : rr[c.inv]).trim() : '';
+      const cust = c.cust >= 0 ? String(rr[c.cust] == null ? '' : rr[c.cust]).trim() : '';
+      if (!ref && !cust) continue; // ligne vide : rien à vérifier
+      const ttc = c.ttc >= 0 ? (this._vNum(rr[c.ttc]) || 0) : 0;
+      const p1 = c.p1 >= 0 ? (this._vNum(rr[c.p1]) || 0) : 0;
+      const p2 = c.p2 >= 0 ? (this._vNum(rr[c.p2]) || 0) : 0;
+      const charge = c.charge >= 0 ? (this._vNum(rr[c.charge]) || 0) : 0;
+      // Sans montant financé NI paiement, aucun état n'est déductible : on ne présume rien.
+      if (Math.abs(ttc) <= 0.005 && Math.abs(p1) + Math.abs(p2) <= 0.005) continue;
+      const remCell = c.rem >= 0 ? rr[c.rem] : null;
+      const dossier = { ttc, p1, p2, charge, transmis: true,
+        rem: (remCell === '' || remCell == null) ? null : (this._vNum(remCell) || 0) };
+      const attendu = this._grenkeEtat(dossier, c.date >= 0 ? this._cellToIso(rr[c.date]) : '');
+      const actuel = String(rr[c.statut] == null ? '' : rr[c.statut]).trim();
+      if (this._norm(actuel) === this._norm(attendu)) continue;
+      const connu = this._grkEtatConnu(actuel);
+      out.push({ sheetName: gs.name, rowIdx: r, col: c.statut, ref: ref || cust,
+        actuel: actuel || '(vide)', attendu, grenke: true,
+        sens: !actuel ? 'vide' : (connu === attendu ? 'harmonise' : (connu ? 'corrige' : 'inconnu')) });
     }
     return out;
   }
@@ -7427,8 +7573,9 @@ class Component {
     try {
       const file = await hi.handle.getFile(); const buf = await file.arrayBuffer();
       const wb = await this.readWorkbook(buf);
-      // Les écarts de solde rejoignent les états : même correction, même aperçu, même écriture.
-      return { avoirs: this._avoirsEcarts(wb), etats: [...this._etatsEcarts(wb), ...this._soldesEcarts(wb)], error: '' };
+      // Les écarts de solde ET les états de dossier Grenke rejoignent les états du suivi : même
+      // correction, même aperçu, même écriture (tout est dans le fichier de ventes).
+      return { avoirs: this._avoirsEcarts(wb), etats: [...this._etatsEcarts(wb), ...this._soldesEcarts(wb), ...this._grenkeEcarts(wb)], error: '' };
     } catch (e) { return { avoirs: [], etats: [], error: (e && e.message) || 'lecture impossible' }; }
   }
   // Vérification silencieuse au démarrage : calcule les écarts et les signale, SANS jamais écrire.
@@ -7520,9 +7667,57 @@ class Component {
     if (orph.length) groups.push({ src: 'stockOrphan', label: 'Stock — entrées sans achat pêcheur', kind: 'operations', orphan: true,
       items: orph.map(l => ({ type: 'orphan', ref: `${l.espece} ${l.calibre || ''}`.trim(), name: `${l.client} · ${l.poids} kg`, changes: [],
         links: [`Fichier « ${l.file} », feuille « ${l.sheet} », ligne ${l.excelRow}`, 'Aucun achat pêcheur ne correspond : liez cette ligne depuis Achat pêcheur → « Lier une ligne de stock en attente »'] })) });
-    if (groups.length) this.setState({ extChanges: { groups, total: groups.reduce((s, g) => s + g.items.length, 0) } });
+    const total = groups.reduce((s, g) => s + g.items.length, 0);
+    if (groups.length) this.setState({ extChanges: { groups, total } });
+    // Mémorisé pour le bandeau de relecture : il doit pouvoir redire ce qui a changé même après un
+    // « J'ai vu », sans recalculer ni dupliquer la modale (voir relectureAuto / extGroups).
+    this._lastDetect = { groups, total };
+    return this._lastDetect;
   }
   ackExternalChanges() { this.setState({ extChanges: null }); }
+  // ---------- Relecture périodique de TOUS les documents ----------
+  // Le journal des modifications (CHANGEWATCH → _changeSnapshot → detectExternalChanges) savait
+  // déjà dire ce qui avait bougé dans les fichiers ; il lui manquait un DÉCLENCHEUR régulier.
+  // RÈGLE : on ne relit intégralement QUE ce qui a effectivement changé. pollWatched compare
+  // d'abord file.lastModified (instantané, aucun décodage de classeur) et ne relit que les
+  // fichiers dont l'horodatage a bougé ; les dossiers surveillés sont comparés de la même façon
+  // (horodatage le plus récent + nombre de fichiers). Relire dix classeurs toutes les heures « au
+  // cas où » figerait l'écran plusieurs secondes pour rien.
+  // La minuterie horaire n'est qu'un FILET : le retour sur l'onglet et la surveillance courte
+  // (20 s) déclenchent déjà la même relecture.
+  async relectureAuto(opts) {
+    const force = !!(opts && opts.force);
+    // Verrou, comme _stockRecalcEnCours dans rafraichirStock : deux relectures concurrentes
+    // liraient les mêmes fichiers deux fois et pourraient compter double les changements.
+    if (this._relectureEnCours) return;
+    this._relectureEnCours = true;
+    this._lastDetect = null;
+    const prev = this.state.relecture || {};
+    this.setState({ relecture: { at: prev.at || 0, total: prev.total || 0, groups: prev.groups || [], running: true } });
+    try {
+      // Relecture complète demandée à la main : on oublie les horodatages connus pour tout relire.
+      if (force) { const w = this._watched || {}; Object.keys(w).forEach(n => { if (w[n]) w[n].lastMod = 0; }); }
+      await this.pollWatched();
+      if (force) await this.refreshFolders();
+    } catch (e) { /* best-effort : une relecture ratée ne doit jamais bloquer l'écran */ }
+    finally {
+      const d = this._lastDetect || { groups: [], total: 0 };
+      // Nombre de documents réellement sous surveillance : le bandeau ne doit JAMAIS annoncer
+      // « aucun changement » quand, en fait, il n'y avait rien à relire (même règle que le stock).
+      const docs = Object.keys(this._watched || {}).length
+        + (this._stockDir ? 1 : 0) + (this._blDir ? 1 : 0) + (this._transpDir ? 1 : 0) + (this._libDir ? 1 : 0);
+      this._relectureEnCours = false;
+      this.setState({ lastSync: Date.now(), relecture: { at: Date.now(), total: d.total, groups: d.groups, docs, running: false } });
+    }
+  }
+  // Minuterie horaire. Démarrée au montage, arrêtée quand l'onglet passe en arrière-plan et à la
+  // fermeture (clearInterval) : une minuterie oubliée continuerait à réveiller le disque.
+  startRelecture() {
+    if (this._relectureTimer) return;
+    try { if (document.hidden) return; } catch (e) {}
+    this._relectureTimer = setInterval(() => { this.relectureAuto(); }, 3600000);
+  }
+  stopRelecture() { if (this._relectureTimer) { clearInterval(this._relectureTimer); this._relectureTimer = null; } }
   // Lance l'inventaire des formules sur les fichiers connectés. AUCUNE écriture : c'est un état des
   // lieux, destiné à décider quelles formules le tableau de bord peut reprendre à son compte.
   async runFormulaScan() {
@@ -7640,6 +7835,16 @@ class Component {
       if (n) this.setState({ verifPending: { avoirs: chk.avoirs, etats: chk.etats } });
     } catch (e) { /* best-effort : ne bloque jamais le démarrage */ }
   }
+  // Précision affichée à côté d'un écart d'état Grenke, pour que la proposition soit lisible : un
+  // libellé hérité qui veut déjà dire la même chose n'est pas une correction mais une harmonisation,
+  // et un texte que le tableau de bord ne sait pas interpréter est signalé comme tel — il n'est
+  // jamais deviné, seulement montré avant qu'on ne le remplace.
+  _grkEcartNote(t) {
+    if (!t || !t.grenke) return '';
+    if (t.sens === 'harmonise') return ' (même sens, libellé harmonisé)';
+    if (t.sens === 'inconnu') return ' (état non reconnu)';
+    return '';
+  }
   // Aperçu (puis confirmation) des corrections : totaux Avoirs et/ou états du suivi.
   async requestVerifPreview(avoirs, etats) {
     const list = [...(avoirs || []), ...(etats || [])];
@@ -7667,7 +7872,7 @@ class Component {
         // correction) mais s'affichent en montants, pas en texte.
         preview.push(t.solde
           ? { label: `Solde — ${t.ref}`, col: `${this._colLetter(t.col + 1)}${t.rowIdx + 1}`, value: `${this.fmt(t.actuel)} → ${this.fmt(t.attendu)}` }
-          : { label: `État — ${t.ref}`, col: `${this._colLetter(t.col + 1)}${t.rowIdx + 1}`, value: `${t.actuel} → ${t.attendu}` });
+          : { label: `${t.grenke ? 'État Grenke' : 'État'} — ${t.ref}`, col: `${this._colLetter(t.col + 1)}${t.rowIdx + 1}`, value: `${t.actuel}${this._grkEcartNote(t)} → ${t.attendu}` });
       });
       const sheetList = Object.keys(editsBySheet);
       // État, Solde et total d'avoirs sont fréquemment des FORMULES. Sans cette autorisation, la
@@ -7719,14 +7924,15 @@ class Component {
   setCredField(k, v) { this.setState({ credEdit: { ...(this.state.credEdit || {}), [k]: v } }); }
   commitCred() { const e = this.state.credEdit; if (!e) return; const label = (e.label || '').trim(); if (!label) return; const num = v => { const n = parseFloat(String(v == null ? '' : v).replace(',', '.').replace(/[^\d.-]/g, '')); return isFinite(n) ? n : 0; }; const rec = { label, ent: (e.ent || '').trim(), type: e.type === 'Assurance' ? 'Assurance' : 'Crédit', total: num(e.total), paid: num(e.paid), mens: num(e.mens), next: e.next || '' }; const arr = this._credits(); if (e.i >= 0) arr[e.i] = { ...arr[e.i], ...rec }; else arr.push(rec); this.saveCredits(arr); this.setState({ credEdit: null }); }
   deleteCred(i) { const arr = this._credits(); if (i < 0 || i >= arr.length) { this.setState({ credEdit: null }); return; } arr.splice(i, 1); this.saveCredits(arr); this.setState({ credEdit: null }); }
+  // Bouton \u00ab \u27f3 Rafra\u00eechir \u00bb : m\u00eame circuit que la relecture automatique, en mode FORC\u00c9 (on oublie
+  // les horodatages connus et on relit tout). Un seul chemin de relecture, donc un seul verrou et un
+  // bandeau qui dit la v\u00e9rit\u00e9, quelle que soit la fa\u00e7on dont la relecture a \u00e9t\u00e9 d\u00e9clench\u00e9e.
   async refreshAll() {
     this.setState({ msg: { kind: 'info', text: 'Rafra\u00eechissement en cours\u2026' } });
-    try { if (this._stockDir) await this.refreshStockFolder(this._stockDir, true); } catch (e) {}
-    try { if (this._blDir) await this.refreshLivraisonFolder(this._blDir, true); } catch (e) {}
-    try { if (this._transpDir) await this.refreshTransportFolder(this._transpDir, true); } catch (e) {}
-    try { if (this._libDir) await this.refreshLibFolder(this._libDir, true); } catch (e) {}
-    try { await this.pollWatched(); } catch (e) {}
-    this.setState({ lastSync: Date.now(), msg: { kind: 'success', text: 'Donn\u00e9es rafra\u00eechies \u00e0 ' + new Date().toLocaleTimeString('fr-FR') + '.' } });
+    await this.relectureAuto({ force: true });
+    const r = this.state.relecture || {};
+    const quoi = r.total ? ` \u2014 ${r.total} modification(s) faite(s) hors du tableau de bord.` : ' \u2014 aucun changement.';
+    this.setState({ msg: { kind: 'success', text: 'Donn\u00e9es relues \u00e0 ' + new Date().toLocaleTimeString('fr-FR') + quoi } });
   }
   async pollWatched() {
     const w = this._watched; if (!w || this._polling) return; this._polling = true;
@@ -8257,26 +8463,55 @@ class Component {
     const moreLabel = (view === 'Achats' && scoped.length > cap) ? `Affichage des ${cap} premières lignes sur ${scoped.length} — réduisez la période pour tout voir.` : '';
     const isAchatView = view === 'Achats';
     const isGenericTable = isDash && !isAchatView && !isGrenkeView;
-    const grenkeStatusStyle = st => /sold|paye|regl|complet/i.test(st) ? `${badge}background:#e7f5ec;color:${green}` : `${badge}background:#fef4e6;color:${amber}`;
+    // Couleur d'un état de dossier Grenke — assise sur les CONSTANTES, plus sur une expression
+    // régulière qui devinait le sens d'un texte libre.
+    const grenkeStatusStyle = st => st === C.GRK_SOLDE ? `${badge}background:#e7f5ec;color:${green}`
+      : st === C.GRK_PARTIEL ? `${badge}background:#fff7df;color:#9a6700`
+      : st === C.GRK_FINANCE ? `${badge}background:${soft};color:${accent}`
+      : `${badge}background:#fef4e6;color:${amber}`;
     // ---- Rapprochement Grenke ↔ factures internes (match sur la partie numérique) ----
     // (résolution Grenke↔factures déplacée plus haut, juste après computeFactures)
     const linkedChip = `display:inline-block;max-width:100%;box-sizing:border-box;padding:3px 8px;border-radius:6px;font-size:11.5px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:${accent};background:${soft};border:1px solid ${this.hexToRgba(accent, 0.28)};cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle`;
     const unlinkedChip = 'display:inline-block;box-sizing:border-box;padding:3px 11px;border-radius:6px;font-size:11.5px;font-weight:600;font-family:inherit;color:#8291a5;background:#fff;border:1px dashed #c5cede;cursor:pointer;white-space:nowrap;vertical-align:middle';
+    // Style du crayon ✎ des lignes Grenke, défini ICI et pas repris de la vue Paiement : les const
+    // de renderVals sont dans la même portée, en réutiliser une déclarée plus bas déclencherait une
+    // erreur de zone morte temporelle au premier rendu de l'onglet.
+    const grkEditBtnStyle = `padding:5px 9px;border-radius:7px;font-size:11.5px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.3)};cursor:pointer;font-family:inherit`;
     const gSort = this.state.grenkeSort || { key: 'date', dir: 'desc' };
     // L'onglet Grenke est un SUIVI DE DOSSIERS, pas un journal : tous les dossiers restent
     // visibles quelle que soit la période (la feuille Grenke n'a pas de dates propres, et un
     // dossier masqué par un filtre de période « disparaît » aux yeux de l'utilisatrice).
-    const gDateOfT = g => this.gGrenkeDate(g, resolveLink(g).fact);
-    const gEnriched = (isGrenkeView ? grenkeRows.slice() : []).map(g => {
+    // ---- UN SEUL tableau : import Excel + saisies locales, dédoublonnés par numéro de dossier ----
+    // Deux tableaux cohabitaient auparavant (« Paiements Grenke enregistrés » = saisies locales, et
+    // « Dossiers Grenke importés » = feuille Excel) : le même dossier y figurait deux fois, avec deux
+    // états différents, sans que rien ne dise lequel faisait foi. Même règle que partout ailleurs :
+    // la saisie locale l'emporte (c'est la plus récente, elle n'est pas encore repartie dans Excel),
+    // et un dossier sans numéro exploitable ne peut être dédoublonné — il garde une clé propre pour
+    // ne JAMAIS écraser un voisin.
+    const grkLocalRows = this.grenkeManRows();
+    const gMergeKey = (num, fallback) => this.gNumKey(num) || fallback;
+    const gTakenKeys = new Set();
+    const gLocalNorm = grkLocalRows.map(r => {
+      const k = gMergeKey(r.num, 'loc#' + r.id); gTakenKeys.add(k);
+      return { ref: r.num || '', cust: r.cust || '', ttc: +r.ttc || 0, p1: +r.p1 || 0, p2: +r.p2 || 0,
+        charge: +r.charge || 0, rem: null, recv: null, statut: r.statut || '', com: r.com || '',
+        transmis: !!r.transmis, localId: r.id, fromVente: !!r.fromVente, _mergeKey: k };
+    });
+    const gExcelNorm = grenkeRows.map((g, i) => ({ ...g, transmis: true, localId: null, _src: g, _mergeKey: gMergeKey(g.ref, 'xl#' + i) }))
+      .filter(g => !gTakenKeys.has(g._mergeKey));
+    const gMerged = isGrenkeView ? [...gLocalNorm, ...gExcelNorm] : [];
+    const gEnriched = gMerged.map(g => {
       const L = resolveLink(g);
       const recv = (g.recv != null && g.recv !== 0) ? g.recv : ((g.p1 || 0) + (g.p2 || 0));
       const fact = L.fact;
-      const dateO = this.gGrenkeDate(g, resolveLink(g).fact);
+      const dateO = this.gGrenkeDate(g, L.fact);
       const dateNum = dateO ? this.days(dateO) : -Infinity;
       const dateStr = dateO ? `${this.dd(dateO.d)}/${this.dd(dateO.m)}/${String(dateO.y).slice(2)}` : '—';
       const cust = (g.cust && String(g.cust).trim()) ? g.cust : (fact ? fact.partner : '—');
       const rem = g.rem != null ? g.rem : Math.round(((g.ttc || 0) - (g.p1 || 0) - (g.p2 || 0) - (g.charge || 0)) * 100) / 100;
-      return { g, L, recv, dateO, dateNum, dateStr, cust, rem };
+      // L'état affiché est TOUJOURS déduit (jamais la cellule recopiée, jamais « — ») : voir _grenkeEtat.
+      const etat = this._grenkeEtat({ ...g, rem: g.rem }, dateO);
+      return { g, L, recv, dateO, dateNum, dateStr, cust, rem, etat };
     });
     const gdir = gSort.dir === 'asc' ? 1 : -1;
     const gnum = x => parseInt(this.gNumKey(x.g.ref) || '0', 10) || 0;
@@ -8287,25 +8522,35 @@ class Component {
         case 'cust': r = String(a.cust).localeCompare(String(b.cust), 'fr'); break;
         case 'ttc': r = (a.g.ttc || 0) - (b.g.ttc || 0); break;
         case 'rem': r = (a.rem || 0) - (b.rem || 0); break;
-        case 'statut': r = String(a.g.statut || '').localeCompare(String(b.g.statut || ''), 'fr'); break;
+        case 'statut': r = String(a.etat || '').localeCompare(String(b.etat || ''), 'fr'); break;
         default: r = a.dateNum - b.dateNum; break;
       }
       return (r || gnum(a) - gnum(b)) * gdir;
     });
-    const gStatusVals = [...new Set(gEnriched.map(x => String(x.g.statut || '—').toUpperCase()))];
+    const gStatusVals = [...new Set(gEnriched.map(x => x.etat))];
     const gStatusEff = effStatus('grenke', gStatusVals);
     const grenkeStatusChips = statusChipsFor('grenke', gStatusVals);
-    const gFiltered = gEnriched.filter(x => matchTxt(x.g.ref, x.cust, (x.L && x.L.ref) || '', x.g.statut) && (gStatusEff === 'Tous' || String(x.g.statut || '—').toUpperCase() === gStatusEff));
+    const gFiltered = gEnriched.filter(x => matchTxt(x.g.ref, x.cust, (x.L && x.L.ref) || '', x.etat) && (gStatusEff === 'Tous' || x.etat === gStatusEff));
     const grenkePager = paginate(gFiltered);
-    const grenkeTableRows = grenkePager.slice.map(({ g, L, recv, dateStr, cust, rem }) => ({
+    const grenkeTableRows = grenkePager.slice.map(({ g, L, recv, dateStr, cust, rem, etat, dateO }) => ({
       ref: g.ref || '—', date: dateStr,
       linked: !!L.ref, linkLabel: L.ref ? ('🔗 ' + L.ref) : 'Lier', linkStyle: L.ref ? linkedChip : unlinkedChip,
       linkTitle: L.ref ? (L.manual ? 'Lien manuel — cliquer pour modifier' : 'Rapproché automatiquement — cliquer pour modifier') : 'Lier à une facture interne',
       onLink: () => this.openGrenkeLink({ gref: g.ref, current: L.ref || '' }),
       cust, ttc: this.fmt(g.ttc), p1: g.p1 ? this.fmt(g.p1) : '—', p2: g.p2 ? this.fmt(g.p2) : '—',
-      rem: this.fmt(rem), charge: g.charge ? this.fmt(g.charge) : '—', total: this.fmt(recv),
-      statut: g.statut || '—', statutStyle: grenkeStatusStyle(g.statut || ''),
-      onTrash: () => this.setState({ trashAsk: { kind: 'grenke', key: this.gHideKey(g), label: 'Ligne Grenke n° ' + (g.ref || '—') + ' · ' + this.fmt(g.ttc) } }), trashStyle: trashBtnStyle
+      rem: this.fmt(rem), remColor: rem <= 0.005 ? green : '#b45309', charge: g.charge ? this.fmt(g.charge) : '—', total: this.fmt(recv),
+      statut: etat, statutStyle: grenkeStatusStyle(etat),
+      com: g.com || '—',
+      // Provenance : une saisie pas encore repartie dans Excel se distingue d'une ligne du fichier.
+      isLocal: g.localId != null, srcLabel: g.localId != null ? (g.fromVente ? 'auto' : 'saisie') : '',
+      srcStyle: `display:inline-block;padding:1px 6px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:.3px;color:${accent};background:${soft};border:1px solid ${this.hexToRgba(accent, 0.25)}`,
+      onEdit: () => this.editGrenkeDossier({ localId: g.localId, ref: g.ref, cust, ttc: g.ttc, p1: g.p1, p2: g.p2, charge: g.charge, com: g.com, dateRecep: dateO ? `${dateO.y}-${this.dd(dateO.m)}-${this.dd(dateO.d)}` : '' }), editStyle: grkEditBtnStyle,
+      // 🗑 : une saisie locale se supprime pour de bon, une ligne du fichier se masque seulement
+      // (RÈGLE projet : on ne supprime jamais une ligne d'Excel depuis l'interface).
+      onTrash: g.localId != null
+        ? () => this.askDeleteGrk(g.localId)
+        : () => this.setState({ trashAsk: { kind: 'grenke', key: this.gHideKey(g), label: 'Ligne Grenke n° ' + (g.ref || '—') + ' · ' + this.fmt(g.ttc) } }),
+      trashTitle: g.localId != null ? 'Supprimer cette saisie' : 'Masquer cette ligne (corbeille)', trashStyle: trashBtnStyle
     }));
     const grenkeEmpty = isGrenkeView && gFiltered.length === 0;
     // en-têtes triables (clic = tri réel)
@@ -8313,7 +8558,17 @@ class Component {
     const gHdrBase = 'font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;';
     const gh = (label, key, align) => ({ label: label + gSortInd(key), onClick: () => this.setGrenkeSort(key), style: `${gHdrBase}cursor:pointer;user-select:none;${gSort.key === key ? 'color:' + accent + ';' : ''}${align === 'r' ? 'text-align:right;' : ''}` });
     const ghStatic = (label, align) => ({ label, onClick: () => {}, style: `${gHdrBase}${align === 'r' ? 'text-align:right;' : ''}` });
-    const grenkeHeaders = [ gh('N° facture', 'num'), ghStatic('Facture liée'), gh('Date', 'date'), gh('Client', 'cust'), gh('Total TTC', 'ttc', 'r'), ghStatic('1er paiement', 'r'), ghStatic('2e paiement', 'r'), gh('Restant', 'rem', 'r'), ghStatic('Charges', 'r'), ghStatic('Total reçu', 'r'), gh('Statut', 'statut'), ghStatic('') ];
+    const grenkeHeaders = [ gh('N° facture', 'num'), ghStatic('Facture liée'), gh('Date', 'date'), gh('Client', 'cust'), gh('Total TTC', 'ttc', 'r'), ghStatic('1er pmt', 'r'), ghStatic('2e pmt', 'r'), gh('Restant', 'rem', 'r'), ghStatic('Charges', 'r'), ghStatic('Total reçu', 'r'), gh('État', 'statut'), ghStatic('Com.'), ghStatic('') ];
+    // Synthèse du tableau UNIQUE : elle porte sur les dossiers réellement affichés (import + saisies
+    // dédoublonnés), plus sur les seules saisies locales comme le faisait l'ancien second tableau.
+    const grkRecvTot = sum(gEnriched, x => x.recv || 0);
+    const grkRemTot = sum(gEnriched, x => Math.max(0, x.rem || 0));
+    const grkSoldes = gEnriched.filter(x => x.etat === C.GRK_SOLDE).length;
+    const grenkeSummary = [
+      card('Dossiers Grenke', String(gEnriched.length), '#6d28d9', `${grkSoldes} soldé${grkSoldes > 1 ? 's' : ''} · ${gLocalNorm.length} saisie${gLocalNorm.length > 1 ? 's' : ''} locale${gLocalNorm.length > 1 ? 's' : ''}`, '#6d28d9'),
+      card('Total reçu', this.fmt(grkRecvTot), green, '1er + 2e paiement', green),
+      card('Restant dû', this.fmt(grkRemTot), grkRemTot > 0 ? amber : green, 'TTC − paiements − charges', amber),
+    ];
     // ---- Modale de liaison manuelle Grenke ----
     const gl = this.state.grenkeLink;
     const grenkeLinkOpen = !!gl;
@@ -8531,7 +8786,6 @@ class Component {
     const paySaveStyle = `padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit`;
     const payResetStyle = `padding:9px 15px;border-radius:9px;font-size:13px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.3)};cursor:pointer;font-family:inherit`;
     const payRowBtnStyle = `padding:5px 9px;border-radius:7px;font-size:11.5px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.3)};cursor:pointer;font-family:inherit`;
-    const payDelBtnStyle = 'padding:5px 8px;border-radius:7px;font-size:11.5px;color:#b91c1c;background:#fff;border:1px solid #f1d4d4;cursor:pointer;font-family:inherit';
     const venteAvoirAsk = this.state.venteAvoirAsk;
     const venteAvoirAskOpen = !!venteAvoirAsk;
     const venteAvoirAskText = venteAvoirAsk ? `Le montant total est négatif (${this.fmt(venteAvoirAsk.montant)}). Cela va créer un avoir pour ce client. Voulez-vous continuer ?` : '';
@@ -8549,7 +8803,7 @@ class Component {
       : `${rr ? rr.files : 0} fichier(s) relu(s) · ${restartCount} correction(s) proposée(s)${rr && rr.error ? ' · ' + rr.error : ''}`;
     const restartRows = [
       ...rrAvoirs.map(a => ({ label: `Total avoirs — ${a.client}`, value: `${this.fmt(a.actuel)} → ${this.fmt(a.attendu)}` })),
-      ...rrEtats.map(t => ({ label: `État — ${t.ref}`, value: `${t.actuel} → ${t.attendu}` })),
+      ...rrEtats.map(t => ({ label: `${t.grenke ? 'État Grenke' : 'État'} — ${t.ref}`, value: `${t.actuel}${this._grkEcartNote(t)} → ${t.attendu}` })),
     ];
     const restartHasFixes = restartDone && restartCount > 0;
     const restartAllGood = restartDone && restartCount === 0;
@@ -8586,6 +8840,25 @@ class Component {
       })),
     }));
     const onExtAck = () => this.ackExternalChanges();
+    // ---- Bandeau de relecture automatique des documents ----
+    // Il dit TOUJOURS l'état réel (même règle que le bandeau du stock) : l'heure de la dernière
+    // relecture et ce qui a changé. « Voir » rouvre la MÊME modale que le journal des modifications
+    // (extChanges / extGroups ci-dessus) — pas de second écran à maintenir en parallèle.
+    const rl = this.state.relecture;
+    const relectureRunning = !!(rl && rl.running);
+    const relectureTotal = (rl && rl.total) || 0;
+    const relectureBannerOpen = !!rl && !extOpen;
+    const relectureHeure = (rl && rl.at) ? new Date(rl.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '';
+    const relectureDocs = (rl && rl.docs) || 0;
+    const relectureBannerText = relectureRunning ? 'Relecture des documents…'
+      : (relectureDocs
+        ? `Documents relus à ${relectureHeure} · ${relectureTotal ? relectureTotal + ' modification' + (relectureTotal > 1 ? 's' : '') + ' hors tableau de bord' : 'aucun changement'}`
+        : `Aucun document connecté — rien à relire (${relectureHeure})`);
+    const relectureAlerte = relectureTotal > 0 && !relectureRunning;
+    const relectureBannerStyle = `display:inline-flex;align-items:center;gap:8px;padding:5px 10px;border-radius:9px;font-size:12px;background:${relectureAlerte ? '#fff7ed' : '#f4f7fb'};border:1px solid ${relectureAlerte ? '#fbd9b4' : '#e2e8f1'};color:${relectureAlerte ? '#b45309' : '#69788c'}`;
+    const relectureHasChanges = relectureTotal > 0 && !relectureRunning && !!(rl && rl.groups && rl.groups.length);
+    const relectureVoirStyle = `padding:4px 9px;border-radius:7px;font-size:11.5px;font-weight:700;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit`;
+    const onRelectureVoir = () => { const r = this.state.relecture; if (r && r.groups && r.groups.length) this.setState({ extChanges: { groups: r.groups, total: r.total } }); };
     // ---- Inventaire des formules (Paramètres) : état des lieux avant toute dévaluation ----
     const fs2 = this.state.formulaScan;
     const fsRunning = !!(fs2 && fs2.running);
@@ -8918,32 +9191,20 @@ class Component {
     const onVgCharges = e => this.setVenteGrenkeField('charges', e.target.value);
     const onVgSave = () => this.saveVenteGrenke(); const onVgCancel = () => this.closeVenteGrenke();
 
-    // ---- Enregistrement des paiements Grenke (manuel, structure feuille « Grenke ») ----
-    const gmRows0 = this.grenkeManRows();
-    const gmStatutStyle = st => { const s = String(st || '').toLowerCase(); if (s.includes('sold') || s.includes('clot') || s.includes('termin') || s.includes('pay')) return `${badge}background:#e7f5ec;color:${green}`; if (s.includes('retard')) return `${badge}background:#fdeaea;color:${red}`; if (s.includes('partiel')) return `${badge}background:#fff7df;color:#9a6700`; return `${badge}background:${soft};color:${accent}`; };
-    const gmList = gmRows0.map(r => { const rem = Math.round(((+r.ttc || 0) - (+r.p1 || 0) - (+r.p2 || 0) - (+r.charge || 0)) * 100) / 100; const recv = Math.round(((+r.p1 || 0) + (+r.p2 || 0)) * 100) / 100; return {
-      id: r.id, num: r.num || '—', cust: r.cust, ttc: this.fmt(+r.ttc || 0),
-      p1: r.p1 ? this.fmt(+r.p1) : '—', p2: r.p2 ? this.fmt(+r.p2) : '—',
-      rem: this.fmt(rem), remColor: rem <= 0.005 ? green : '#b45309', charge: r.charge ? this.fmt(+r.charge) : '—',
-      recv: this.fmt(recv), statut: r.statut || 'En cours', statutStyle: gmStatutStyle(r.statut),
-      com: r.com || '—', srcBadge: r.fromVente ? 'auto' : '',
-      onEdit: () => this.editGrkRow(r.id), onDelete: () => this.askDeleteGrk(r.id),
-    }; });
-    const gmRecvTot = sum(gmRows0, r => (+r.p1 || 0) + (+r.p2 || 0));
-    const gmRemTot = sum(gmRows0, r => Math.max(0, (+r.ttc || 0) - (+r.p1 || 0) - (+r.p2 || 0) - (+r.charge || 0)));
-    const gmSummary = [
-      card('Dossiers Grenke', String(gmRows0.length), '#6d28d9', 'paiements enregistrés', '#6d28d9'),
-      card('Total reçu', this.fmt(gmRecvTot), green, '1er + 2e paiement', green),
-      card('Restant dû', this.fmt(gmRemTot), gmRemTot > 0 ? amber : green, 'TTC − paiements − charges', amber),
-    ];
+    // ---- Fiche d'un dossier Grenke (saisie / édition) ----
+    // Il n'existe plus qu'UN tableau (voir grenkeTableRows) ; ce formulaire en est la fiche
+    // d'édition, ouverte par le crayon ✎ de n'importe quelle ligne, importée ou saisie.
     const gd = this.state.grkDraft || this.grkDefault();
     const gTtc = this._vNum(gd.ttc), gP1 = this._vNum(gd.p1), gP2 = this._vNum(gd.p2), gCh = this._vNum(gd.charge);
     const grkDraft = { id: gd.id, num: gd.num || '', cust: gd.cust || '', ttc: gd.ttc === 0 ? '0' : (gd.ttc || ''),
       p1: gd.p1 === 0 ? '' : (gd.p1 || ''), p2: gd.p2 === 0 ? '' : (gd.p2 || ''), charge: gd.charge === 0 ? '' : (gd.charge || ''),
-      statut: gd.statut || 'En cours', com: gd.com || '' };
+      com: gd.com || '' };
     const grkDraftRem = this.fmt(Math.round((gTtc - gP1 - gP2 - gCh) * 100) / 100);
     const grkDraftRecv = this.fmt(Math.round((gP1 + gP2) * 100) / 100);
-    const grkStatutOptions = ['En cours', 'Partiel', 'Soldé', 'En retard'].map(s => ({ value: s, label: s }));
+    // État TOUJOURS calculé, jamais choisi dans une liste : c'est la saisie libre de l'état qui
+    // faisait diverger la fiche, le tableau et le fichier Excel (même correction que payDraftEtat).
+    const grkDraftEtat = this._grenkeEtat({ ttc: gTtc, p1: gP1, p2: gP2, charge: gCh, transmis: !!gd.transmis }, gd.dateRecep || '');
+    const grkDraftEtatStyle = grenkeStatusStyle(grkDraftEtat);
     const grkEditing = !!(this.state.grkDraft && this.state.grkDraft.editing);
     const onGrkNum = e => this.setGrkField('num', e.target.value);
     const onGrkCust = e => this.setGrkField('cust', e.target.value);
@@ -8951,12 +9212,10 @@ class Component {
     const onGrkP1 = e => this.setGrkField('p1', e.target.value);
     const onGrkP2 = e => this.setGrkField('p2', e.target.value);
     const onGrkCharge = e => this.setGrkField('charge', e.target.value);
-    const onGrkStatut = e => this.setGrkField('statut', e.target.value);
     const onGrkCom = e => this.setGrkField('com', e.target.value);
     const onGrkCommit = () => this.commitGrk();
     const onGrkReset = () => this.resetGrkDraft();
-    const grkSaveLabel = grkEditing ? 'Mettre à jour' : '＋ Enregistrer le paiement';
-    const gmEmpty = gmRows0.length === 0;
+    const grkSaveLabel = grkEditing ? 'Mettre à jour le dossier' : '＋ Enregistrer le dossier';
     const gmDelAsk = this.state.grkDelAsk;
     const gmDelOpen = !!gmDelAsk;
     const gmDelName = gmDelAsk ? `${gmDelAsk.cust} — ${this.fmt(+gmDelAsk.ttc || 0)}` : '';
@@ -10724,7 +10983,7 @@ class Component {
       'Tableau de bord': ['Suivi Achat / Vente', `Vue d'ensemble — ${periodLabel}`],
       'Ventes': ['Ventes clients', `${S.nbV} vente${S.nbV > 1 ? 's' : ''} — ${periodLabel}`],
       'Relance': ['Suivi de paiement', payEmpty ? 'Enregistrez vos paiements et suivez les règlements' : `${payTrackList.length} facture${payTrackList.length > 1 ? 's' : ''} suivie${payTrackList.length > 1 ? 's' : ''}`],
-      'Grenke': ['Financement Grenke', `${gmRows0.length} paiement${gmRows0.length > 1 ? 's' : ''} enregistré${gmRows0.length > 1 ? 's' : ''} · ${gFiltered.length} dossier${gFiltered.length > 1 ? 's' : ''} importé${gFiltered.length > 1 ? 's' : ''}`],
+      'Grenke': ['Financement Grenke', `${gFiltered.length} dossier${gFiltered.length > 1 ? 's' : ''} · ${gLocalNorm.length} saisie${gLocalNorm.length > 1 ? 's' : ''} pas encore dans Excel`],
       'SaisieCompta': ['Saisie comptable', (asRows0.length + vsRows0.length) ? `${asRows0.length} achat${asRows0.length > 1 ? 's' : ''} · ${vsRows0.length} vente${vsRows0.length > 1 ? 's' : ''} saisi${(asRows0.length + vsRows0.length) > 1 ? 's' : ''}` : 'Saisissez vos achats pêcheurs et vos ventes'],
       'Achats': ['Achat pêche', `${S.nbA} achat${S.nbA > 1 ? 's' : ''} — ${periodLabel}`],
       'Factures': ['Facture fournisseur', `${facSub} — ${F.length} facture${F.length > 1 ? 's' : ''}`],
@@ -10898,12 +11157,13 @@ class Component {
       relanceRows, creditSummary, creditRows, creditsEmpty,
       isSuivi, payTrackList, paySummary, payEmpty, payListEmpty, payEmptyMsg, payDraft, payDraftEtatStyle, payEditing, onPayCommit, onPayReset, paySaveLabel,
       onPayNum, onPayClient, onPayTtc, onPayAvoir, onPayDateFac, onPayDateEch, onPayRegle, onPayDatePay,
-      payInput, payInputN, payLbl, paySaveStyle, payResetStyle, payRowBtnStyle, payDelBtnStyle, payDraftSolde,
+      payInput, payInputN, payLbl, paySaveStyle, payResetStyle, payRowBtnStyle, payDraftSolde,
       venteAvoirAskOpen, venteAvoirAskText, onVenteAvoirConfirm, onVenteAvoirCancel,
       restartOpen, restartRunning, restartDone, restartTitle, restartSummary, restartRows, restartHasFixes, restartAllGood,
       onRestartDash, onRestartClose, onRestartApply,
       verifBannerOpen, verifBannerText, onVerifBannerApply, onVerifBannerHide,
       extOpen, extTitle, extIntro, extGroups, onExtAck,
+      relectureBannerOpen, relectureBannerText, relectureBannerStyle, relectureHasChanges, relectureVoirStyle, onRelectureVoir,
       fsRunning, fsDone, fsBtnLabel, onFormulaScan, fsResume, fsFiles,
       hasStockPend, stockPendLabel, stockPendStyle, onStockPickOpen, onStockPickClose, stockPickOpen, stockPickRows, stockPendCount,
       achatFromStock, achatFromStockNote,
@@ -10932,8 +11192,8 @@ class Component {
       onAvoirManuelStart, onAvoirManuelMontant, onAvoirManuelSave, onAvoirManuelCancel,
       venteGrenkeBtnLabel, venteGrenkeBtnStyle, onVenteGrenkeOpen,
       venteGrenkeOpen, vgMontant, vgP1, vgP2, vgCharges, vgRest, onVgMontant, onVgP1, onVgP2, onVgCharges, onVgSave, onVgCancel,
-      gmList, gmSummary, gmEmpty, grkDraft, grkDraftRem, grkDraftRecv, grkStatutOptions, grkEditing, grkSaveLabel,
-      onGrkNum, onGrkCust, onGrkTtc, onGrkP1, onGrkP2, onGrkCharge, onGrkStatut, onGrkCom, onGrkCommit, onGrkReset,
+      grenkeSummary, grkDraft, grkDraftRem, grkDraftRecv, grkDraftEtat, grkDraftEtatStyle, grkEditing, grkSaveLabel,
+      onGrkNum, onGrkCust, onGrkTtc, onGrkP1, onGrkP2, onGrkCharge, onGrkCom, onGrkCommit, onGrkReset,
       gmDelOpen, gmDelName, onGrkDelConfirm, onGrkDelCancel,
       credPayAskOpen, credPayAskLabel, credPayAskMens, credPayAskHasBank, credPayAskMsg, onCredPayConfirm, onCredPayCancel,
       onCredNew, credAddStyle, credEditOpen, credIsEdit, credEditTitle, credVals, credTypeIsCredit, credTypeCreditStyle, credTypeAssurStyle, onCredLabel, onCredEnt, onCredTotal, onCredPaid, onCredMens, onCredNext, onCredTypeCredit, onCredTypeAssur, onCredCommit, onCredCancel, onCredDelete, credCommitStyle, credDeleteStyle, credInputStyle, credLabelStyle,
