@@ -249,6 +249,47 @@
   cible est le fond) et (b) RIEN n'a été tapé. Sinon on
   le dit et on garde la fiche. Une saisie ne doit jamais
   disparaître sur un clic malheureux.
+- PAIEMENT PAR CHÈQUE IMPOSSIBLE À VALIDER (bloquant,
+  signalé par Faustine). Trois causes cumulées, aucune
+  visible :
+  (1) la validation EXIGEAIT un chéquier sélectionné
+  (`!pd.chequier` → refus). Or le chéquier n'est qu'une
+  ÉTIQUETTE : la feuille du chèque est retrouvée par le
+  NUMÉRO (_chequeSheetForNumber, préfixe à 3 chiffres,
+  516001 → feuille « 516000 »), le nom du carnet n'étant
+  qu'un repli. Et quand aucun onglet chéquier n'est
+  détecté, la liste déroulante ne propose QUE
+  « — aucun chéquier détecté — » (valeur VIDE) : la
+  condition était littéralement impossible à satisfaire.
+  RÈGLE : n'exiger le carnet que si le numéro fait moins
+  de 3 chiffres.
+  (2) le refus n'était écrit que dans le BANDEAU GLOBAL,
+  en haut de page. Le formulaire Paiement pêcheur est
+  précédé de la liste complète des factures d'achat :
+  au moment du clic, le bandeau est à plusieurs écrans
+  au-dessus. Le bouton paraissait inopérant, sans un mot.
+  RÈGLE : tout refus passe par _formErr(zone, texte) —
+  bandeau global ET message rouge posé JUSTE au-dessus
+  du bouton concerné (zones « paiement », « chqadd »,
+  « achat »). Un bouton qui refuse d'agir dit pourquoi,
+  LÀ OÙ ON CLIQUE.
+  (3) le mode Chèque n'avait AUCUN champ montant : il
+  soldait toujours la facture entière. Un chèque partiel
+  était donc impossible. Champ ajouté, `type="text"
+  inputmode="decimal"` lu par _vNum (jamais type=number,
+  cf. la virgule), pré-rempli au solde restant ; laissé
+  vide il garde l'ancien comportement.
+- Achat pêcheur, n° de chèque JETÉ en silence : quand
+  aucun onglet chéquier n'était détecté, commitAchatSaisie
+  ne remplissait `chequeNum` que `if (cq)`. Le numéro
+  RÉELLEMENT tapé disparaissait, et l'étape « chèque »
+  basculait en échec après l'écriture pêcheur. Le numéro
+  saisi fait foi ; le carnet ne sert qu'à proposer le
+  suivant.
+- _paiementOpsSetup accepte une ZONE. « silent » (relecture
+  d'état, _refreshChqLiveStatus) ne peint pas le formulaire
+  en rouge : sans ça, la simple sélection d'une facture
+  affichait une erreur avant tout clic sur un bouton.
 - Journal des modifications, photo de référence caduque :
   au-delà de 30 % des lignes de la source OU 50 lignes
   (le plus grand des deux), ne RIEN lister. Poste

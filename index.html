@@ -605,7 +605,12 @@
                   <div style="font-size:13px;color:#69788c">Total à payer <b style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#0e1b2e;font-weight:700;margin-left:6px">{{ achatDraftTotal }}</b></div>
                   <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#3a4a5e;cursor:pointer;user-select:none"><input type="checkbox" checked="{{ achatPaiementImmediat }}" onchange="{{ onAchatImmediatToggle }}" style="width:15px;height:15px;accent-color:#b45309;cursor:pointer">Paiement immédiat</label>
                 </div>
-                <div style="display:flex;gap:8px"><button style="border:1px solid #dde3ec;background:#fff;color:#3a4a5e;padding:9px 15px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit" onclick="{{ onAchatReset }}">Annuler</button><button style="border:none;color:#fff;padding:10px 20px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;background:#b45309" onclick="{{ onAchatCommit }}">{{ achatSaveLabel }}</button></div>
+                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
+                  <sc-if value="{{ achatErrShow }}" hint-placeholder-val="{{ false }}">
+                    <div style="{{ achatErrStyle }}">⚠ {{ achatErrText }}</div>
+                  </sc-if>
+                  <div style="display:flex;gap:8px"><button style="border:1px solid #dde3ec;background:#fff;color:#3a4a5e;padding:9px 15px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit" onclick="{{ onAchatReset }}">Annuler</button><button style="border:none;color:#fff;padding:10px 20px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;background:#b45309" onclick="{{ onAchatCommit }}">{{ achatSaveLabel }}</button></div>
+                </div>
               </div>
             </div>
           </div>
@@ -814,6 +819,9 @@
                           <div style="max-width:440px;margin-top:10px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Observation (ex. BB, accord verbal…)</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" value="{{ chqAddDraft.observation }}" oninput="{{ onChqAddObservation }}" placeholder="Précisez le moyen de paiement…"></div>
                         </sc-if>
                       </sc-if>
+                      <sc-if value="{{ chqAddErrShow }}" hint-placeholder-val="{{ false }}">
+                        <div style="{{ chqAddErrStyle }}margin-top:12px">⚠ {{ chqAddErrText }}</div>
+                      </sc-if>
                       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
                         <button style="border:1px solid #dde3ec;background:#fff;color:#3a4a5e;padding:9px 14px;border-radius:9px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit" onclick="{{ onChqAddCancel }}">Annuler</button>
                         <button style="border:none;color:#fff;padding:9px 16px;border-radius:9px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;background:#0f766e" onclick="{{ onChqAddCommit }}">Ajouter</button>
@@ -840,12 +848,17 @@
                     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
                       <div style="flex:2 1 220px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Chéquier</label><select style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" value="{{ paiementDraft.chequier }}" onchange="{{ onPaiementChequier }}"><sc-for list="{{ chequierOptions }}" as="o" hint-placeholder-count="2"><option value="{{ o.value }}">{{ o.label }}</option></sc-for></select></div>
                       <div style="flex:0 0 160px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">N° de chèque</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:'IBM Plex Mono',monospace;text-align:right" value="{{ paiementDraft.chequeNum }}" oninput="{{ onPaiementChequeNum }}"></div>
+                      <div style="flex:0 0 160px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Montant du chèque</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:'IBM Plex Mono',monospace;text-align:right" inputmode="decimal" value="{{ paiementDraft.montant }}" oninput="{{ onPaiementMontant }}" placeholder="0"></div>
+                      <div style="flex-basis:100%;font-size:11.5px;color:#69788c">{{ paiementChequeMontantHint }}</div>
                     </div>
                   </sc-if>
                   <sc-if value="{{ paiementIsAutre }}" hint-placeholder-val="{{ false }}">
                     <div style="max-width:440px;margin-bottom:14px"><label style="display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:5px">Observation (ex. BB, accord verbal…)</label><input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:9px;padding:9px 11px;font-size:13px;font-family:inherit" value="{{ paiementDraft.observation }}" oninput="{{ onPaiementObservation }}" placeholder="Précisez le moyen de paiement…"></div>
                   </sc-if>
                   <div style="font-size:11.5px;color:#8291a5;margin-bottom:10px">Écrit « Total payé », « Date de paiement » et « Solde » dans le fichier achat pêcheur ; complète aussi la ligne du chéquier si le mode est « Chèque ». Un aperçu vous sera montré avant toute écriture.</div>
+                  <sc-if value="{{ paiementErrShow }}" hint-placeholder-val="{{ false }}">
+                    <div style="{{ paiementErrStyle }}">⚠ {{ paiementErrText }}</div>
+                  </sc-if>
                   <div style="display:flex;justify-content:flex-end;gap:8px;padding-top:14px;border-top:1px solid #eef1f6">
                     <button style="border:1px solid #dde3ec;background:#fff;color:#3a4a5e;padding:9px 15px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit" onclick="{{ onPaiementReset }}">Annuler</button>
                     <button style="border:none;color:#fff;padding:10px 20px;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;background:#0f766e" onclick="{{ onPaiementCommit }}">Enregistrer le paiement</button>
