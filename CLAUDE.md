@@ -181,6 +181,29 @@
   espèce n'a rien vendu, que le récap multiplie par un
   poids → #VALUE! sur le total de la semaine entière.
 
+## Report du stock d'une semaine sur l'autre
+- Le reliquat entre par DEUX endroits complémentaires :
+  la case « STOCK PRECEDENT » (poids total, lecture
+  d'un coup d'œil) et une LIGNE du bloc ACHAT - ENTREE
+  libellée « STOCK SEMAINE PRECEDENTE » à la place du
+  nom du client, qui porte le détail par calibre.
+  C'est cette ligne qui fait entrer le report dans les
+  totaux, sans traitement particulier ailleurs.
+- Le report est valorisé au prix moyen d'ACHAT du
+  calibre : reporter un poids sans sa valeur ferait
+  tomber le stock valorisé à zéro et fausserait la marge.
+- Garde-fous : jamais d'écrasement d'une ligne où un
+  pêcheur est saisi ; report déjà présent = mis à jour,
+  pas dupliqué ; calibres différents entre les deux
+  semaines = refus explicite ; reliquat négatif (sorties
+  > entrées) signalé et NON reporté.
+- Totaux et saisie manuelle : les totaux étant des
+  VALEURS, ils ne se mettent plus à jour seuls. On ne
+  leur fait donc JAMAIS confiance — ecartsTotauxStock()
+  recalcule et compare à chaque lecture. Une case vide
+  est signalée « vide », pas « fausse ». Tolérance de
+  5 millièmes pour les arrondis.
+
 ## Documents édités (impression / PDF)
 - Un navigateur n'expose AUCUNE API d'imprimante :
   la Web Printing API de Chrome est réservée aux

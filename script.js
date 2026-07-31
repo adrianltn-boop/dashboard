@@ -2430,6 +2430,114 @@ class Component {
     return out;
   }
 
+  // ---------- REPORT DU STOCK D'UNE SEMAINE SUR LA SUIVANTE ----------
+  // Le reliquat de la semaine N-1 entre dans la semaine N de DEUX façons complémentaires :
+  //  1. la case « STOCK PRECEDENT » (haut de feuille) reçoit le poids total reporté, pour la
+  //     lecture d'un coup d'œil ;
+  //  2. une ligne du bloc ACHAT - ENTREE, libellée « STOCK SEMAINE PRECEDENTE » à la place du nom
+  //     du client, reçoit le détail par calibre. C'est cette ligne qui fait que le report entre
+  //     RÉELLEMENT dans les totaux, sans traitement particulier ailleurs.
+  // Le prix repris est le prix moyen d'achat du calibre la semaine précédente : reporter un poids
+  // sans sa valeur ferait tomber le stock valorisé à zéro et fausserait la marge.
+  static REPORT_LIBELLE = 'STOCK SEMAINE PRECEDENTE';
+  _estLigneReport(rows, st, r) {
+    const c = st.clients != null ? st.clients : 2;
+    return this._norm(String(((rows[r] || [])[c]) == null ? '' : (rows[r] || [])[c])).replace(/\s+/g, ' ').trim() === this._norm(Component.REPORT_LIBELLE);
+  }
+  // Ligne d'accueil du report : celle qui le porte déjà (on la met à jour), sinon la première
+  // ligne libre du bloc achat. On n'écrase JAMAIS une ligne où un pêcheur a été saisi.
+  _stockLigneReport(rows, st) {
+    const c = st.clients != null ? st.clients : 2;
+    const fin = st.achatTotal != null ? st.achatTotal : st.sortieDebut;
+    if (st.achatDebut == null || fin == null) return null;
+    for (let r = st.achatDebut; r < fin; r++) if (this._estLigneReport(rows, st, r)) return r;
+    for (let r = st.achatDebut; r < fin; r++) {
+      const nom = String(((rows[r] || [])[c]) == null ? '' : (rows[r] || [])[c]).trim();
+      const vide = !nom && st.tailles.every(t => {
+        const p = (rows[r] || [])[t.p], u = (rows[r] || [])[t.u];
+        return (p == null || p === '') && (u == null || u === '');
+      });
+      if (vide) return r;
+    }
+    return null;
+  }
+  // Prépare le report de `wbPrec` (semaine écoulée) vers `wbCour` (semaine à ouvrir).
+  // Ne touche à rien : renvoie la liste des cellules à écrire, que l'aperçu affichera avant accord.
+  preparerReportStock(wbPrec, wbCour, annuleesPrec) {
+    const calc = this.calculsStock(wbPrec, annuleesPrec);
+    const especes = [], cellules = [], refus = [];
+    calc.feuilles.forEach(f => {
+      const sh = (wbCour || []).find(s => s.name === f.nom);
+      if (!sh) { refus.push({ nom: f.nom, raison: 'feuille absente du fichier de la semaine' }); return; }
+      const st = this._stockLireStructure(sh.rows);
+      if (!st) { refus.push({ nom: f.nom, raison: 'structure non reconnue' }); return; }
+      if (st.tailles.map(x => x.t).join('|') !== f.structure.tailles.map(x => x.t).join('|')) {
+        refus.push({ nom: f.nom, raison: 'les calibres ne correspondent pas entre les deux semaines' }); return;
+      }
+      // Reliquat par calibre = entré − sorti. Un reliquat négatif signale une sortie supérieure à
+      // l'entrée : on ne le reporte pas (ce serait une dette de marchandise), on le signale.
+      const lignes = [];
+      let poidsTot = 0, montantTot = 0, negatif = false;
+      f.structure.tailles.forEach((t, i) => {
+        const e = f.achat.tailles[i], s = f.sortie.tailles[i];
+        const poids = Math.round((e.poids - s.poids) * 1000) / 1000;
+        if (poids < -0.0005) { negatif = true; return; }
+        if (poids <= 0.0005) return;
+        const prix = e.poids > 0 ? Math.round((e.montant / e.poids) * 100) / 100 : 0;
+        lignes.push({ taille: t.t, poids, prix, colPoids: st.tailles[i].p, colPrix: st.tailles[i].u });
+        poidsTot += poids; montantTot += poids * prix;
+      });
+      if (negatif) refus.push({ nom: f.nom, raison: 'sorties supérieures aux entrées la semaine précédente — reliquat négatif, à vérifier' });
+      if (!lignes.length) return;
+      const rep = this._stockLigneReport(sh.rows, st);
+      if (rep == null) { refus.push({ nom: f.nom, raison: 'aucune ligne libre dans le bloc ACHAT - ENTREE' }); return; }
+      const c = st.clients != null ? st.clients : 2;
+      cellules.push({ feuille: f.nom, ligne: rep, col: c, valeur: Component.REPORT_LIBELLE, libelle: 'Libellé de la ligne' });
+      lignes.forEach(l => {
+        cellules.push({ feuille: f.nom, ligne: rep, col: l.colPoids, valeur: l.poids, libelle: `${l.taille} — poids` });
+        cellules.push({ feuille: f.nom, ligne: rep, col: l.colPrix, valeur: l.prix, libelle: `${l.taille} — prix d'achat` });
+      });
+      if (st.stockPrecedent != null) cellules.push({ feuille: f.nom, ligne: st.stockPrecedent, col: c, valeur: Math.round(poidsTot * 1000) / 1000, libelle: 'Case STOCK PRECEDENT' });
+      especes.push({ nom: f.nom, ligne: rep, poids: Math.round(poidsTot * 1000) / 1000, montant: Math.round(montantTot * 100) / 100, calibres: lignes.length });
+    });
+    return { especes, cellules, refus, rien: !especes.length };
+  }
+  // ---------- LES TOTAUX ÉCRITS CORRESPONDENT-ILS ENCORE AUX LIGNES ? ----------
+  // Réponse au cas « quelqu'un ajoute une ligne à la main dans Excel » : puisque les totaux sont
+  // désormais des VALEURS et non des formules, ils ne se mettent plus à jour tout seuls. On ne
+  // leur fait donc jamais confiance : à chaque lecture du fichier, on recalcule et on compare.
+  // Un écart n'est pas une erreur, c'est une saisie à intégrer — d'où un message qui propose de
+  // remettre les totaux à jour plutôt qu'une alerte accusatrice.
+  ecartsTotauxStock(wb, annulees) {
+    const calc = this.calculsStock(wb, annulees);
+    const num = v => { if (v == null || v === '') return null; const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/\s/g, '').replace(',', '.')); return isFinite(n) ? n : null; };
+    const ecarts = [];
+    calc.feuilles.forEach(f => {
+      const sh = (wb || []).find(s => s.name === f.nom); if (!sh) return;
+      const st = f.structure, rows = sh.rows || [];
+      const cmp = (ligne, col, attendu, quoi) => {
+        if (ligne == null || col == null) return;
+        const lu = num((rows[ligne] || [])[col]);
+        // Une case vide n'est pas un écart : c'est un total jamais écrit, qu'on remplira.
+        if (lu == null) { ecarts.push({ feuille: f.nom, quoi, ligne, col, lu: null, attendu, vide: true }); return; }
+        if (Math.abs(lu - attendu) > 0.005) ecarts.push({ feuille: f.nom, quoi, ligne, col, lu, attendu, vide: false });
+      };
+      if (st.poidsTotal != null) {
+        cmp(st.achatTotal, st.poidsTotal, f.achat.poids, 'total du poids acheté');
+        cmp(st.sortieTotal, st.poidsTotal, f.sortie.poids, 'total du poids vendu');
+      }
+      if (st.prixTotal != null) {
+        cmp(st.achatTotal, st.prixTotal, f.achat.montant, 'total acheté en euros');
+        cmp(st.sortieTotal, st.prixTotal, f.sortie.montant, 'total vendu en euros');
+      }
+      st.tailles.forEach((t, i) => {
+        cmp(st.achatTotal, t.p, f.achat.tailles[i].poids, `poids acheté ${t.t}`);
+        cmp(st.sortieTotal, t.p, f.sortie.tailles[i].poids, `poids vendu ${t.t}`);
+      });
+    });
+    return { ecarts, calc, ok: !ecarts.length };
+  }
+
   // ============ DÉTECTION AUTOMATIQUE DES COLONNES D'ÉCRITURE ============
   // Le pointage manuel colonne par colonne (13 clics pour les ventes) était la dernière étape
   // manuelle du réglage, et la plus exposée à l'erreur : une colonne mal désignée fait écrire un
