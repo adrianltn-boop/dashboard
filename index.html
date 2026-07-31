@@ -545,6 +545,7 @@
                 <span>Espèce</span><span>Calibre</span><span style="text-align:right">Poids (kg)</span><span style="text-align:right">Prix €/kg</span><span style="text-align:right">Total</span><span></span>
               </div>
               <sc-for list="{{ achatDraftLignes }}" as="l" hint-placeholder-count="2">
+                <sc-if value="{{ l.isMarchandise }}" hint-placeholder-val="{{ true }}">
                 <div style="display:grid;grid-template-columns:1.3fr 1fr 92px 96px 100px 28px;gap:8px;align-items:center;margin-bottom:7px">
                   <select style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:8px;padding:8px 9px;font-size:12.5px;font-family:inherit" value="{{ l.espece }}" onchange="{{ l.onEspece }}"><sc-for list="{{ l.especeOptions }}" as="o" hint-placeholder-count="6"><option value="{{ o.value }}">{{ o.label }}</option></sc-for></select>
                   <select style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:8px;padding:8px 9px;font-size:12.5px;font-family:inherit" value="{{ l.calibre }}" onchange="{{ l.onCalibre }}"><sc-for list="{{ l.calibreOptions }}" as="o" hint-placeholder-count="4"><option value="{{ o.value }}">{{ o.label }}</option></sc-for></select>
@@ -553,8 +554,22 @@
                   <div style="font-family:'IBM Plex Mono',monospace;text-align:right;font-weight:700;font-size:12.5px;color:#0e1b2e;padding:8px 2px">{{ l.montant }}</div>
                   <button style="width:26px;height:26px;border-radius:7px;border:1px solid transparent;background:transparent;color:#9aa7b8;cursor:pointer;font-size:12px;font-family:inherit" onclick="{{ l.onRemove }}" title="Retirer">✕</button>
                 </div>
+                </sc-if>
+                <sc-if value="{{ l.isService }}" hint-placeholder-val="{{ false }}">
+                <div style="display:grid;grid-template-columns:1fr 100px 28px;gap:8px;align-items:center;margin-bottom:7px">
+                  <input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#f8fafc;color:#0e1b2e;border-radius:8px;padding:8px 9px;font-size:12.5px;font-family:inherit" value="{{ l.libelle }}" oninput="{{ l.onLibelle }}" placeholder="Libellé (prestation, commission, transport…)">
+                  <input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:8px;padding:8px 9px;font-size:12.5px;font-family:'IBM Plex Mono',monospace;text-align:right" type="text" inputmode="decimal" value="{{ l.montantVal }}" oninput="{{ l.onMontant }}" placeholder="0,00">
+                  <button style="width:26px;height:26px;border-radius:7px;border:1px solid transparent;background:transparent;color:#9aa7b8;cursor:pointer;font-size:12px;font-family:inherit" onclick="{{ l.onRemove }}" title="Retirer">✕</button>
+                </div>
+                </sc-if>
               </sc-for>
-              <button style="border:none;background:none;color:#1a56db;font-weight:600;font-size:12.5px;cursor:pointer;font-family:inherit;padding:4px 2px 6px" onclick="{{ onAchatAddLigne }}">＋ Ajouter une espèce</button>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 2px 6px">
+                <button style="border:none;background:none;color:#1a56db;font-weight:600;font-size:12.5px;cursor:pointer;font-family:inherit;padding:4px 2px" onclick="{{ onAchatAddLigne }}">＋ Ajouter une espèce</button>
+                <span style="font-size:11.5px;color:#9aa7b8">ou, sans marchandise :</span>
+                <sc-for list="{{ achatServiceBtns }}" as="b" hint-placeholder-count="3">
+                  <button style="{{ b.style }}" onclick="{{ b.onClick }}">{{ b.label }}</button>
+                </sc-for>
+              </div>
 
               <div style="padding:12px 0 4px;margin-top:6px;border-top:1px solid #eef1f6">
                 <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:8px">Moyen de paiement au pêcheur</div>
@@ -613,6 +628,7 @@
                 <span>Espèce</span><span>Calibre</span><span style="text-align:right">Poids (kg)</span><span style="text-align:right">Prix €/kg</span><span style="text-align:right">Total</span><span></span>
               </div>
               <sc-for list="{{ venteDraftLignes }}" as="l" hint-placeholder-count="2">
+                <sc-if value="{{ l.isMarchandise }}" hint-placeholder-val="{{ true }}">
                 <div style="display:grid;grid-template-columns:1.3fr 1fr 92px 96px 100px 28px;gap:8px;align-items:center;margin-bottom:7px">
                   <select style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:8px;padding:8px 9px;font-size:12.5px;font-family:inherit" value="{{ l.espece }}" onchange="{{ l.onEspece }}"><sc-for list="{{ l.especeOptions }}" as="o" hint-placeholder-count="6"><option value="{{ o.value }}">{{ o.label }}</option></sc-for></select>
                   <select style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:8px;padding:8px 9px;font-size:12.5px;font-family:inherit" value="{{ l.calibre }}" onchange="{{ l.onCalibre }}"><sc-for list="{{ l.calibreOptions }}" as="o" hint-placeholder-count="4"><option value="{{ o.value }}">{{ o.label }}</option></sc-for></select>
@@ -621,8 +637,22 @@
                   <div style="font-family:'IBM Plex Mono',monospace;text-align:right;font-weight:700;font-size:12.5px;color:#0e1b2e;padding:8px 2px">{{ l.montant }}</div>
                   <button style="width:26px;height:26px;border-radius:7px;border:1px solid transparent;background:transparent;color:#9aa7b8;cursor:pointer;font-size:12px;font-family:inherit" onclick="{{ l.onRemove }}" title="Retirer">✕</button>
                 </div>
+                </sc-if>
+                <sc-if value="{{ l.isService }}" hint-placeholder-val="{{ false }}">
+                <div style="display:grid;grid-template-columns:1fr 100px 28px;gap:8px;align-items:center;margin-bottom:7px">
+                  <input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#f8fafc;color:#0e1b2e;border-radius:8px;padding:8px 9px;font-size:12.5px;font-family:inherit" value="{{ l.libelle }}" oninput="{{ l.onLibelle }}" placeholder="Libellé (prestation, commission, transport…)">
+                  <input style="width:100%;box-sizing:border-box;border:1px solid #dde3ec;background:#fff;color:#0e1b2e;border-radius:8px;padding:8px 9px;font-size:12.5px;font-family:'IBM Plex Mono',monospace;text-align:right" type="text" inputmode="decimal" value="{{ l.montantVal }}" oninput="{{ l.onMontant }}" placeholder="0,00">
+                  <button style="width:26px;height:26px;border-radius:7px;border:1px solid transparent;background:transparent;color:#9aa7b8;cursor:pointer;font-size:12px;font-family:inherit" onclick="{{ l.onRemove }}" title="Retirer">✕</button>
+                </div>
+                </sc-if>
               </sc-for>
-              <button style="border:none;background:none;color:#1a56db;font-weight:600;font-size:12.5px;cursor:pointer;font-family:inherit;padding:4px 2px 6px" onclick="{{ onVenteAddLigne }}">＋ Ajouter une espèce</button>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 2px 6px">
+                <button style="border:none;background:none;color:#1a56db;font-weight:600;font-size:12.5px;cursor:pointer;font-family:inherit;padding:4px 2px" onclick="{{ onVenteAddLigne }}">＋ Ajouter une espèce</button>
+                <span style="font-size:11.5px;color:#9aa7b8">ou, sans marchandise :</span>
+                <sc-for list="{{ venteServiceBtns }}" as="b" hint-placeholder-count="3">
+                  <button style="{{ b.style }}" onclick="{{ b.onClick }}">{{ b.label }}</button>
+                </sc-for>
+              </div>
 
               <div style="padding:12px 0 4px;margin-top:6px;border-top:1px solid #eef1f6">
                 <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;margin-bottom:8px">Totaux de la facture</div>

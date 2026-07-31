@@ -526,7 +526,32 @@ class Component {
   ];
 
   // Saisie comptable — espèces & calibres (repris de la maquette), palette et moyens de paiement
-  static ESP = { 'Homard': ['4/6', '6/8', '8/10', '10/13', '13/16', '16+'], 'Langouste royale': ['6/8', '8/10', '10/13', '13/16', '16+'], 'Langouste rose': ['3/4', '4/6', '6/8'], 'Tourteau': ['4/6', '6/8', '8/10', '10/13', 'Pinces'], 'Langoustine': ['T1', 'T2', 'T3'], 'Araignée': ['Standard'], 'Velvet-crab': ['8/10'], 'Bouquet': ['Standard'], 'Bigorneau': ['Standard'], 'Crabe vert': ['Standard'] };
+  static ESP_BASE = { 'Homard': ['4/6', '6/8', '8/10', '10/13', '13/16', '16+'], 'Langouste royale': ['6/8', '8/10', '10/13', '13/16', '16+'], 'Langouste rose': ['3/4', '4/6', '6/8'], 'Tourteau': ['4/6', '6/8', '8/10', '10/13', 'Pinces'], 'Langoustine': ['T1', 'T2', 'T3'], 'Araignée': ['Standard'], 'Velvet-crab': ['8/10'], 'Bouquet': ['Standard'], 'Bigorneau': ['Standard'], 'Crabe vert': ['Standard'] };
+  // Calibres communs à TOUTES les espèces, demandés par Faustine. « Épate » existe déjà dans les
+  // feuilles de stock (colonne EPATE) ; « Mort » et « Boette » n'y ont pas de colonne — une vente
+  // ou un achat sur ces calibres s'enregistre normalement, seule la ligne de stock sera signalée
+  // comme non placée (comportement existant pour tout calibre absent de la feuille), jamais perdue
+  // en silence. _norm supprimant les accents, « Épate » retrouve bien la colonne « EPATE ».
+  static CAL_COMMUNS = ['Épate', 'Mort', 'Boette'];
+  static ESP = Object.keys(Component.ESP_BASE).reduce((o, k) => { o[k] = [...Component.ESP_BASE[k], ...Component.CAL_COMMUNS]; return o; }, {});
+  // Nom anglais de chaque espèce. Ce n'est PAS une espèce de plus : c'est un SYNONYME qui pointe
+  // vers la même clé de Component.ESP — dédoublonner par la clé reste donc exact.
+  static ESP_EN = { 'Homard': 'Lobster', 'Langouste royale': 'Crayfish', 'Langouste rose': 'Pink crayfish', 'Tourteau': 'Brown crab', 'Langoustine': 'Norway lobster', 'Araignée': 'Spider crab', 'Velvet-crab': 'Velvet crab', 'Bouquet': 'Prawn', 'Bigorneau': 'Periwinkle', 'Crabe vert': 'Green crab' };
+  // Toutes les graphies sous lesquelles une espèce doit être RETROUVÉE : français, anglais,
+  // variantes usuelles, et les libellés réellement portés par les feuilles de stock
+  // (LANGOUSTE ROYAL, BIG - C.V, VEL-BQ-AR…). Sert à la recherche et à la résolution du stock.
+  static ESP_SYN = {
+    'Homard': ['homard', 'lobster', 'european lobster'],
+    'Langouste royale': ['langouste royale', 'langouste royal', 'crayfish', 'royal crayfish', 'spiny lobster', 'rock lobster'],
+    'Langouste rose': ['langouste rose', 'pink crayfish', 'pink spiny lobster'],
+    'Tourteau': ['tourteau', 'brown crab', 'edible crab'],
+    'Langoustine': ['langoustine', 'norway lobster', 'scampi', 'dublin bay prawn'],
+    'Araignée': ['araignee', 'araignee de mer', 'spider crab', 'spinous spider crab'],
+    'Velvet-crab': ['velvet-crab', 'velvet crab', 'etrille', 'vel', 'vel-bq-ar'],
+    'Bouquet': ['bouquet', 'prawn', 'common prawn', 'bq'],
+    'Bigorneau': ['bigorneau', 'periwinkle', 'winkle', 'big', 'big - c.v'],
+    'Crabe vert': ['crabe vert', 'green crab', 'shore crab', 'c.v'],
+  };
   static ESP_PAL = { 'Homard': '#1a56db', 'Langouste royale': '#be185d', 'Langouste rose': '#db2777', 'Tourteau': '#b45309', 'Langoustine': '#0f766e', 'Araignée': '#7c3aed', 'Velvet-crab': '#0e7490', 'Bouquet': '#4d7c0f', 'Bigorneau': '#9a3412', 'Crabe vert': '#15803d' };
   static PAYMODES = { virement: { lbl: 'Virement', ic: '🏦', col: '#1a56db' }, cheque: { lbl: 'Chèque', ic: '🧾', col: '#0f766e' }, liquide: { lbl: 'Liquide', ic: '💶', col: '#7c3aed' }, autre: { lbl: 'Autre', ic: '❓', col: '#64748b' } };
 
@@ -1046,6 +1071,32 @@ class Component {
   // Une clé interne (« L12 », « FV-… », « AP-… ») ne doit JAMAIS partir dans une cellule Excel.
   _refEcrivable(num) { const s = String(num == null ? '' : num).trim(); return /^(L\d+|FV-.*|AP-.*)$/i.test(s) ? '' : s; }
   compEmptyLigne() { const e = Object.keys(Component.ESP)[0]; return { espece: e, calibre: (Component.ESP[e] || ['Standard'])[0], poids: '', prixKg: '' }; }
+  // ---------- Lignes de SERVICE (prestation, commission, transport) ----------
+  // Ce ne sont PAS de la marchandise : ni espèce, ni calibre, ni poids. Un libellé et un montant.
+  // Elles entrent dans le total HT comme les autres lignes, mais sont écartées de l'écriture du
+  // stock (rien à faire entrer ou sortir) — voir requestStockPreview.
+  static SERVICES = [{ type: 'prestation', label: 'Prestation' }, { type: 'commission', label: 'Commission' }, { type: 'transport', label: 'Transport' }];
+  estLigneService(l) { return !!(l && l.type && Component.SERVICES.some(s => s.type === l.type)); }
+  compEmptyService(type) { const s = Component.SERVICES.find(x => x.type === type) || Component.SERVICES[0]; return { type: s.type, libelle: s.label, montant: '' }; }
+  lignesMarchandise(lignes) { return (lignes || []).filter(l => !this.estLigneService(l)); }
+  // ---------- Espèces : un nom français, un nom anglais, une SEULE espèce ----------
+  // Index construit une fois : chaque graphie normalisée pointe vers la clé canonique de
+  // Component.ESP. Aucune espèce n'est dupliquée — c'est la clé qui fait foi partout.
+  _espIndex() {
+    if (Component.__espIdx) return Component.__espIdx;
+    const idx = {};
+    Object.keys(Component.ESP).forEach(k => {
+      const syn = [k, Component.ESP_EN[k] || '', ...(Component.ESP_SYN[k] || [])];
+      syn.forEach(x => { const n = this._norm(x); if (n) idx[n] = k; });
+    });
+    Component.__espIdx = idx; return idx;
+  }
+  // Clé canonique d'une espèce à partir de N'IMPORTE quelle graphie (fr, en, libellé de feuille).
+  especeCanonique(nom) { return this._espIndex()[this._norm(nom)] || null; }
+  // Libellé bilingue affiché dans les listes déroulantes : « Homard · Lobster ».
+  especeLabel(nom) { const k = this.especeCanonique(nom) || nom; const en = Component.ESP_EN[k]; return en ? `${k} · ${en}` : String(k); }
+  // Toutes les graphies d'une espèce, concaténées — sert à la RECHERCHE (fr comme en).
+  especeSynonymes(nom) { const k = this.especeCanonique(nom); if (!k) return ''; return [k, Component.ESP_EN[k] || '', ...(Component.ESP_SYN[k] || [])].join(' '); }
   // Le compte rendu de la dernière écriture (compFan) n'est PLUS effacé quand on revient sur le même
   // formulaire : il disparaissait dès qu'on quittait l'écran et qu'on y revenait, alors que c'est
   // justement le récapitulatif qu'on veut relire pour vérifier que tout est passé. Il ne s'efface
@@ -1231,6 +1282,7 @@ class Component {
   }
   setVenteLigne(i, k, v) { const d = this.state.venteDraft || this.venteDefault(); const lignes = (d.lignes || []).map((l, j) => { if (j !== i) return l; const nl = { ...l, [k]: v }; if (k === 'espece') nl.calibre = (Component.ESP[v] || ['Standard'])[0]; return nl; }); this.setState({ venteDraft: { ...d, lignes } }); }
   addVenteLigne() { const d = this.state.venteDraft || this.venteDefault(); this.setState({ venteDraft: { ...d, lignes: [...(d.lignes || []), this.compEmptyLigne()] } }); }
+  addVenteService(type) { const d = this.state.venteDraft || this.venteDefault(); this.setState({ venteDraft: { ...d, lignes: [...(d.lignes || []), this.compEmptyService(type)] } }); }
   removeVenteLigne(i) { const d = this.state.venteDraft || this.venteDefault(); const lignes = (d.lignes || []).filter((l, j) => j !== i); this.setState({ venteDraft: { ...d, lignes: lignes.length ? lignes : [this.compEmptyLigne()] } }); }
   resetVenteDraft() { this.setState({ venteDraft: this.venteDefault() }); }
   // Modifier une vente est désactivé tant que l'écriture Excel ne le gère pas (pas de divergence).
@@ -1243,9 +1295,14 @@ class Component {
     const client = (d.client || '').trim();
     // Poids et prix peuvent être NÉGATIFS (avoir : ex. poids −10 × prix positif, ou l'inverse) —
     // on ne rejette une ligne que si le poids OU le prix vaut exactement 0.
-    const lignes = (d.lignes || []).map(l => ({ espece: (l.espece || '').trim(), calibre: (l.calibre || '').trim(), poids: this._vNum(l.poids), prixKg: this._vNum(l.prixKg) })).filter(l => l.poids !== 0 && l.prixKg !== 0);
-    if (!client || !lignes.length) { this.setState({ msg: { kind: 'error', text: 'Indiquez le client et au moins une espèce avec un poids et un prix (non nuls).' } }); return; }
-    lignes.forEach(l => { l.montant = Math.round(l.poids * l.prixKg * 100) / 100; });
+    // Lignes de SERVICE (prestation / commission / transport) : un libellé et un montant, ni
+    // espèce ni calibre ni poids. Elles comptent dans le HT exactement comme la marchandise.
+    const lignes = (d.lignes || []).map(l => this.estLigneService(l)
+      ? { type: l.type, libelle: (l.libelle || '').trim() || (Component.SERVICES.find(s => s.type === l.type) || {}).label || 'Prestation', montant: Math.round(this._vNum(l.montant) * 100) / 100 }
+      : { espece: (l.espece || '').trim(), calibre: (l.calibre || '').trim(), poids: this._vNum(l.poids), prixKg: this._vNum(l.prixKg) }
+    ).filter(l => this.estLigneService(l) ? l.montant !== 0 : (l.poids !== 0 && l.prixKg !== 0));
+    if (!client || !lignes.length) { this.setState({ msg: { kind: 'error', text: 'Indiquez le client et au moins une espèce (poids et prix non nuls) ou une ligne prestation / commission / transport avec un montant.' } }); return; }
+    lignes.forEach(l => { if (!this.estLigneService(l)) l.montant = Math.round(l.poids * l.prixKg * 100) / 100; });
     const ht = Math.round(lignes.reduce((s, l) => s + l.montant, 0) * 100) / 100;
     const tvaIrl = this._vNum(d.tvaIrl), tvaFr = this._vNum(d.tvaFr);
     const ttc = Math.round((ht + tvaIrl + tvaFr) * 100) / 100;
@@ -1323,14 +1380,16 @@ class Component {
       g.statut = this._grenkeEtat({ ...g, transmis: true }, rec.date);
       if (gi >= 0) gm[gi] = g; else gm.unshift(g); this.saveGrenkeMan(gm); }
     else if (gi >= 0 && gm[gi].fromVente) { gm.splice(gi, 1); this.saveGrenkeMan(gm); }
-    const espLbl = lignes.map(l => `${l.espece} ${l.calibre} −${l.poids} kg`).join(' · ');
-    const cards = [{ l: '📦 Stock', v: espLbl }, { l: '🏷️ Facture client', v: `${rec.num} — ${client} · TTC ${this.fmt(ttc)} · ${delai === 0 ? 'comptant' : 'délai ' + delai + ' j'} · prévue ${this.dd((datePrev.split('-')[2] || 0))}/${this.dd((datePrev.split('-')[1] || 0))}` }, { l: '💳 Suivi de paiement', v: `Solde à encaisser ${this.fmt(ttc)}` }, { l: '📊 Analytique', v: `Chiffre d'affaires (HT) ${this.fmt(ht)}` }];
+    const march = this.lignesMarchandise(lignes);
+    const serv = (lignes || []).filter(l => this.estLigneService(l));
+    const espLbl = march.length ? march.map(l => `${l.espece} ${l.calibre} −${l.poids} kg`).join(' · ') : 'aucune marchandise (prestations seules)';
+    const cards = [{ l: '📦 Stock', v: espLbl }, ...(serv.length ? [{ l: '🧾 Prestations', v: serv.map(l => `${l.libelle} ${this.fmt(l.montant)}`).join(' · ') }] : []), { l: '🏷️ Facture client', v: `${rec.num} — ${client} · TTC ${this.fmt(ttc)} · ${delai === 0 ? 'comptant' : 'délai ' + delai + ' j'} · prévue ${this.dd((datePrev.split('-')[2] || 0))}/${this.dd((datePrev.split('-')[1] || 0))}` }, { l: '💳 Suivi de paiement', v: `Solde à encaisser ${this.fmt(ttc)}` }, { l: '📊 Analytique', v: `Chiffre d'affaires (HT) ${this.fmt(ht)}` }];
     if (grenke) cards.push({ l: '🏦 Grenke', v: `Financé ${this.fmt(grenke.montant)} · restant dû ${this.fmt(grenke.rest)}` });
     await this._appendNextBlankRow('ventes'); // CORRECTION 2 — best-effort, ne bloque jamais la saisie ; awaited pour que le refresh ci-dessous lise le fichier à jour
     // Le stock (best-effort) n'est plus déclenché ici : requestAppendPreview le programme via
     // afterClose, exécuté par confirmAppendWrite juste après la fermeture de CETTE modale — ordre
     // garanti, sans dépendre du temps que met refreshVenteInvoiceNumber (I/O réelle) ci-dessous.
-    this.setState({ venteDraft: this.venteDefault(), compFan: { mode: 'vente', title: `Vente de ${lignes.length} espèce${lignes.length > 1 ? 's' : ''} à ${client}`, cards } });
+    this.setState({ venteDraft: this.venteDefault(), compFan: { mode: 'vente', title: `Vente de ${march.length} espèce${march.length > 1 ? 's' : ''}${serv.length ? ' et ' + serv.length + ' prestation' + (serv.length > 1 ? 's' : '') : ''} à ${client}`, cards } });
     await this.refreshVenteNumeros(); // BUG 2 — après la ligne vierge ET après la réinitialisation du draft
   }
   // ---------- Nettoyage des saisies de vente « fantômes » (données LOCALES uniquement) ----------
@@ -1597,6 +1656,7 @@ class Component {
   setAchatField(k, v) { const d = this.state.achatDraft || this.achatDefault(); const patch = { ...d, [k]: v }; if (k === 'paiement' && v === 'cheque') { const first = this.chequierRows()[0]; if (first && !patch.chequier) { patch.chequier = first.nom; patch.chequeNum = String(first.next || ''); } } if (k === 'chequier') { const cq = this.chequierRows().find(c => c.nom === v); if (cq) patch.chequeNum = String(cq.next || ''); } this.setState({ achatDraft: patch }); }
   setAchatLigne(i, k, v) { const d = this.state.achatDraft || this.achatDefault(); const lignes = (d.lignes || []).map((l, j) => { if (j !== i) return l; const nl = { ...l, [k]: v }; if (k === 'espece') nl.calibre = (Component.ESP[v] || ['Standard'])[0]; return nl; }); this.setState({ achatDraft: { ...d, lignes } }); }
   addAchatLigne() { const d = this.state.achatDraft || this.achatDefault(); this.setState({ achatDraft: { ...d, lignes: [...(d.lignes || []), this.compEmptyLigne()] } }); }
+  addAchatService(type) { const d = this.state.achatDraft || this.achatDefault(); this.setState({ achatDraft: { ...d, lignes: [...(d.lignes || []), this.compEmptyService(type)] } }); }
   removeAchatLigne(i) { const d = this.state.achatDraft || this.achatDefault(); const lignes = (d.lignes || []).filter((l, j) => j !== i); this.setState({ achatDraft: { ...d, lignes: lignes.length ? lignes : [this.compEmptyLigne()] } }); }
   resetAchatDraft() { this.setState({ achatDraft: this.achatDefault() }); }
   // Modifier / Supprimer un achat sont désactivés tant que l'écriture Excel ne les gère pas.
@@ -1604,9 +1664,14 @@ class Component {
   commitAchatSaisie() {
     const d = this.state.achatDraft || this.achatDefault();
     const pecheur = (d.pecheur || '').trim();
-    const lignes = (d.lignes || []).map(l => ({ espece: (l.espece || '').trim(), calibre: (l.calibre || '').trim(), poids: this._vNum(l.poids), prixKg: this._vNum(l.prixKg) })).filter(l => l.poids > 0 && l.prixKg > 0);
-    if (!pecheur || !lignes.length) { this.setState({ msg: { kind: 'error', text: 'Indiquez le pêcheur et au moins une espèce avec un poids et un prix.' } }); return; }
-    lignes.forEach(l => { l.montant = Math.round(l.poids * l.prixKg * 100) / 100; });
+    // Mêmes lignes de service que pour la vente (prestation / commission / transport) : elles
+    // entrent dans le total à payer mais ne font entrer aucune marchandise au stock.
+    const lignes = (d.lignes || []).map(l => this.estLigneService(l)
+      ? { type: l.type, libelle: (l.libelle || '').trim() || (Component.SERVICES.find(s => s.type === l.type) || {}).label || 'Prestation', montant: Math.round(this._vNum(l.montant) * 100) / 100 }
+      : { espece: (l.espece || '').trim(), calibre: (l.calibre || '').trim(), poids: this._vNum(l.poids), prixKg: this._vNum(l.prixKg) }
+    ).filter(l => this.estLigneService(l) ? l.montant !== 0 : (l.poids > 0 && l.prixKg > 0));
+    if (!pecheur || !lignes.length) { this.setState({ msg: { kind: 'error', text: 'Indiquez le pêcheur et au moins une espèce (poids et prix) ou une ligne prestation / commission / transport avec un montant.' } }); return; }
+    lignes.forEach(l => { if (!this.estLigneService(l)) l.montant = Math.round(l.poids * l.prixKg * 100) / 100; });
     const total = Math.round(lignes.reduce((s, l) => s + l.montant, 0) * 100) / 100;
     const id = +d.id || this._achatNextId();
     const arr = this.achatSaisieRows().slice(); const i = arr.findIndex(x => String(x.id) === String(id));
@@ -4179,7 +4244,10 @@ class Component {
       'crabe vert': { sheet: 'big', byCol: 'crabe vert' }, 'velvet-crab': { sheet: 'vel', byCol: 'velvet' },
       'bouquet': { sheet: 'vel', byCol: 'bouquet' }, 'araignee': { sheet: 'vel', byCol: 'araignee' },
     };
-    return M[this._norm(espece)] || null;
+    // Toute graphie est acceptée : la clé canonique est d'abord retrouvée (français, anglais,
+    // libellé de feuille) — sans quoi une espèce saisie en anglais n'aurait plus de feuille de stock.
+    const canon = this.especeCanonique(espece);
+    return M[this._norm(canon || espece)] || null;
   }
   // Localise une section verticale (ACHAT-ENTREE ou COMMANDES-SORTIE) dans la colonne A : titre,
   // en-tête (ligne « ...PRIX... »), 1re ligne de données, et la ligne TOTAL qui borne la section
@@ -4374,7 +4442,7 @@ class Component {
       const fingerprint = (file.lastModified || 0) + '/' + (file.size || 0);
       const buf = await file.arrayBuffer(); const wb = await this.readWorkbook(buf);
       const bySheet = {}; const unresolved = [];
-      (rec.lignes || []).forEach(l => { const t = this._stockResolve(wb, l.espece, l.calibre, sectionCtx); if (!t) { unresolved.push(`${l.espece} ${l.calibre}`); return; }
+      this.lignesMarchandise(rec.lignes).forEach(l => { const t = this._stockResolve(wb, l.espece, l.calibre, sectionCtx); if (!t) { unresolved.push(`${l.espece} ${l.calibre}`); return; }
         const poids = isRetour ? Math.abs(l.poids) : l.poids;
         bySheet[t.sheetName] = bySheet[t.sheetName] || { t, cals: [] }; bySheet[t.sheetName].cals.push({ poidsCol: t.poidsCol, prixCol: t.prixCol, poids, prix: l.prixKg, label: `${l.espece} ${l.calibre}` }); });
       const editsBySheet = {}; const preview = []; const verifyTargets = [];
@@ -8595,7 +8663,10 @@ class Component {
     // Nombre de lignes affichées avant le lien « voir tout ». Relevé : à 15 lignes le tableau
     // était plus court que la colonne latérale, ce qui laissait un vide sous les achats.
     const cap = compact ? 40 : 30;
-    const scopedQ = scoped.filter(r => matchTxt(r.partner, r.ref, r.cat, r.type));
+    // Recherche BILINGUE : la catégorie d'une opération porte le nom de l'espèce ; on ajoute
+    // toutes ses graphies (français, anglais, libellé de feuille) aux valeurs comparées, si bien
+    // que « lobster » retrouve le homard et inversement — sans créer d'espèce en double.
+    const scopedQ = scoped.filter(r => matchTxt(r.partner, r.ref, r.cat, r.type, this.especeSynonymes(r.cat)));
     // ---- filtres de statut par tableau (Tous / Payé / En attente / …) ----
     const stFAll = this.state.tblStatusF || {};
     const effStatus = (key, values) => (values.includes(stFAll[key]) ? stFAll[key] : 'Tous');
@@ -9068,7 +9139,7 @@ class Component {
     // ==================== SAISIE COMPTABLE (portage fidèle de la maquette « Saisie par transaction ») ====================
     const kgN = n => this._nf(0, 1).format(Math.round((+n || 0) * 10) / 10) + ' kg';
     const espKeys = Object.keys(Component.ESP);
-    const espOptsAll = espKeys.map(e => ({ value: e, label: e }));
+    const espOptsAll = espKeys.map(e => ({ value: e, label: this.especeLabel(e) }));
     const calOptsOf = e => (Component.ESP[e] || ['Standard']).map(c => ({ value: c, label: c }));
     const asRows0 = this.achatSaisieRows();
     const vsRows0 = this.venteSaisieRows();
@@ -9251,15 +9322,24 @@ class Component {
     const pecheurSuggest = [...new Set([...asRows0.map(r => r.pecheur), ...ops.filter(o => o.type === 'Achat').map(o => o.partner)].filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b), 'fr')).slice(0, 60).map(n => ({ name: n }));
     const clientSuggest = [...new Set([...vsRows0.map(r => r.client), ...ptRows0.map(r => r.client)].filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b), 'fr')).slice(0, 60).map(n => ({ name: n }));
 
+    // Style des boutons « ＋ Prestation / Commission / Transport » — déclaré ICI, avant les deux
+    // blocs qui le posent (achat ET vente) : la zone morte temporelle de renderVals ne pardonne pas.
+    const compServiceBtnStyle = 'border:1px dashed #dde3ec;background:#fff;color:#69788c;font-weight:600;font-size:12px;cursor:pointer;font-family:inherit;padding:5px 11px;border-radius:8px';
     // ---- Formulaire ACHAT pêcheur ----
     const ad = this.state.achatDraft || this.achatDefault();
     const adLignes = (ad.lignes && ad.lignes.length ? ad.lignes : [this.compEmptyLigne()]);
-    const achatDraftLignes = adLignes.map((l, i) => { const poids = this._vNum(l.poids), prix = this._vNum(l.prixKg); return {
+    // `isService` sépare les deux gabarits de ligne : marchandise (espèce/calibre/poids/prix) et
+    // service (libellé/montant). Une seule liste, deux rendus — voir index.html.
+    const achatDraftLignes = adLignes.map((l, i) => { const serv = this.estLigneService(l); const poids = this._vNum(l.poids), prix = this._vNum(l.prixKg); return {
+      isService: serv, isMarchandise: !serv,
+      libelle: l.libelle || '', montantVal: l.montant === 0 ? '0' : (l.montant || ''),
+      onLibelle: e => this.setAchatLigne(i, 'libelle', e.target.value), onMontant: e => this.setAchatLigne(i, 'montant', e.target.value),
       espece: l.espece || espKeys[0], calibre: l.calibre || '', especeOptions: espOptsAll, calibreOptions: calOptsOf(l.espece),
-      poids: l.poids === 0 ? '0' : (l.poids || ''), prixKg: l.prixKg === 0 ? '0' : (l.prixKg || ''), montant: this.fmt(Math.round(poids * prix * 100) / 100),
+      poids: l.poids === 0 ? '0' : (l.poids || ''), prixKg: l.prixKg === 0 ? '0' : (l.prixKg || ''), montant: this.fmt(serv ? this._vNum(l.montant) : Math.round(poids * prix * 100) / 100),
       onEspece: e => this.setAchatLigne(i, 'espece', e.target.value), onCalibre: e => this.setAchatLigne(i, 'calibre', e.target.value),
       onPoids: e => this.setAchatLigne(i, 'poids', e.target.value), onPrix: e => this.setAchatLigne(i, 'prixKg', e.target.value), onRemove: () => this.removeAchatLigne(i) }; });
-    const achatDraftTotal = this.fmt(Math.round(adLignes.reduce((s, l) => s + this._vNum(l.poids) * this._vNum(l.prixKg), 0) * 100) / 100);
+    const achatDraftTotal = this.fmt(Math.round(adLignes.reduce((s, l) => s + (this.estLigneService(l) ? this._vNum(l.montant) : this._vNum(l.poids) * this._vNum(l.prixKg)), 0) * 100) / 100);
+    const achatServiceBtns = Component.SERVICES.map(x => ({ label: '＋ ' + x.label, style: compServiceBtnStyle, onClick: () => this.addAchatService(x.type) }));
     const achatDraft = { id: ad.id, num: ad.num || '', pecheur: ad.pecheur || '', date: ad.date || '', chequeNum: ad.chequeNum || '', chequier: ad.chequier || '', observation: ad.observation || '' };
     const achatPaiementImmediat = !!ad.paiementImmediat;
     const onAchatImmediatToggle = () => this.setAchatField('paiementImmediat', !ad.paiementImmediat);
@@ -9305,12 +9385,16 @@ class Component {
     // ---- Formulaire VENTE client (facture) ----
     const vd = this.state.venteDraft || this.venteDefault();
     const vdLignes = (vd.lignes && vd.lignes.length ? vd.lignes : [this.compEmptyLigne()]);
-    const venteDraftLignes = vdLignes.map((l, i) => { const poids = this._vNum(l.poids), prix = this._vNum(l.prixKg); return {
+    const venteDraftLignes = vdLignes.map((l, i) => { const serv = this.estLigneService(l); const poids = this._vNum(l.poids), prix = this._vNum(l.prixKg); return {
+      isService: serv, isMarchandise: !serv,
+      libelle: l.libelle || '', montantVal: l.montant === 0 ? '0' : (l.montant || ''),
+      onLibelle: e => this.setVenteLigne(i, 'libelle', e.target.value), onMontant: e => this.setVenteLigne(i, 'montant', e.target.value),
       espece: l.espece || espKeys[0], calibre: l.calibre || '', especeOptions: espOptsAll, calibreOptions: calOptsOf(l.espece),
-      poids: l.poids === 0 ? '0' : (l.poids || ''), prixKg: l.prixKg === 0 ? '0' : (l.prixKg || ''), montant: this.fmt(Math.round(poids * prix * 100) / 100),
+      poids: l.poids === 0 ? '0' : (l.poids || ''), prixKg: l.prixKg === 0 ? '0' : (l.prixKg || ''), montant: this.fmt(serv ? this._vNum(l.montant) : Math.round(poids * prix * 100) / 100),
       onEspece: e => this.setVenteLigne(i, 'espece', e.target.value), onCalibre: e => this.setVenteLigne(i, 'calibre', e.target.value),
       onPoids: e => this.setVenteLigne(i, 'poids', e.target.value), onPrix: e => this.setVenteLigne(i, 'prixKg', e.target.value), onRemove: () => this.removeVenteLigne(i) }; });
-    const vHt = Math.round(vdLignes.reduce((s, l) => s + this._vNum(l.poids) * this._vNum(l.prixKg), 0) * 100) / 100;
+    const venteServiceBtns = Component.SERVICES.map(x => ({ label: '＋ ' + x.label, style: compServiceBtnStyle, onClick: () => this.addVenteService(x.type) }));
+    const vHt = Math.round(vdLignes.reduce((s, l) => s + (this.estLigneService(l) ? this._vNum(l.montant) : this._vNum(l.poids) * this._vNum(l.prixKg)), 0) * 100) / 100;
     const vTvaIrl = this._vNum(vd.tvaIrl), vTvaFr = this._vNum(vd.tvaFr);
     const vTtc = Math.round((vHt + vTvaIrl + vTvaFr) * 100) / 100;
     const vDelaiN = Math.max(0, Math.min(30, Math.round(this._vNum(vd.delai))));
@@ -9586,9 +9670,14 @@ class Component {
       const ventesM = ops.filter(r => r.type === 'Vente' && (hit(r.ref) || hit(r.partner))).slice(0, 6)
         .map(r => ({ label: r.ref, sub: r.partner, onClick: goTo({ view: 'Ventes', q: r.ref }) }));
       if (ventesM.length) globalGroups.push({ name: 'Ventes', items: ventesM });
-      const achatM = ops.filter(r => r.type === 'Achat' && (hit(r.ref) || hit(r.partner))).slice(0, 6)
-        .map(r => ({ label: r.ref, sub: r.partner, onClick: goTo({ view: 'Achats', q: r.ref }) }));
+      // L'espèce d'un achat est cherchable en FRANÇAIS comme en ANGLAIS (« lobster » → homard).
+      const achatM = ops.filter(r => r.type === 'Achat' && (hit(r.ref) || hit(r.partner) || hit(this.especeSynonymes(r.cat)))).slice(0, 6)
+        .map(r => ({ label: r.ref, sub: `${r.partner} · ${this.especeLabel(r.cat)}`, onClick: goTo({ view: 'Achats', q: r.ref }) }));
       if (achatM.length) globalGroups.push({ name: 'Achat pêche', items: achatM });
+      // Groupe « Espèces » : taper un nom d'espèce dans l'une ou l'autre langue mène au stock.
+      const espM = Object.keys(Component.ESP).filter(e => hit(this.especeSynonymes(e))).slice(0, 6)
+        .map(e => ({ label: this.especeLabel(e), sub: (Component.ESP[e] || []).join(' · '), onClick: goTo({ view: 'Stock' }) }));
+      if (espM.length) globalGroups.push({ name: 'Espèces', items: espM });
       const facFournM = F.filter(f => f.sens === 'Fournisseur' && (hit(f.ref) || hit(f.partner))).slice(0, 6)
         .map(f => ({ label: f.ref, sub: f.partner, onClick: goTo({ view: 'Factures', facTab: 'Factures', q: f.ref }) }));
       if (facFournM.length) globalGroups.push({ name: 'Facture fournisseur', items: facFournM });
@@ -9601,7 +9690,7 @@ class Component {
     }
     // Profil simplifié : la recherche ne propose pas de résultats menant à des pages cachées
     if (!isAdminUI) {
-      const GLOBAL_GROUP_VIEW = { 'Ventes': 'Ventes', 'Achat pêche': 'Achats', 'Facture fournisseur': 'Factures', 'Grenke': 'Ventes', 'Bordereaux': 'Bordereaux' };
+      const GLOBAL_GROUP_VIEW = { 'Ventes': 'Ventes', 'Achat pêche': 'Achats', 'Espèces': 'Stock', 'Facture fournisseur': 'Factures', 'Grenke': 'Ventes', 'Bordereaux': 'Bordereaux' };
       const keep = globalGroups.filter(g => profilVoit(GLOBAL_GROUP_VIEW[g.name] || g.name));
       globalGroups.length = 0;
       globalGroups.push(...keep);
@@ -11400,7 +11489,7 @@ class Component {
       achatPaiementImmediat, onAchatImmediatToggle,
       compPayModes, achatIsCheque, achatIsAutre, onAchatObservation, onAchatChequier, onAchatChequeNum, chequierOptions, achatChqHint,
       venteDraft, venteDraftLignes, venteDraftHt, venteDraftTtc, venteDraftSolde, venteDelaiOptions, venteEditing, vsSaveLabel,
-      onVSNum, onVSClient, onVSDate, onVSDelai, onVSTvaIrl, onVSTvaFr, onVSCommit, onVSReset, onVenteAddLigne, venteNumHint, venteNumHintStyle, venteIdHint,
+      onVSNum, onVSClient, onVSDate, onVSDelai, onVSTvaIrl, onVSTvaFr, onVSCommit, onVSReset, onVenteAddLigne, venteNumHint, venteNumHintStyle, venteIdHint, venteServiceBtns, achatServiceBtns,
       venteAvoirActif, onVSAvoirToggle, onVSAvoir, venteAvoirDispoShow, venteAvoirDispoText, venteAvoirTrop, venteAvoirAlerte,
       avoirManuelOpen, avoirManuelAsk, avoirManuelForm, avoirManuelClient, avoirManuelMontant, avoirManuelText,
       onAvoirManuelStart, onAvoirManuelMontant, onAvoirManuelSave, onAvoirManuelCancel,

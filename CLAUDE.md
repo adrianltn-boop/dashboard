@@ -191,6 +191,111 @@
 - Le bandeau de relecture ne dit JAMAIS « aucun
   changement » quand rien n'était connecté : il compte
   les documents surveillés (`docs`) et le dit.
+- Numérotation de vente, les « 7000 et plus » :
+  _venteNextId prenait le MAXIMUM des chiffres des n°
+  de facture du fichier (`state.ventes`) et des ID du
+  suivi de paiement (contenu du fichier lui aussi).
+  Sur le classeur réel il valait 7023, et ce 7023
+  s'affichait comme « ID facture » au formulaire
+  (index.html liait `venteDraft.id` alors que
+  refreshVenteIdFacture remplissait `venteDraft.idFacture`,
+  lu du fichier), puis servait de référence de repli
+  « FV-7023 » aux listes — une facture inexistante dans
+  le fichier source, et la vente affichée EN DOUBLE.
+  RÈGLE : une clé interne est PRÉFIXÉE (« L12 ») et
+  _refEcrivable interdit à toute clé interne (L…, FV-…,
+  AP-…) d'atteindre une cellule Excel. Le n° de facture
+  ET l'ID Facture se lisent sur LA MÊME ligne cible
+  (refreshVenteNumeros).
+- Dédoublonnage des ventes : DEUX passes. Par numéro
+  (la saisie manuelle l'emporte), puis RATTRAPAGE par
+  signature métier (type + tiers + date + montant) —
+  une saisie locale dont le numéro est inconnu du
+  fichier mais dont la signature s'y retrouve est un
+  doublon déjà créé ; c'est la ligne LOCALE qui saute,
+  le fichier fait foi. Sans cette 2e passe, un correctif
+  ne vaut que pour l'avenir et laisse les doublons déjà
+  présents chez l'utilisatrice.
+- Bouton « Saisies de vente fantômes » (Paramètres) :
+  ne JAMAIS l'activer quand `state.ventes` est vide ou
+  nul — toutes les saisies passeraient pour fantômes et
+  seraient effacées. Il ne touche que le stockage local.
+- <input type="number"> et la VIRGULE : Chrome refuse la
+  virgule décimale et renvoie une valeur VIDE. Un montant
+  saisi « 412,50 » devenait 41250 ou 0. TOUT champ de
+  montant est un `type="text" inputmode="decimal"` lu
+  par _vNum. Idem pour Number() : les objectifs saisis
+  « 32 000,50 » devenaient NaN et repassaient en silence
+  à la valeur par défaut.
+- <input type="date"> ET rendu complet : Chrome émet
+  « change » DÈS que la date devient momentanément
+  valide (au 1er chiffre de l'année : 2026 → an 0002).
+  Comme chaque setState remplace TOUT le DOM, le champ
+  en cours de frappe était détruit et le curseur ramené
+  au premier segment — date littéralement impossible à
+  saisir. RÈGLE : toute saisie de date passe par `dateH`
+  (_renderQuiet : l'état change, aucun ré-affichage) et
+  par `onchange`, jamais `oninput` ; le rattrapage se
+  fait à la sortie du champ (onDateBlur).
+- PIÈGE du rattrapage : le « blur » a lieu à l'APPUI de
+  la souris. Rafraîchir immédiatement détruit le bouton
+  visé entre l'appui et le relâchement, et le clic est
+  purement perdu. onDateBlur attend donc la fin du clic
+  en cours (écoute `click` en remontée) avec une
+  temporisation de secours.
+- Fond d'une modale de SAISIE : ne referme que si (a) le
+  clic a bien COMMENCÉ sur le fond (une sélection de
+  texte relâchée à côté produit un « click » dont la
+  cible est le fond) et (b) RIEN n'a été tapé. Sinon on
+  le dit et on garde la fiche. Une saisie ne doit jamais
+  disparaître sur un clic malheureux.
+- Journal des modifications, photo de référence caduque :
+  au-delà de 30 % des lignes de la source OU 50 lignes
+  (le plus grand des deux), ne RIEN lister. Poste
+  différent, données locales réinitialisées ou lecture
+  qui remonte soudain plus de lignes qu'avant ⇒ le
+  fichier entier ressort en « ajouté » (vécu : 1818
+  fausses alertes). On le dit franchement, on enregistre
+  la nouvelle photo, on ne demande rien.
+
+## Performance (mesurée, pas supposée)
+- fmt() : JAMAIS Number.toLocaleString directement — il
+  reconstruit un formateur Intl à chaque appel (~50 µs)
+  et un rendu en fait des milliers. Formateur unique mis
+  en cache (_nf). C'était 91,8 % du temps de renderVals().
+- renderFor : `Object.create(vals)`, jamais
+  `Object.assign({}, vals)` — recopier les ~1 000 clés de
+  renderVals() à chaque ligne de chaque liste pesait 69 %
+  d'un rendu complet.
+- TOUT tableau long est paginé (`paginate`). Le Suivi de
+  paiement ne l'était pas : 18 127 nœuds reconstruits à
+  chaque changement d'état. Les TOTAUX restent calculés
+  sur l'intégralité des lignes, jamais sur la page.
+- Un tri ne rappelle pas sa fonction de clé à chaque
+  comparaison quand celle-ci contient une expression
+  régulière : clé calculée une fois par ligne.
+- Repères après correction : renderVals 6–7 ms, rendu
+  complet 8–12 ms, frappe clavier 16,5 ms.
+
+## Espèces et lignes de saisie
+- Component.ESP est dérivé de ESP_BASE + CAL_COMMUNS
+  (Épate / Mort / Boette, communs à toutes les espèces).
+  _norm supprimant les accents, « Épate » retrouve la
+  colonne « EPATE » des feuilles de stock. « Mort » et
+  « Boette » n'ont pas de colonne : la ligne de stock est
+  signalée non placée, jamais perdue en silence.
+- Bilingue : ESP_EN + ESP_SYN forment un INDEX de
+  synonymes vers la clé canonique (especeCanonique).
+  Ce n'est PAS une espèce de plus — dédoublonner par la
+  clé reste exact. _stockSheetHint canonicalise d'abord,
+  sinon une espèce saisie en anglais n'aurait plus de
+  feuille de stock.
+- Lignes de SERVICE (prestation / commission /
+  transport) : `{ type, libelle, montant }`, ni espèce ni
+  calibre ni poids. Elles comptent dans le total mais
+  sont écartées de l'écriture du stock
+  (lignesMarchandise) — sans quoi elles partiraient en
+  « non résolu » à chaque enregistrement.
 
 ## Réglage de l'écriture (colonnes)
 - Les colonnes d'écriture sont DÉTECTÉES automatiquement
