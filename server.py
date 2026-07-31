@@ -17,6 +17,16 @@ ALLOWED_ORIGIN = f'http://localhost:{PORT}'
 
 
 class Handler(SimpleHTTPRequestHandler):
+    # Interdiction de mise en cache. Sans ces en-têtes, Chrome garde script.js (environ 1 Mo)
+    # dans son cache disque : apres un git pull, la page affiche parfois brievement le nouveau
+    # fichier puis revient a l'ancien, et l'utilisatrice croit que la mise a jour a echoue.
+    # Le numero affiche sous le nom (APP_VERSION) permet de verifier quelle version est chargee.
+    def end_headers(self):
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+        self.send_header('Pragma', 'no-cache')
+        self.send_header('Expires', '0')
+        SimpleHTTPRequestHandler.end_headers(self)
+
     def _from_dashboard(self):
         origin = self.headers.get('Origin') or self.headers.get('Referer') or ''
         return origin.rstrip('/') == ALLOWED_ORIGIN or origin.startswith(ALLOWED_ORIGIN + '/')

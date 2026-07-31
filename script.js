@@ -385,7 +385,7 @@ class Component {
   static PAY_OVERRIDE_KEY = 'avPaymentOverrides';
   static MAP_KEY = 'avMappings';
   static AVWMAP_KEY = 'avWriteMap';
-  static APP_VERSION = 'version 24'; // affichée sous le nom — permet de vérifier qu'on est sur le bon fichier
+  static APP_VERSION = 'version 25'; // affichée sous le nom — permet de vérifier qu'on est sur le bon fichier
   static CMP_KEY = 'avComptable';
   static GRENKE_KEY = 'avGrenke';
   static GLINK_KEY = 'avGrenkeLinks';
