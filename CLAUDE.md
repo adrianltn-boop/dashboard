@@ -149,6 +149,38 @@
   _detectFacturesSheet, ce qui rendait le bouton ⊘ des
   factures fournisseurs définitivement inopérant.
 
+## Classeur de stock (modèle, contrôle, calculs)
+- La RÉFÉRENCE est une empreinte du fichier modèle
+  désigné par l'utilisatrice (clé avStockModele),
+  capturée par enregistrerModeleStock(). Elle ne
+  change QUE par l'import d'un nouveau modèle.
+- La lecture d'un fichier de semaine est TOLÉRANTE :
+  seuls les libellés font foi, jamais les coordonnées.
+  Les variantes existent réellement dans les fichiers :
+  « COMMANDES - SORTIE » / « VENTE - SORTIE »,
+  « ACHAT - ENTREE » / « ACHAT -  ENTREE » (double
+  espace), libellé suivi de retours ligne.
+- PIÈGE : _norm appelle toLowerCase. Toute cellule
+  passée aux marqueurs doit être convertie par
+  String() — une cellule de stock contient souvent un
+  NOMBRE (stock précédent, code client), et sans la
+  conversion la lecture de structure plante et le
+  fichier entier devient illisible.
+- PIÈGE : une ligne de TOTAL porte les mêmes colonnes
+  que les lignes de données. L'inclure double tous les
+  chiffres. estTotal() arrête le bloc dessus.
+- Une structure d'une autre génération (bloc achat ou
+  sortie introuvable) part dans `nonCalculables` et
+  n'est JAMAIS comptée 0 en silence : les anciens
+  fichiers contiennent de vraies données, un zéro
+  muet ferait croire à une semaine sans activité.
+- Pourquoi tout recalculer : le RECAP VENTES du modèle
+  ne récapitulait que 5 espèces sur 9, et 4 de ces 5
+  lignes visaient de mauvaises cellules. Par ailleurs
+  IFERROR(...,"-  € / Kg") renvoie du TEXTE quand une
+  espèce n'a rien vendu, que le récap multiplie par un
+  poids → #VALUE! sur le total de la semaine entière.
+
 ## Documents édités (impression / PDF)
 - Un navigateur n'expose AUCUNE API d'imprimante :
   la Web Printing API de Chrome est réservée aux
