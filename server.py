@@ -1,3 +1,20 @@
+# =============================================================================
+#  Tableau de bord de gestion — Aqua Sea
+#
+#  © 2025-2026 Adrian Le Tonnelier. Tous droits réservés.
+#
+#  Logiciel créé par Adrian Le Tonnelier, sur son temps et son matériel
+#  personnels, sans commande ni instruction d'un employeur.
+#  Aucune reproduction, modification, décompilation, diffusion ni utilisation
+#  n'est autorisée sans l'accord écrit et préalable de l'auteur.
+#
+#  Les DONNÉES traitées par ce logiciel (factures, paiements, stocks) restent
+#  la propriété entière de l'entreprise qui les saisit. Le présent copyright
+#  ne porte que sur le logiciel lui-même.
+#
+#  Contact : adrianletonnelier@gmail.com
+# =============================================================================
+
 #!/usr/bin/env python3
 """Serveur local du dashboard : sert les fichiers statiques (index.html,
 script.js, styles.css) et expose POST /open-file pour ouvrir un fichier

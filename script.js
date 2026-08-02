@@ -1,3 +1,20 @@
+// =============================================================================
+//  Tableau de bord de gestion — Aqua Sea
+//
+//  © 2025-2026 Adrian Le Tonnelier. Tous droits réservés.
+//
+//  Logiciel créé par Adrian Le Tonnelier, sur son temps et son matériel
+//  personnels, sans commande ni instruction d'un employeur.
+//  Aucune reproduction, modification, décompilation, diffusion ni utilisation
+//  n'est autorisée sans l'accord écrit et préalable de l'auteur.
+//
+//  Les DONNÉES traitées par ce logiciel (factures, paiements, stocks) restent
+//  la propriété entière de l'entreprise qui les saisit. Le présent copyright
+//  ne porte que sur le logiciel lui-même.
+//
+//  Contact : adrianletonnelier@gmail.com
+// =============================================================================
+
 // ---------- expression resolver (chemins pointés, littéraux, égalités simples) ----------
 var IDENT_RE = /^[A-Za-z_$][A-Za-z0-9_$]*/;
 var NUMBER_RE = /^-?\d+(\.\d+)?$/;
@@ -385,7 +402,11 @@ class Component {
   static PAY_OVERRIDE_KEY = 'avPaymentOverrides';
   static MAP_KEY = 'avMappings';
   static AVWMAP_KEY = 'avWriteMap';
-  static APP_VERSION = 'version 28'; // affichée sous le nom — permet de vérifier qu'on est sur le bon fichier
+  static APP_VERSION = 'version 29';
+  // Mention de copyright affichée dans l'interface (Paramètres) : elle n'accorde aucun
+  // droit — le droit d'auteur naît de la création — mais elle informe les tiers et date la
+  // revendication. La preuve d'antériorité, elle, repose sur l'historique Git et le dépôt INPI.
+  static COPYRIGHT = '© 2025-2026 Adrian Le Tonnelier — tous droits réservés'; // affichée sous le nom — permet de vérifier qu'on est sur le bon fichier
   static CMP_KEY = 'avComptable';
   static GRENKE_KEY = 'avGrenke';
   static GLINK_KEY = 'avGrenkeLinks';
