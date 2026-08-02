@@ -406,7 +406,7 @@ class Component {
   // Mention de copyright affichée dans l'interface (Paramètres) : elle n'accorde aucun
   // droit — le droit d'auteur naît de la création — mais elle informe les tiers et date la
   // revendication. La preuve d'antériorité, elle, repose sur l'historique Git et le dépôt INPI.
-  static COPYRIGHT = '© 2025-2026 Adrian Le Tonnelier — tous droits réservés'; // affichée sous le nom — permet de vérifier qu'on est sur le bon fichier
+  static COPYRIGHT = '© 2025-2026 Adrian Le Tonnelier'; // affichée sous le numéro de version, dans la barre latérale
   static CMP_KEY = 'avComptable';
   static GRENKE_KEY = 'avGrenke';
   static GLINK_KEY = 'avGrenkeLinks';
@@ -11573,7 +11573,7 @@ class Component {
       onAgNew, onAgPrevMonth, onAgNextMonth, onAgTodayBtn, agAddBtnStyle, agNavBtnStyle, agTodayBtnStyle, AG_DOW,
       agEditOpen, agEditIsNew, agEditCanDelete, agEditValues, agCatOptions, agRecurOptions, onAgTitle, onAgDate, onAgTime, onAgCat, onAgRecur, onAgNote, onAgSave, onAgCancel, onAgDeleteFromEdit, agInputStyle, agSelStyle, agBtnPrimary, agBtnGhost,
       agDelOpen, agDelTitle, onAgDelConfirm, onAgDelCancel, onGoAgenda, agHomeShow,
-      navGroups, onGear, onDisconnect, gearStyle, brandStyle, appVersion: Component.APP_VERSION,
+      navGroups, onGear, onDisconnect, gearStyle, brandStyle, appVersion: Component.APP_VERSION, appCopyright: Component.COPYRIGHT,
       advOpen: !!this.state.advOpen,
       onToggleAdv: () => this.setState({ advOpen: !this.state.advOpen }),
       advToggleLabel: this.state.advOpen ? "▴ Masquer les options avancées" : "▾ Plus d'options (objectifs, profils, entreprise, restauration…)",

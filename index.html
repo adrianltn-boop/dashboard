@@ -39,7 +39,7 @@
       <sc-if value="{{ entNoLogo }}" hint-placeholder-val="{{ true }}">
         <div style="{{ brandStyle }}">{{ entInitials }}</div>
       </sc-if>
-      <span style="font-size:14.5px;font-weight:600;color:#0e1b2e;line-height:1.2">Dashboard {{ entNom }}<span style="display:block;font-size:10px;font-weight:600;color:#9aa7b8;font-family:'IBM Plex Mono',monospace;margin-top:1px">{{ appVersion }}</span></span>
+      <span style="font-size:14.5px;font-weight:600;color:#0e1b2e;line-height:1.2">Dashboard {{ entNom }}<span style="display:block;font-size:10px;font-weight:600;color:#9aa7b8;font-family:'IBM Plex Mono',monospace;margin-top:1px">{{ appVersion }}</span><span style="display:block;font-size:9.5px;font-weight:400;color:#aeb8c6;margin-top:2px" title="Auteur du logiciel">{{ appCopyright }}</span></span>
     </div>
     <div style="padding:0 0 14px" data-help="Indique qui utilise le tableau de bord. Cliquez pour changer de profil — un profil « simplifié » ne voit que les pages choisies pour lui dans Paramètres, un profil « admin » voit tout. Ce n'est pas un mot de passe, juste une aide pour ne montrer à chacun que l'essentiel." data-help-title="Profil utilisateur">
       <button style="{{ profilChipStyle }}" onclick="{{ onProfilToggle }}">
