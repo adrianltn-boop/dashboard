@@ -238,7 +238,7 @@ class Component {
     filePreview: null, hiddenOps: {}, grenkeHidden: {}, trashAsk: null, tblStatusF: {},
     banque: null, banqueName: null, bankLinks: {}, bankHidden: {}, bankLink: null, bankLinkQuery: '', bankQ: '', bankFilter: 'Toutes',
     bankCats: {}, bankCatRules: {}, bankCatList: null, bankCatAsk: null, bankCatAskValue: '', bankCatPick: null,
-    heures: {}, heuresMois: {}, filePaths: {}, annule: {}, hRoster: [], hFocus: null, hMode: 'semaine', hRange: null, hCollapse: {}, hDelAsk: null, hNuit: false,
+    heures: {}, heuresMois: {}, filePaths: {}, annule: {}, hRoster: [], hFocus: null, hMode: 'semaine', hRange: null, hCollapse: {}, hDelAsk: null, hNuit: false, vehDelAsk: null, vehRestore: null,
     empDocs: {}, empDelDoc: null, bankSalaryEmp: '', bankSalaryMonth: '',
     agenda: [], agendaMonth: null, agendaEdit: null, agendaDelAsk: null,
     payTrack: [], payDraft: null, payLookup: null,
@@ -849,6 +849,35 @@ class Component {
   closeSetup() { try { localStorage.setItem('avSetupDone', '1'); } catch (e) {} this.setState({ setupOpen: false }); }
   addVehicle() { const rows = this.vehicleRows().slice(); rows.push({ id: 'v' + Date.now().toString(36), name: 'Nouveau véhicule', bankKeys: [], attachments: [] }); this.saveVehicles(rows); }
   updateVehicle(id, patch) { this.saveVehicles(this.vehicleRows().map(v => v.id === id ? { ...v, ...patch } : v)); }
+  // ---------- SUPPRESSION D'UN VÉHICULE : CONFIRMER, NOMMER, PUIS POUVOIR REVENIR ----------
+  // Une fiche véhicule ne vit NULLE PART ailleurs : ni dans un classeur Excel, ni dans un dossier
+  // surveillé. Son nom, ses rattachements bancaires et ses pièces jointes n'existent que dans le
+  // navigateur. Un clic sur 🗑 les détruisait sans un mot et sans retour possible — alors que le
+  // produit demande partout ailleurs une confirmation qui NOMME ce qui va être perdu (hAskDelete,
+  // « Réinitialiser une source »). On applique la même règle, plus le rétablissement demandé par
+  // Adrian : la fiche part dans une corbeille de session, restaurable tant que l'onglet est ouvert.
+  askDeleteVehicle(id) {
+    const v = this.vehicleRows().find(x => x.id === id); if (!v) return;
+    this.setState({ vehDelAsk: { id, name: v.name || 'Véhicule sans nom', banques: (v.bankKeys || []).length, pieces: (v.attachments || []).length } });
+  }
+  confirmDeleteVehicle() {
+    const a = this.state.vehDelAsk; if (!a) return;
+    const v = this.vehicleRows().find(x => x.id === a.id);
+    if (!v) { this.setState({ vehDelAsk: null }); return; }
+    // On garde la fiche ET ses pièces jointes (les blobs restent dans IndexedDB, on ne les efface
+    // pas) : rétablir doit rendre le dossier complet, pas une coquille.
+    this._vehCorbeille = (this._vehCorbeille || []).concat([{ v, at: Date.now() }]);
+    this.saveVehicles(this.vehicleRows().filter(x => x.id !== a.id));
+    this.setState({ vehDelAsk: null, vehRestore: { id: a.id, name: a.name }, msg: { kind: 'ok', text: `« ${a.name} » retiré : ${a.banques} ligne${a.banques > 1 ? 's' : ''} bancaire${a.banques > 1 ? 's' : ''} et ${a.pieces} pièce${a.pieces > 1 ? 's' : ''} jointe${a.pieces > 1 ? 's' : ''} avec lui. Vous pouvez encore le rétablir depuis le bandeau ci-dessus tant que cet onglet reste ouvert.` } });
+  }
+  restoreVehicle() {
+    const r = this.state.vehRestore; if (!r) return;
+    const item = (this._vehCorbeille || []).find(x => x.v && x.v.id === r.id);
+    if (!item) { this.setState({ vehRestore: null, msg: { kind: 'error', text: `« ${r.name} » n'est plus rétablissable : la page a été rechargée depuis la suppression.` } }); return; }
+    this._vehCorbeille = (this._vehCorbeille || []).filter(x => x !== item);
+    this.saveVehicles(this.vehicleRows().concat([item.v]));
+    this.setState({ vehRestore: null, msg: { kind: 'ok', text: `« ${item.v.name || 'Véhicule'} » rétabli avec ses rattachements et ses pièces jointes.` } });
+  }
   deleteVehicle(id) { this.saveVehicles(this.vehicleRows().filter(v => v.id !== id)); }
   linkVehicleBank(id, key) { const v = this.vehicleRows().find(x => x.id === id); if (!v) return; const keys = Array.isArray(v.bankKeys) ? v.bankKeys.slice() : []; const i = keys.indexOf(key); if (i >= 0) keys.splice(i, 1); else keys.push(key); this.updateVehicle(id, { bankKeys: keys }); }
   pickVehicleAttachment(id) { const inp = document.createElement('input'); inp.type = 'file'; inp.multiple = true; inp.onchange = () => { const files = [...(inp.files || [])]; if (!files.length) return; const v = this.vehicleRows().find(x => x.id === id); if (!v) return; const attachments = Array.isArray(v.attachments) ? v.attachments.slice() : []; files.forEach(f => { const aid = 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); attachments.push({ id: aid, name: f.name, type: f.type || '', size: f.size || 0 }); this.idbSet('vehicle:' + id + ':' + aid, { file: f }); }); this.updateVehicle(id, { attachments }); }; inp.click(); }
@@ -2242,14 +2271,45 @@ class Component {
     else { this.setState({ hiddenOps: {} }); try { localStorage.removeItem(Component.HIDE_OPS_KEY); } catch (e) {} }
   }
   // ---------- rapprochement bancaire ----------
-  bankKey(b) { return `${b.y}-${b.m}-${b.d}|${this.nrm(b.label).slice(0, 40)}|${b.amt}`; }
+  // ---------- CLÉ D'UNE LIGNE DE RELEVÉ : ELLE DOIT DÉSIGNER UNE LIGNE, ET UNE SEULE ----------
+  // L'ancienne clé était « date | libellé tronqué à 40 | montant ». Deux lignes réellement
+  // distinctes pouvaient donc la partager, et c'est le cas précisément quand le rapprochement
+  // sert : deux prélèvements récurrents du même jour, deux pleins de carburant, deux règlements du
+  // même client au même montant (« … FACTURE 2041 » et « … FACTURE 2042 » ne diffèrent qu'au 41e
+  // caractère). Conséquence vécue à l'audit : masquer une ligne masquait les deux, valider l'une
+  // rapprochait les deux sur LA MÊME facture, et la seconde facture restait impayée au suivi alors
+  // que l'argent était sur le compte.
+  // Deux corrections : le libellé COMPLET, et un rang d'occurrence pour les lignes réellement
+  // jumelles. Le rang est posé une fois par liste (_bankIndexer) et retenu par objet — le calculer
+  // à chaque appel rendrait la vue quadratique sur un relevé de plusieurs milliers de lignes.
+  _bankKeyBase(b) { return `${b.y}-${b.m}-${b.d}|${this.nrm(b.label)}|${b.amt}`; }
+  bankKeyLegacy(b) { return `${b.y}-${b.m}-${b.d}|${this.nrm(b.label).slice(0, 40)}|${b.amt}`; }
+  _bankIndexer(rows) {
+    if (!this._bankOccWM) this._bankOccWM = new WeakMap();
+    const vus = Object.create(null);
+    (rows || []).forEach(b => { if (!b || typeof b !== 'object') return; const k = this._bankKeyBase(b); const n = vus[k] | 0; vus[k] = n + 1; this._bankOccWM.set(b, n); });
+    return rows;
+  }
+  _bankOcc(b) { return (this._bankOccWM && b && typeof b === 'object' && this._bankOccWM.get(b)) || 0; }
+  bankKey(b) { const o = this._bankOcc(b); return this._bankKeyBase(b) + (o ? '#' + o : ''); }
+  // Lecture d'une carte indexée par clé de ligne. Les réglages déjà enregistrés par Faustine l'ont
+  // été sous l'ANCIENNE clé : on les retrouve en repli, sinon un changement de clé lui effacerait
+  // silencieusement ses catégories et ses rapprochements. Le repli ne vaut que pour la PREMIÈRE
+  // occurrence : les suivantes n'ont jamais eu de valeur propre, c'est le défaut qu'on corrige.
+  bankVal(map, b) {
+    if (!map || !b) return undefined;
+    const k = this.bankKey(b);
+    if (Object.prototype.hasOwnProperty.call(map, k)) return map[k];
+    if (!this._bankOcc(b)) { const l = this.bankKeyLegacy(b); if (Object.prototype.hasOwnProperty.call(map, l)) return map[l]; }
+    return undefined;
+  }
   setBankLink(key, val) { const m = { ...(this.state.bankLinks || {}) }; m[key] = val; this.setState({ bankLinks: m, bankLink: null, bankLinkQuery: '' }); this.saveJSON(Component.BLINK_KEY, m); }
   clearBankLink(key) { const m = { ...(this.state.bankLinks || {}) }; delete m[key]; this.setState({ bankLinks: m, bankLink: null, bankLinkQuery: '' }); this.saveJSON(Component.BLINK_KEY, m); }
   // ---------- catégories de dépenses (banque) ----------
   // clé de libellé : sans accents, chiffres ni dates → « CARTE 05/07 STATION AVIA » = « CARTE STATION AVIA »
   bankLabelKey(label) { return String(label || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[0-9]/g, '').replace(/[\/:.,*-]/g, ' ').replace(/\s+/g, ' ').trim(); }
   resolveBankCat(b, m, rules, overrides) {
-    const o = overrides[this.bankKey(b)]; if (o) return o;
+    const o = this.bankVal(overrides, b); if (o) return o;
     const r = rules[this.bankLabelKey(b.label)]; if (r) return r;
     return this.guessBankCat(b, m);
   }
@@ -2292,6 +2352,7 @@ class Component {
     const lk = this.bankLabelKey(label); if (!lk) return;
     const rules = { ...(this.state.bankCatRules || {}) }; rules[lk] = cat;
     const bankRaw = this.state.banque || (this.state.demoMode !== false ? Component.BANQUE.map(a => ({ y: a[0], m: a[1], d: a[2], label: a[3], amt: a[4], solde: a[5] != null ? a[5] : null })) : []);
+    this._bankIndexer(bankRaw); // rang d'occurrence : sans lui, deux lignes jumelles repartagent une clé
     const n = bankRaw.filter(x => this.bankLabelKey(x.label) === lk).length;
     this.setState({ bankCatRules: rules, msg: { kind: 'success', text: `Règle mémorisée : « ${lk} » → ${cat} — ${n} ligne${n > 1 ? 's' : ''} concernée${n > 1 ? 's' : ''}, prochains imports compris.` } });
     this.saveJSON(Component.BRULE_KEY, rules);
@@ -2598,6 +2659,15 @@ class Component {
       // exactement sur le bon segment ; le numéro de ligne Excel est relu sur la DERNIÈRE balise
       // <row …> du segment (celle qui se referme vraiment et porte les cellules).
       const handled = {};
+      // Formules PARTAGÉES : seule la cellule « maîtresse » porte l'expression
+      // (<f t="shared" ref="I5:I1838" si="1">D5-H5</f>) ; toutes les autres n'en portent que le
+      // numéro (<f t="shared" si="1"/>). Sans cette table, on ne saurait pas de quoi dépend le
+      // Solde d'une ligne, et il faudrait effacer son cache à l'aveugle — ce qui effacerait du même
+      // geste l'IDENTIFIANT de la ligne, lui aussi en formule partagée, et rendrait la facture
+      // introuvable dans le suivi. Les références d'une formule partagée sont décalées ligne à
+      // ligne : on ne compare donc que les COLONNES, jamais les numéros de ligne.
+      const _maitres = {};
+      [...xml.matchAll(/<f\b[^>]*\bt="shared"[^>]*\bsi="(\d+)"[^>]*>([\s\S]*?)<\/f>/g)].forEach(m => { if (_maitres[m[1]] == null) _maitres[m[1]] = m[2] || ''; });
       let rowIdx = -1;
       xml = xml.replace(/<row[^>]*>[\s\S]*?<\/row>/g, rowFull => {
         rowIdx++;
@@ -2633,13 +2703,39 @@ class Component {
             else out = out.replace(/<\/row>$/, newCell + '</row>');
           }
         }
+        // Le cache (<v>) d'une formule ne devient faux que si cette formule DÉPEND d'une cellule
+        // qu'on vient d'écrire. On n'efface donc que ceux-là, et seulement dans la ligne touchée.
+        // Effacer plus large coûte cher et se voit tout de suite : sur une ligne du « Suivi des
+        // paiements », le client, le montant TTC et la date viennent de formules INDEX/MATCH qui ne
+        // dépendent QUE du numéro de facture. Les effacer parce qu'on a écrit le règlement à côté
+        // viderait à l'écran la ligne que Faustine vient de saisir.
+        const _cols = Object.keys(rowEdits).map(cc => colName(Number(cc)));
+        // Référence exacte (H5, $H5, H$5, $H$5) pour une formule écrite en clair ; référence de
+        // COLONNE (H suivi de n'importe quel numéro de ligne) pour une formule partagée, dont les
+        // références se décalent. Jamais la cellule d'une AUTRE feuille (précédée de « ! »).
+        const _reExact = _cols.map(c => new RegExp(`(^|[^A-Z0-9_$!])\\$?${c}\\$?${rowNum}(?![0-9A-Za-z_])`, 'i'));
+        const _reCol = _cols.map(c => new RegExp(`(^|[^A-Z0-9_$!])\\$?${c}\\$?\\d+(?![0-9A-Za-z_])`, 'i'));
+        out = out.replace(/<c\s[^>]*?r="[A-Z]+\d+"[^>]*?>[\s\S]*?<\/c>/g, cell => {
+          const fm = cell.match(/<f\b([^>]*?)(?:\/>|>([\s\S]*?)<\/f>)/);
+          if (!fm) return cell;
+          const attrs = fm[1] || '';
+          let texte = fm[2] || '', partagee = false;
+          if (!texte && /\bt="shared"/.test(attrs)) {
+            const si = (attrs.match(/\bsi="(\d+)"/) || [])[1];
+            texte = (si != null && _maitres[si] != null) ? _maitres[si] : '';
+            partagee = true;
+            // Maîtresse introuvable : on ne sait rien, on efface — une case vide se voit, un
+            // chiffre périmé se croit.
+            if (!texte) return cell.replace(/(<f\b[^>]*?(?:\/>|>[\s\S]*?<\/f>))<v>[\s\S]*?<\/v>/, '$1');
+          }
+          const dep = (partagee ? _reCol : _reExact).some(re => re.test(texte));
+          if (!dep) return cell;
+          return cell.replace(/(<f\b[^>]*?(?:\/>|>[\s\S]*?<\/f>))<v>[\s\S]*?<\/v>/, '$1');
+        });
         return out;
       });
       const unmatched = Object.keys(byRow).filter(r => !handled[r]);
       if (unmatched.length) throw new Error(`ligne introuvable dans « ${sheetName} » (le fichier a peut-être changé entre-temps) — sauvegarde annulée`);
-      // Supprime la valeur en cache (<v>) de toute cellule en formule de la feuille modifiée :
-      // Excel se fie sinon à ce cache et n'affiche pas le résultat recalculé à l'ouverture.
-      xml = xml.replace(/(<f\b[^>]*?(?:\/>|>[\s\S]*?<\/f>))<v>[\s\S]*?<\/v>/g, '$1');
       files[target] = enc.encode(xml);
     }
     if (_mark) { const ns = _mark.finalize(); if (ns) files['xl/styles.xml'] = enc.encode(ns); } // police bleue Andale sur les cellules écrites
@@ -2652,6 +2748,43 @@ class Component {
       if (files[ctName]) {
         const ct = dec.decode(files[ctName]).replace(/<Override[^>]*calcChain\.xml[^>]*\/>/g, '');
         files[ctName] = enc.encode(ct);
+      }
+    }
+    // ---------- RECALCUL À L'OUVERTURE : LE DEMANDER, PAS LE FORCER EN VIDANT LES CACHES ----------
+    // Une cellule en formule porte DEUX choses : la formule (<f>) et la dernière valeur calculée
+    // (<v>). Excel se fie au cache et n'affiche pas le résultat recalculé si on ne lui dit rien —
+    // d'où l'effacement des <v> qui existait ici, appliqué à la FEUILLE ENTIÈRE dès qu'une seule
+    // cellule y était écrite. Le coût de cet effacement global était sans commune mesure avec le
+    // problème qu'il réglait : sur le classeur de ventes réel, enregistrer UNE vente vidait les
+    // 12 868 valeurs en cache de « Suivi des paiements ». Excel, lui, les recalculait à
+    // l'ouverture ; le TABLEAU DE BORD, non — il lit le fichier, pas Excel. Le suivi de paiement
+    // passait donc de 1 721 lignes lisibles à 9, et l'écran restait ainsi tant que Faustine
+    // n'avait pas ouvert puis réenregistré le classeur dans Excel. Une vente saisie faisait
+    // disparaître l'historique des règlements : exactement ce que ce tableau de bord existe pour
+    // empêcher.
+    // La bonne façon de le demander est l'attribut prévu pour ça par le format : calcPr
+    // fullCalcOnLoad. Excel recalcule tout le classeur à l'ouverture, caches ou pas, et les
+    // valeurs restent lisibles par le tableau de bord entre-temps.
+    // ORDRE DES ÉLÉMENTS (même famille de piège que <strike/> dans une police) : la séquence
+    // CT_Workbook impose calcPr APRÈS definedNames et AVANT oleSize / customWorkbookViews /
+    // pivotCaches / extLst. Insérer avant </workbook> dans un classeur qui porte un tableau croisé
+    // dynamique le placerait après pivotCaches et déclencherait la réparation du fichier par Excel.
+    {
+      const wbName = 'xl/workbook.xml';
+      if (files[wbName]) {
+        let w = dec.decode(files[wbName]);
+        const dejaLa = /<calcPr\b[^>]*\/>/.test(w);
+        if (dejaLa) {
+          w = w.replace(/<calcPr\b([^>]*?)\s*\/>/, (m, attrs) => `<calcPr${String(attrs).replace(/\s*fullCalcOnLoad="[^"]*"/g, '')} fullCalcOnLoad="1"/>`);
+        } else if (!/<calcPr\b/.test(w)) {
+          const apres = ['<oleSize', '<customWorkbookViews', '<pivotCaches', '<smartTagPr', '<smartTagTypes', '<webPublishing', '<fileRecoveryPr', '<webPublishObjects', '<extLst'];
+          const balise = '<calcPr calcId="191029" fullCalcOnLoad="1"/>';
+          let pos = -1;
+          apres.forEach(t => { const i = w.indexOf(t); if (i >= 0 && (pos < 0 || i < pos)) pos = i; });
+          if (pos < 0) pos = w.indexOf('</workbook>');
+          if (pos >= 0) w = w.slice(0, pos) + balise + w.slice(pos);
+        }
+        files[wbName] = enc.encode(w);
       }
     }
     const entries = Object.keys(files).map(name => ({ name, bytes: files[name] }));
@@ -3926,6 +4059,36 @@ class Component {
     for (let r = hi + 1; r < rows.length; r++) { for (const z of zones) { const v = rows[r][z.num]; if (v !== '' && v != null && this._vNum(v) === want) return { previewIdx: r, excelRow: r + 1, dateCol: z.date, descCol: z.desc, montCol: z.mont, paieCol: z.paie, etatCol: z.etat, obsCol: z.obs }; } }
     throw new Error(`le numéro de chèque ${chequeNum} n'existe pas (imprimé) dans la feuille « ${sheetName} »`);
   }
+  // ---------- UNE LIGNE DE CHÉQUIER DÉJÀ REMPLIE NE SE RÉÉCRIT PAS ----------
+  // _locateChequeRow retrouve la ligne du numéro demandé, qu'elle soit vierge OU DÉJÀ UTILISÉE :
+  // elle cherche un numéro pré-imprimé, elle ne juge pas de son contenu. Écrire dessus sans regarder
+  // efface un chèque réellement émis — reproduit à l'audit : deux règlements successifs de la même
+  // facture partaient sur le même n° 516909, et le premier chèque (412,50 €, signé, remis au
+  // pêcheur) disparaissait du carnet, rapprochement bancaire compris.
+  // Cette fonction dit ce que la ligne porte DÉJÀ ; null si elle est vierge.
+  _chequeLigneOccupee(wb, sheetName, cLoc) {
+    const sh = (wb || []).find(s => s.name === sheetName); if (!sh || !cLoc) return null;
+    const row = (sh.rows || [])[cLoc.previewIdx] || [];
+    const lu = c => (c != null && c >= 0 && row[c] != null && String(row[c]).trim() !== '') ? String(row[c]).trim() : '';
+    const mont = lu(cLoc.montCol), desc = lu(cLoc.descCol), etat = lu(cLoc.etatCol), date = lu(cLoc.dateCol);
+    if (!mont && !desc && !etat && !date) return null;
+    const bouts = [];
+    if (mont) bouts.push(this.fmt(this._vNum(mont)));
+    if (desc) bouts.push(`« ${desc} »`);
+    if (date) bouts.push(`datée`);
+    if (etat) bouts.push(etat);
+    return { texte: bouts.join(' · '), montant: mont, desc, etat, date };
+  }
+  // Numéro libre suivant dans la même feuille de chéquier : ce qu'on propose quand on refuse.
+  _chequeProchainLibre(wb, sheetName, depuis) {
+    let n = Math.floor(this._vNum(depuis)) || 0;
+    for (let i = 1; i <= 400; i++) {
+      let loc = null;
+      try { loc = this._locateChequeRow(wb, sheetName, n + i); } catch (e) { return null; } // fin du carnet imprimé
+      if (loc && !this._chequeLigneOccupee(wb, sheetName, loc)) return n + i;
+    }
+    return null;
+  }
   // Prépare l'aperçu de complétion de la ligne du chèque, DANS LE FICHIER PÊCHEUR (source « operations »).
   // Déclenché seulement après une écriture d'achat réussie. Aucune écriture ici : juste l'aperçu.
   async requestChequePreview(rec) {
@@ -4210,6 +4373,16 @@ class Component {
         let cLoc;
         try { cLoc = this._locateChequeRow(wb, chequeSheetName, pd.chequeNum); }
         catch (e) { err((e && e.message) || 'numéro de chèque introuvable'); return; }
+        // La ligne visée porte-t-elle déjà un chèque ? Si oui on REFUSE : un chèque émis ne
+        // s'écrase pas, et un aperçu qui annonce sereinement « Montant 587,50 € » sur un numéro
+        // qui en portait 412,50 ne prévient de rien. On nomme ce qui est déjà là et on propose le
+        // premier numéro réellement libre du carnet.
+        const occupe = this._chequeLigneOccupee(wb, chequeSheetName, cLoc);
+        if (occupe) {
+          const libre = this._chequeProchainLibre(wb, chequeSheetName, pd.chequeNum);
+          err(`Le chèque n° ${pd.chequeNum} est déjà utilisé dans « ${chequeSheetName} » : ${occupe.texte}. Écrire dessus effacerait un chèque réellement émis.${libre ? ` Premier numéro libre : ${libre}.` : ' Aucun numéro libre trouvé dans ce carnet — ouvrez un nouveau chéquier.'}`);
+          return;
+        }
         const desc = pd.pecheur || '';
         const obs = this._chequeObsText(1, 1, pd.ref || '');
         editsBySheet[chequeSheetName] = editsBySheet[chequeSheetName] || {};
@@ -4227,7 +4400,11 @@ class Component {
       err(`Préparation du paiement impossible : ${(e && e.message) || 'erreur'}. Rien n'a été modifié.`);
     }
   }
-  _paiementAfterWrite(ref) { this.setState({ paiementDraft: null, formErr: null, msg: { kind: 'ok', text: `Paiement enregistré pour la facture ${ref}.` } }); }
+  // _refreshChequiersLive() est OBLIGATOIRE ici : sans lui, state.chequiersLive reste figé sur le
+  // numéro qu'on vient de consommer, et le paiement suivant le repropose — c'est la moitié du
+  // défaut « le solde écrase le chèque précédent ». Les circuits d'ajout et d'annulation de chèque
+  // le faisaient déjà ; celui-ci était le seul à l'avoir oublié.
+  _paiementAfterWrite(ref) { this.setState({ paiementDraft: null, formErr: null, msg: { kind: 'ok', text: `Paiement enregistré pour la facture ${ref}.` } }); this._refreshChequiersLive(); }
   // Prépare les réglages/handle communs aux actions du module Paiement pêcheur (Encaissé/Annuler/Modifier).
   // Retourne null (et affiche l'erreur) si quoi que ce soit manque.
   // Solde et Chèque : les deux seules colonnes qu'un paiement pêcheur a le droit d'écraser même si
@@ -4460,6 +4637,13 @@ class Component {
       if (!chequeSheetName) { err(`Aucune feuille de chéquier ne correspond au n° ${chequeNum}${chequier ? ` (carnet « ${chequier} »)` : ''}. Vérifiez le numéro, ou créez l'onglet du carnet dans le fichier.`); return; }
       let cLoc; try { cLoc = this._locateChequeRow(wb, chequeSheetName, chequeNum); }
       catch (e) { err((e && e.message) || 'numéro de chèque introuvable'); return; }
+      // Même garde-fou que le paiement : on ajoute un chèque, on n'en efface pas un.
+      const occupe2 = this._chequeLigneOccupee(wb, chequeSheetName, cLoc);
+      if (occupe2) {
+        const libre2 = this._chequeProchainLibre(wb, chequeSheetName, chequeNum);
+        err(`Le chèque n° ${chequeNum} est déjà utilisé dans « ${chequeSheetName} » : ${occupe2.texte}. Écrire dessus effacerait un chèque réellement émis.${libre2 ? ` Premier numéro libre : ${libre2}.` : ' Aucun numéro libre trouvé dans ce carnet — ouvrez un nouveau chéquier.'}`);
+        return;
+      }
       const serial = this._excelSerial(this._payTodayIso());
       const desc = pecheur || '';
       const editsBySheet = {}; const verifyTargets = []; const preview = [];
@@ -10028,9 +10212,10 @@ class Component {
 
     // crédits — les virements bancaires rattachés (rapprochement Banque → « Crédit ») réduisent le restant.
     const bankRowsForCred = this.state.banque || (demo ? C.BANQUE.map(a => ({ y: a[0], m: a[1], d: a[2], label: a[3], amt: a[4] })) : []);
+    this._bankIndexer(bankRowsForCred);
     const bankLinksForCred = this.state.bankLinks || {};
     const credBankPaid = {}; // 'label — ent' -> { sum, count, dates:[] }
-    bankRowsForCred.forEach(b => { const lk = bankLinksForCred[this.bankKey(b)]; if (lk && typeof lk === 'object' && lk.kind === 'Crédit' && lk.partner) { const e = credBankPaid[lk.partner] || (credBankPaid[lk.partner] = { sum: 0, count: 0, dates: [] }); e.sum += Math.abs(b.amt || 0); e.count++; e.dates.push(`${this.dd(b.d)}/${this.dd(b.m)}`); } });
+    bankRowsForCred.forEach(b => { const lk = this.bankVal(bankLinksForCred, b); if (lk && typeof lk === 'object' && lk.kind === 'Crédit' && lk.partner) { const e = credBankPaid[lk.partner] || (credBankPaid[lk.partner] = { sum: 0, count: 0, dates: [] }); e.sum += Math.abs(b.amt || 0); e.count++; e.dates.push(`${this.dd(b.d)}/${this.dd(b.m)}`); } });
     const credPartnerKey = c => `${c.label}${c.ent ? ' — ' + c.ent : ''}`;
     const credits = (this.state.credits || (demo ? C.CREDITS : [])).map(c => {
       const resteBase = (c.rest != null ? c.rest : c.total - c.paid);
@@ -10285,11 +10470,12 @@ class Component {
     // VÉHICULES — saisie volontairement minimale : nom libre, liens banque manuels, pièces jointes locales.
     const vehicleSource = this.vehicleRows();
     const vehicleLinkStyle = `padding:7px 11px;border-radius:8px;border:1px solid ${this.hexToRgba(accent, .3)};background:#fff;color:${accent};font-size:12px;font-weight:600;cursor:pointer;font-family:inherit`;
-    const vehicleRows = vehicleSource.map(v => ({ id: v.id, name: v.name || '', bankCount: (v.bankKeys || []).length, onName: e => this.updateVehicle(v.id, { name: e.target.value }), onBank: () => this.setState({ vehicleBankPick: v.id }), onAttach: () => this.pickVehicleAttachment(v.id), onDelete: () => this.deleteVehicle(v.id), linkStyle: vehicleLinkStyle, attachments: (v.attachments || []).map(a => ({ name: a.name, onOpen: () => this.openVehicleAttachment(v.id, a), style: 'padding:5px 9px;border-radius:7px;border:1px solid #e6ebf2;background:#f8fafc;color:#475569;font-size:11.5px;cursor:pointer;font-family:inherit' })) }));
+    const vehicleRows = vehicleSource.map(v => ({ id: v.id, name: v.name || '', bankCount: (v.bankKeys || []).length, onName: e => this.updateVehicle(v.id, { name: e.target.value }), onBank: () => this.setState({ vehicleBankPick: v.id }), onAttach: () => this.pickVehicleAttachment(v.id), onDelete: () => this.askDeleteVehicle(v.id), linkStyle: vehicleLinkStyle, attachments: (v.attachments || []).map(a => ({ name: a.name, onOpen: () => this.openVehicleAttachment(v.id, a), style: 'padding:5px 9px;border-radius:7px;border:1px solid #e6ebf2;background:#f8fafc;color:#475569;font-size:11.5px;cursor:pointer;font-family:inherit' })) }));
     const onVehicleAdd = () => this.addVehicle();
     const vehicleBankOpen = !!this.state.vehicleBankPick;
     const pickedVehicle = vehicleSource.find(v => v.id === this.state.vehicleBankPick);
     const vehicleBankSource = this.state.banque || (demo ? C.BANQUE.map(a => ({ y: a[0], m: a[1], d: a[2], label: a[3], amt: a[4], solde: a[5] != null ? a[5] : null })) : []);
+    this._bankIndexer(vehicleBankSource);
     const vehicleBankRows = vehicleBankSource.map(b => { const key = this.bankKey(b); return { key, checked: !!(pickedVehicle && (pickedVehicle.bankKeys || []).includes(key)), date: `${this.dd(b.d)}/${this.dd(b.m)}/${b.y}`, label: b.label, amount: this.fmt(b.amt), onToggle: () => this.linkVehicleBank(this.state.vehicleBankPick, key) }; });
     const onVehicleBankClose = () => this.setState({ vehicleBankPick: null });
 
@@ -11122,6 +11308,7 @@ class Component {
 
     // ---- RAPPROCHEMENT BANCAIRE ----
     const bankRaw = this.state.banque || (demo ? C.BANQUE.map(a => ({ y: a[0], m: a[1], d: a[2], label: a[3], amt: a[4], solde: a[5] != null ? a[5] : null })) : []);
+    this._bankIndexer(bankRaw); // rang d'occurrence : sans lui, deux lignes jumelles repartagent une clé
     const bankHiddenM = this.state.bankHidden || {};
     const bankLinksM = this.state.bankLinks || {};
     const bankCatsM = this.state.bankCats || {};
@@ -11144,7 +11331,7 @@ class Component {
       const bankMatchRows = bankRaw.map(b => {
         const key = this.bankKey(b);
         const hits = this.bankMatch(b, bankCands);
-        const manual = bankLinksM[key];
+        const manual = this.bankVal(bankLinksM, b);
         let status, match = null, ambiguous = false, sameAmt = hits.length;
         if (manual === 'none') status = 'none';
         else if (manual) { status = 'manual'; match = bankCands.find(c => c.ref === manual.ref && c.kind === manual.kind && (manual.ref || c.partner === manual.partner)) || { kind: manual.kind, ref: manual.ref, partner: manual.partner || '', dLabel: '' }; }
@@ -11163,7 +11350,7 @@ class Component {
             status = 'confirm'; match = ambiguous ? null : top.c;
           }
         } else status = 'none';
-        return { b, key, status, match, ambiguous, sameAmt, hidden: !!bankHiddenM[key], cat: this.resolveBankCat(b, match, bankCatRulesM, bankCatsM) };
+        return { b, key, status, match, ambiguous, sameAmt, hidden: !!this.bankVal(bankHiddenM, b), cat: this.resolveBankCat(b, match, bankCatRulesM, bankCatsM) };
       });
       return { bankCands, bankMatchRows };
     });
@@ -11178,7 +11365,7 @@ class Component {
     const empDocsM = this.state.empDocs || {};
     // Salaires depuis la banque : chaque ligne rapprochée en « Salaire » alimente (employé, mois).
     const empSalaryMap = {}; // 'name|AAAA-MM' -> { montant, dates:[] }
-    bankRaw.forEach(b => { const lk = bankLinksM[this.bankKey(b)]; if (lk && typeof lk === 'object' && lk.kind === 'Salaire' && lk.emp && lk.month) { const dk = String(lk.emp).trim() + '|' + lk.month; const e = empSalaryMap[dk] || (empSalaryMap[dk] = { montant: 0, dates: [] }); e.montant += Math.abs(b.amt || 0); e.dates.push(`${this.dd(b.d)}/${this.dd(b.m)}/${b.y}`); } });
+    bankRaw.forEach(b => { const lk = this.bankVal(bankLinksM, b); if (lk && typeof lk === 'object' && lk.kind === 'Salaire' && lk.emp && lk.month) { const dk = String(lk.emp).trim() + '|' + lk.month; const e = empSalaryMap[dk] || (empSalaryMap[dk] = { montant: 0, dates: [] }); e.montant += Math.abs(b.amt || 0); e.dates.push(`${this.dd(b.d)}/${this.dd(b.m)}/${b.y}`); } });
     const empRoster = (this.state.hRoster && this.state.hRoster.length) ? this.state.hRoster.filter((n, i, a) => n && a.indexOf(n) === i) : [];
     empCards = empRoster.map(name => {
       const nm = String(name).trim();
@@ -11804,6 +11991,21 @@ class Component {
     const hArChevStyle = 'width:22px;text-align:center;color:#8291a5;font-size:11px;flex-shrink:0';
     const hEditStyle = `padding:7px 13px;border-radius:8px;font-size:12px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.35)};cursor:pointer;font-family:inherit`;
     const hHeaderSub = hIsMonth ? `Vue mensuelle — ${H_MON[arBase.getMonth()]} ${arBase.getFullYear()}` : hIsYear ? `Vue annuelle — ${arBase.getFullYear()}` : hIsCustomArchives ? 'Archives — choisissez une période au calendrier' : ('Semaine du ' + hNavLabel + (hIsThisWeek ? ' · en cours' : ''));
+    // ---------- Véhicules : confirmation de suppression et rétablissement ----------
+    const vehDelAsk = this.state.vehDelAsk;
+    const vehDelOpen = !!vehDelAsk;
+    const vehDelName = vehDelAsk ? vehDelAsk.name : '';
+    // On NOMME ce qui sera perdu — c'est toute la différence entre une confirmation et un obstacle.
+    const vehDelDetail = vehDelAsk
+      ? `${vehDelAsk.banques} ligne${vehDelAsk.banques > 1 ? 's' : ''} bancaire${vehDelAsk.banques > 1 ? 's' : ''} rattachée${vehDelAsk.banques > 1 ? 's' : ''} · ${vehDelAsk.pieces} pièce${vehDelAsk.pieces > 1 ? 's' : ''} jointe${vehDelAsk.pieces > 1 ? 's' : ''}`
+      : '';
+    const onVehDelCancel = () => this.setState({ vehDelAsk: null });
+    const onVehDelConfirm = () => this.confirmDeleteVehicle();
+    const vehRestoreAsk = this.state.vehRestore;
+    const vehRestoreOpen = !!vehRestoreAsk;
+    const vehRestoreTxt = vehRestoreAsk ? `« ${vehRestoreAsk.name} » a été retiré. Rétablir ?` : '';
+    const onVehRestore = () => this.restoreVehicle();
+    const onVehRestoreHide = () => this.setState({ vehRestore: null });
     const hDelAsk = this.state.hDelAsk;
     const hDelOpen = !!hDelAsk;
     const hDelName = hDelAsk ? (hDelAsk.name || 'cette personne (nom non renseigné)') : '';
@@ -12119,6 +12321,7 @@ class Component {
       hEmployees, hEmpty, onHAddEmp, hAddStyle, hEmpCardStyle, hChevStyle, hNameStyle, hCellStyle, hTotCellStyle, hDelStyle, hEmpTotStyle, hGridHeadStyle, hLegendStyle, hEmptyStyle,
       arFrom, arTo, onArFrom, onArTo, arMonthValue, arYearValue, arMonthOptions, arYearOptions, onArMonth, onArYear, hDateStyle, arRows, arEmpty, arPeriodLabel, arCountLabel, hArHeadStyle, hArLineStyle, hArChevStyle, hEditStyle,
       hDelOpen, hDelName, onHDelCancel, onHDelConfirm, hDelSummary, hDelHasHours, onHDelArchive, hDelArchiveStyle, hDelSansNom, hDelPeutSupprimer: !hDelSansNom, hDelBloqueTxt, hNuitTabs, hNuitStatus,
+      vehDelOpen, vehDelName, vehDelDetail, onVehDelCancel, onVehDelConfirm, vehRestoreOpen, vehRestoreTxt, onVehRestore, onVehRestoreHide,
     };
   }
   setState(update, cb) {

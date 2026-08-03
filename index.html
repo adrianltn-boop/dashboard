@@ -2006,6 +2006,13 @@
           <span style="font-size:13px;color:#69788c">Véhicules, factures bancaires associées et pièces jointes locales.</span>
           <button style="{{ hAddStyle }}" onclick="{{ onVehicleAdd }}">＋ Ajouter un véhicule</button>
         </div>
+        <sc-if value="{{ vehRestoreOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;padding:11px 14px;border-radius:10px;border:1px solid #f2d9a8;background:#fdf6e7;color:#8a6212;font-size:12.5px;font-weight:600">
+            <span style="flex:1;min-width:220px">{{ vehRestoreTxt }}</span>
+            <button style="{{ hAddStyle }}" onclick="{{ onVehRestore }}">↺ Rétablir</button>
+            <button style="{{ prefixCancelStyle }}" onclick="{{ onVehRestoreHide }}">Masquer</button>
+          </div>
+        </sc-if>
         <div style="display:flex;flex-direction:column;gap:12px">
           <sc-for list="{{ vehicleRows }}" as="v" hint-placeholder-count="2">
             <div style="background:#fff;border:1px solid #e9edf4;border-radius:12px;padding:14px;box-shadow:0 1px 2px rgba(16,32,54,.04)">
@@ -3329,6 +3336,25 @@
   </sc-if>
 
   <!-- ============ HEURES — confirmation avant d'enlever une personne ============ -->
+  <!-- ============ VÉHICULE — confirmation de suppression ============ -->
+  <sc-if value="{{ vehDelOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ prefixOverlayStyle }}" onclick="{{ onVehDelCancel }}">
+      <div style="width:440px;max-width:92vw;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px" onclick="{{ ctxStop }}">
+        <div style="font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">Retirer un véhicule</div>
+        <div style="font-size:15px;font-weight:600;color:#0e1b2e;margin-top:6px">🗑 Retirer « {{ vehDelName }} » ?</div>
+        <div style="font-size:12.5px;color:#69788c;margin-top:10px;line-height:1.6">Cette fiche n'existe que dans le tableau de bord : <strong>aucun fichier Excel ne la porte</strong>. La retirer efface aussi ce qui lui est rattaché.</div>
+        <div style="margin-top:12px;padding:11px 14px;background:#f6f8fc;border:1px solid #e6ebf2;border-radius:10px">
+          <div style="font-size:12.5px;font-weight:600;color:#0e1b2e">Sera perdu avec la fiche : {{ vehDelDetail }}</div>
+          <div style="font-size:12px;color:#8291a5;margin-top:4px;line-height:1.5">Vous pourrez rétablir la fiche complète tant que vous ne rechargez pas la page.</div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px">
+          <button style="{{ prefixCancelStyle }}" onclick="{{ onVehDelCancel }}">Annuler</button>
+          <button style="{{ trashConfirmStyle }}" onclick="{{ onVehDelConfirm }}">Retirer</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
   <sc-if value="{{ hDelOpen }}" hint-placeholder-val="{{ false }}">
     <div style="{{ prefixOverlayStyle }}" onclick="{{ onHDelCancel }}">
       <div style="width:440px;max-width:92vw;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px" onclick="{{ ctxStop }}">
