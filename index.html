@@ -2049,6 +2049,9 @@
     <!-- ============ EMPLOYÉS ============ -->
     <sc-if value="{{ isEmployes }}" hint-placeholder-val="{{ false }}">
       <div style="padding:0 24px 24px" data-help="Un onglet par employé (issus de l'onglet Heures). Chaque mois travaillé génère une ligne : total des heures, salaire versé (rapproché depuis la banque) et fiche de paie en pièce jointe. Le salaire vient du rapprochement bancaire : dans l'onglet Banque, cliquez « Lier » sur le virement de salaire, puis « Rapprocher le salaire » en choisissant l'employé et le mois." data-help-title="Employés">
+        <sc-if value="{{ empHomonymesShow }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-bottom:14px;padding:11px 14px;border-radius:10px;border:1px solid #f2d9a8;background:#fdf6e7;color:#8a6212;font-size:12.5px;font-weight:600;line-height:1.55">⚠ {{ empHomonymesTxt }}</div>
+        </sc-if>
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
           <div style="flex:1 1 220px;background:#fff;border:1px solid #e9edf4;border-left:3px solid {{ accentColor }};border-radius:12px;padding:14px 16px;box-shadow:0 1px 2px rgba(16,32,54,.04)">
             <div style="font-size:11.5px;color:#69788c;font-weight:500">Heures cumulées (tous employés)</div>
@@ -3692,6 +3695,7 @@
           </div>
         </sc-if>
 
+        <sc-if value="{{ pwErrShow }}" hint-placeholder-val="{{ false }}"><div style="{{ pwErrStyle }}">{{ pwErrTxt }}</div></sc-if>
         <div style="display:flex;align-items:center;gap:10px;margin-top:16px">
           <button style="{{ prefixCancelStyle }}" onclick="{{ onPwBack }}">← Retour</button>
           <sc-if value="{{ pwShowSkip }}" hint-placeholder-val="{{ false }}"><button style="{{ prefixCancelStyle }}" onclick="{{ onPwSkip }}">Cette info n'existe pas</button></sc-if>

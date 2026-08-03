@@ -5750,6 +5750,14 @@ class Component {
   pwRestart() { const pw = this.state.paramWrite; if (!pw) return; this.setState({ paramWrite: { ...pw, cols: {}, firstDataIdx: null, phase: 'mapping', i: 0, editKey: null } }); }
   pwSaveWrite() {
     const pw = this.state.paramWrite; if (!pw) return;
+    // Le bouton était PEINT en gris (cursor:not-allowed) mais n'avait aucun attribut `disabled` :
+    // le clic passait. Après « ↺ Recommencer », l'assistant revient à la première question avec
+    // AUCUNE colonne pointée, et l'écriture s'activait quand même — la carte affichait « ✍ Écriture
+    // active » sur un réglage qui n'écrit nulle part. Une apparence de refus n'est pas un refus :
+    // on vérifie ici, et on dit pourquoi.
+    if (pw.firstDataIdx == null) { this._formErr('pwrite', 'Indiquez d’abord la première ligne de données : sans elle, le tableau de bord ne saurait pas où commencer à écrire.'); return; }
+    const nbCols = Object.keys(pw.cols || {}).filter(k => pw.cols[k] != null && pw.cols[k] >= 0).length;
+    if (!nbCols) { this._formErr('pwrite', 'Aucune colonne n’est pointée : le réglage n’écrirait rien. Parcourez les questions pour désigner au moins la colonne du numéro et celle du montant.'); return; }
     const cfg = { fileName: pw.fileName, sheetName: pw.sheetName, headerRowIdx: pw.headerIdx, firstDataIdx: pw.firstDataIdx != null ? pw.firstDataIdx : pw.headerIdx + 1, cols: { ...pw.cols }, enabled: true };
     this.saveWriteMap(pw.kind, cfg);
     this.setState({ paramWrite: null, msg: { kind: 'ok', text: `Écriture réglée pour « ${pw.label} » — feuille « ${pw.sheetName} », à partir de la ligne ${(pw.firstDataIdx != null ? pw.firstDataIdx : pw.headerIdx + 1) + 1}.` } });
@@ -6097,6 +6105,10 @@ class Component {
     out.pwHeadHint = clickHead ? 'Cliquez une colonne ci-dessus' : (clickRow ? 'Cliquez une ligne ci-dessous' : '');
     out.onPwBack = () => this.pwBack(); out.onPwSkip = () => this.pwSkipField(); out.onPwRestart = () => this.pwRestart();
     out.onPwSave = () => this.pwSaveWrite(); out.onPwClose = () => this.closeParamWrite();
+    // Refus affiché DANS la fenêtre de réglage — le bandeau global est derrière elle.
+    out.pwErrTxt = (this.state.formErr && this.state.formErr.zone === 'pwrite') ? this.state.formErr.text : '';
+    out.pwErrShow = !!out.pwErrTxt;
+    out.pwErrStyle = 'margin-top:12px;padding:10px 12px;border-radius:9px;border:1px solid #f0c8c8;background:#fdeaea;color:#b91c1c;font-size:12.5px;font-weight:600;line-height:1.5';
     out.pwPromptStyle = `display:flex;align-items:center;gap:14px;padding:13px 16px;border-radius:11px;background:${pw.phase === 'recap' ? this.hexToRgba(green, 0.1) : this.hexToRgba(accent, 0.09)};margin-bottom:14px`;
     out.pwBadgeStyle = `flex:0 0 auto;width:34px;height:34px;border-radius:9px;background:${pw.phase === 'recap' ? green : accent};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-family:'IBM Plex Mono',monospace`;
     out.pwSaveStyle = out.pwCanSave ? `padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:${green};border:none;cursor:pointer;font-family:inherit` : 'padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#9aa7b8;background:#eef1f6;border:none;font-family:inherit;cursor:not-allowed';
@@ -10588,7 +10600,11 @@ class Component {
       return { ...c, resteBase, bankPaid: bank.sum, bankCount: bank.count, bankDates: bank.dates, paidEff, reste, pct: c.total ? paidEff / c.total * 100 : 0 };
     });
     const capitalDu = sum(credits, c => c.reste), mensTot = sum(credits, c => c.mens);
-    const nd = credits.length ? this.pIso(credits.map(c => c.next).sort()[0]) : { d: 0, m: 0 };
+    // Une chaîne vide se trie AVANT toute date : un seul crédit sans échéance suffisait à faire
+    // afficher « NaN/NaN » (pIso('') renvoie des NaN, dd(NaN) écrit « NaN »). On ne retient que les
+    // dates réellement renseignées, et l'absence se dit « — » plutôt que par un mot cassé.
+    const echeances = credits.map(c => c.next).filter(v => !!String(v || '').trim()).sort();
+    const nd = echeances.length ? this.pIso(echeances[0]) : null;
 
     // ---- COMPTE RENDU (rapport imprimable de la période sélectionnée) ----
     const REPORT_SECTIONS = [
@@ -10641,7 +10657,7 @@ class Component {
     const reportBtnStyle = `padding:8px 13px;border-radius:9px;font-size:12.5px;font-weight:600;color:#fff;background:${accent};border:1px solid ${accent};cursor:pointer;font-family:inherit`;
     const showReport = isDash;
     const reportNotesOn = !!reportOptsCur.notes;
-    const creditSummary = [card('Capital restant dû', this.fmt(capitalDu), '#0e1b2e', `${credits.length} engagements`, accent), card('Mensualités', this.fmt(mensTot), '#0e1b2e', 'total par mois', accent), card('Prochaine échéance', credits.length ? `${this.dd(nd.d)}/${this.dd(nd.m)}` : '—', '#0e1b2e', 'crédit/assurance', amber)];
+    const creditSummary = [card('Capital restant dû', this.fmt(capitalDu), '#0e1b2e', `${credits.length} engagements`, accent), card('Mensualités', this.fmt(mensTot), '#0e1b2e', 'total par mois', accent), card('Prochaine échéance', nd ? `${this.dd(nd.d)}/${this.dd(nd.m)}` : '—', '#0e1b2e', 'crédit/assurance', amber)];
     const creditsEmpty = credits.length === 0;
     const credPayStyle = on => `padding:6px 11px;border-radius:8px;font-size:11.5px;font-weight:700;color:#fff;background:${on ? green : '#c5cede'};border:none;cursor:${on ? 'pointer' : 'default'};font-family:inherit;white-space:nowrap`;
     const credEditBtnStyle = `padding:6px 11px;border-radius:8px;font-size:11.5px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.3)};cursor:pointer;font-family:inherit`;
@@ -11722,14 +11738,25 @@ class Component {
     const EMP_MON = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
     const empMonLabel = ym => { const p = String(ym).split('-'); return p[1] ? `${EMP_MON[(+p[1]) - 1]} ${p[0]}` : ym; };
     // Bloc Employés : calculé uniquement quand l'onglet est ouvert (évite d'itérer roster × mois à chaque rendu ailleurs).
-    let empCards = [], empEmpty = true, empGrandHours = this.hFmtH(0), empGrandSalaire = this.fmt(0);
+    let empCards = [], empEmpty = true, empGrandHours = this.hFmtH(0), empGrandSalaire = this.fmt(0), empHomonymesTxt = '', empHomonymesShow = false;
     if (isEmployes) {
     const empHoursMap = this._memo('empHours', [this.state.heures], () => this.empHoursByMonth());
     const empDocsM = this.state.empDocs || {};
     // Salaires depuis la banque : chaque ligne rapprochée en « Salaire » alimente (employé, mois).
     const empSalaryMap = {}; // 'name|AAAA-MM' -> { montant, dates:[] }
     bankRaw.forEach(b => { const lk = this.bankVal(bankLinksM, b); if (lk && typeof lk === 'object' && lk.kind === 'Salaire' && lk.emp && lk.month) { const dk = String(lk.emp).trim() + '|' + lk.month; const e = empSalaryMap[dk] || (empSalaryMap[dk] = { montant: 0, dates: [] }); e.montant += Math.abs(b.amt || 0); e.dates.push(`${this.dd(b.d)}/${this.dd(b.m)}/${b.y}`); } });
-    const empRoster = (this.state.hRoster && this.state.hRoster.length) ? this.state.hRoster.filter((n, i, a) => n && a.indexOf(n) === i) : [];
+    // Le roster déduplique par NOM et toutes les clés du dossier employé sont « nom|mois » : deux
+    // personnes distinctes portant le même nom ne forment donc qu'UNE fiche, heures et salaires
+    // additionnés, et une fiche de paie déposée pour l'une apparaît sur la ligne de l'autre.
+    // Re-clé par identifiant serait une refonte du stockage ; on ne fusionne plus en silence : on
+    // le DIT, avec le nombre de personnes concernées, et l'onglet Heures reste la source exacte.
+    const empRosterBrut = (this.state.hRoster || []).map(n => String(n || '').trim()).filter(Boolean);
+    const empRoster = empRosterBrut.filter((n, i, a) => a.indexOf(n) === i);
+    const empHomonymes = empRoster.filter(n => empRosterBrut.filter(x => x === n).length > 1);
+    empHomonymesTxt = empHomonymes.length
+      ? `${empHomonymes.length === 1 ? 'Deux personnes portent' : 'Plusieurs personnes portent'} le même nom (${empHomonymes.join(', ')}) : leurs heures, leurs salaires et leurs fiches de paie sont regroupés sur une seule ligne ici. Distinguez les noms dans l'onglet Heures (ex. « Ahmed Benali (2) ») pour les séparer.`
+      : '';
+    empHomonymesShow = !!empHomonymesTxt;
     empCards = empRoster.map(name => {
       const nm = String(name).trim();
       const months = {};
@@ -11762,8 +11789,15 @@ class Component {
       return { name: nm, initials: (nm.split(/\s+/).map(w => w[0]).join('').slice(0, 2) || '·').toUpperCase(), rows, empty: rows.length === 0, totalHours: this.hFmtH(totH), totalSalaire: this.fmt(totS), monthsCount: `${rows.length} mois` };
     });
     empEmpty = empRoster.length === 0;
-    empGrandHours = this.hFmtH(Object.values(empHoursMap).reduce((s, v) => s + v, 0));
-    empGrandSalaire = this.fmt(Object.values(empSalaryMap).reduce((s, v) => s + (v.montant || 0), 0));
+    // Les compteurs du haut totalisaient TOUTES les clés connues, y compris celles de personnes
+    // retirées du roster ou renommées — donc des heures et des salaires que la page n'affiche
+    // nulle part. Une personne enlevée des Heures laissait 46h45 au compteur pour 18h00 de cartes.
+    // On ne totalise plus que ce qui est RÉELLEMENT affiché : un chiffre en haut doit être la
+    // somme de ce qu'on lit en dessous.
+    const empNomsAffiches = new Set(empRoster.map(n => String(n).trim()));
+    const cleAppartient = k => { const i = String(k).lastIndexOf('|'); return i > 0 && empNomsAffiches.has(String(k).slice(0, i).trim()); };
+    empGrandHours = this.hFmtH(Object.keys(empHoursMap).filter(cleAppartient).reduce((s, k) => s + (empHoursMap[k] || 0), 0));
+    empGrandSalaire = this.fmt(Object.keys(empSalaryMap).filter(cleAppartient).reduce((s, k) => s + ((empSalaryMap[k] || {}).montant || 0), 0));
     }
     const empDelDoc = this.state.empDelDoc;
     const empDelDocOpen = !!empDelDoc;
@@ -12545,7 +12579,7 @@ class Component {
       ...pwv,
       ctxStop,
       isDash, isOverview, isFactures, isCredits, isBordereaux, isStock, isVehicles, isTiers, isSettings, isBibliotheque, isEmployes, isAgenda,
-      empCards, empEmpty, empGrandHours, empGrandSalaire, empAddNote, empDelDocOpen, empDelDocName, onEmpDelDocConfirm, onEmpDelDocCancel, accentColor: accent,
+      empCards, empEmpty, empGrandHours, empGrandSalaire, empAddNote, empHomonymesShow, empHomonymesTxt, empDelDocOpen, empDelDocName, onEmpDelDocConfirm, onEmpDelDocCancel, accentColor: accent,
       agWeeks, agMonthLabel, agUpcoming, agEmptyUpcoming, agTodayCount, agSoonHome, agHasAny, agHomeReminderStyle, agLegend,
       onAgNew, onAgPrevMonth, onAgNextMonth, onAgTodayBtn, agAddBtnStyle, agNavBtnStyle, agTodayBtnStyle, AG_DOW,
       agEditOpen, agEditIsNew, agEditCanDelete, agEditValues, agCatOptions, agRecurOptions, onAgTitle, onAgDate, onAgTime, onAgCat, onAgRecur, onAgNote, onAgSave, onAgCancel, onAgDeleteFromEdit, agInputStyle, agSelStyle, agBtnPrimary, agBtnGhost,
