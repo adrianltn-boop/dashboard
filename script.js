@@ -402,7 +402,7 @@ class Component {
   static PAY_OVERRIDE_KEY = 'avPaymentOverrides';
   static MAP_KEY = 'avMappings';
   static AVWMAP_KEY = 'avWriteMap';
-  static APP_VERSION = 'version 30';
+  static APP_VERSION = 'version 31';
   // Mention de copyright affichée dans l'interface (Paramètres) : elle n'accorde aucun
   // droit — le droit d'auteur naît de la création — mais elle informe les tiers et date la
   // revendication. La preuve d'antériorité, elle, repose sur l'historique Git et le dépôt INPI.
@@ -5761,25 +5761,74 @@ class Component {
     const sheetName = fp.wb[fp.si].name;
     const edits = { ...(fp.edits || {}) };
     edits[sheetName] = { ...(edits[sheetName] || {}), [r + ':' + c]: val };
-    this.setState({ filePreview: { ...fp, wb, edits, dirty: true, closeWarn: false, saveState: this._previewHandle ? 'saving' : 'dirty' } });
-    clearTimeout(this._fpTimer);
-    this._fpTimer = setTimeout(() => this.saveFilePreview(), 600);
+    // PLUS D'ENREGISTREMENT AUTOMATIQUE. Une minuterie de 600 ms réécrivait le classeur sur le
+    // disque après chaque frappe : sans confirmation, sans copie datée, sans protection des
+    // formules et à partir d'un instantané périmé. L'écriture est désormais un GESTE EXPLICITE
+    // (bouton « 💾 Enregistrer dans le fichier »), comme toute autre écriture Excel du logiciel.
+    this.setState({ filePreview: { ...fp, wb, edits, dirty: true, closeWarn: false, saveState: 'dirty' } });
   }
+  // Écriture d'un aperçu de fichier — MÊME exigences que le reste de l'application :
+  // fichier inchangé depuis l'ouverture → sauvegarde datée → écriture sans écraser les formules
+  // → relecture de contrôle. Toute réserve est dite, jamais avalée.
   async saveFilePreview() {
     const fp = this.state.filePreview; if (!fp || !fp.dirty) return;
-    if (!this._previewHandle) return; // pas d'accès en écriture : la personne doit cliquer « Télécharger » (voir onFpDownload)
+    if (!this._previewHandle) { // lecture seule : la copie modifiée passe par « ⬇ Télécharger »
+      this.setState(s => s.filePreview ? { filePreview: { ...s.filePreview, saveState: 'error', saveError: "ce fichier est ouvert en lecture seule — utilisez « ⬇ Télécharger » pour garder une copie modifiée. Le fichier d'origine n'a pas été touché." } } : {});
+      return;
+    }
+    this.setState(s => s.filePreview ? { filePreview: { ...s.filePreview, saveState: 'saving', saveError: null } } : {});
     try {
-      // Patch en place : le fichier original est conservé octet pour octet (formules, styles,
-      // autres feuilles), seules les cellules éditées changent. En cas d'échec, RIEN n'est écrit —
-      // jamais de réécriture destructive de repli.
       if (!this._previewBlob) throw new Error('fichier original indisponible — rouvrez le fichier');
+      // 1) LE FICHIER A-T-IL BOUGÉ DEPUIS L'OUVERTURE ? L'aperçu travaille sur un instantané pris
+      // à l'ouverture. Excel reste souvent ouvert à côté : réécrire cet instantané effacerait tout
+      // ce qui a été saisi entre-temps. Même garde-fou que la relecture automatique (lastModified).
+      const meta = this._previewMeta || {};
+      let actuel = null;
+      try { actuel = await this._previewHandle.getFile(); } catch (e) { throw new Error("le fichier n'est plus accessible (déplacé, renommé ou autorisation expirée) — rouvrez-le"); }
+      if (actuel && meta.lastModified != null && (actuel.lastModified !== meta.lastModified || actuel.size !== meta.size)) {
+        throw new Error("le fichier a été enregistré ailleurs (Excel ?) depuis l'ouverture de cet aperçu. Écrire maintenant effacerait ce qui vient d'y être saisi. Fermez cet aperçu et rouvrez le fichier pour repartir de sa version à jour");
+      }
       const orig = await this._previewBlob.arrayBuffer();
-      const patched = await this.patchXlsxFile(orig, fp.edits || {});
+      // 2) SAUVEGARDE DATÉE OBLIGATOIRE — pas de sauvegarde, pas d'écriture (règle du logiciel).
+      const bak = await this._backupBeforeWrite(fp.name, orig);
+      if (!bak.ok) throw new Error(bak.reason);
+      // 3) écriture : les cellules porteuses d'une FORMULE ne sont jamais écrasées.
+      const patched = await this.patchXlsxFile(orig, fp.edits || {}, { refuseFormula: true });
+      const protegees = (patched._skippedFormulaRefs || []).slice(); // réf. Excel réelles (ex. « D4 »)
+      const colsProtegees = patched._skippedFormulaCols || {};       // { feuille : Set(index de colonne) }
       const w = await this._previewHandle.createWritable();
       await w.write(patched); await w.close();
-      this._previewBlob = patched; // les éditions suivantes repartent de la version écrite
+      // 4) RELECTURE DE CONTRÔLE : on relit le fichier écrit et on vérifie chaque cellule attendue.
+      let ecarts = [];
+      let relu = null;
+      try {
+        const f2 = await this._previewHandle.getFile();
+        this._previewMeta = { lastModified: f2.lastModified, size: f2.size };
+        this._previewBlob = f2; // les éditions suivantes repartent de la version RÉELLEMENT sur le disque
+        relu = await this.readWorkbook(await f2.arrayBuffer());
+      } catch (e) { relu = null; }
+      if (relu) {
+        Object.keys(fp.edits || {}).forEach(sn => {
+          const sh = relu.find(s => s && s.name === sn); if (!sh) { ecarts.push(`feuille « ${sn} » introuvable à la relecture`); return; }
+          Object.keys(fp.edits[sn]).forEach(rc => {
+            const ri = +rc.split(':')[0], ci = +rc.split(':')[1];
+            // Cellule volontairement conservée parce qu'elle porte une formule : rien à vérifier.
+            if (colsProtegees[sn] && colsProtegees[sn].has(ci)) return;
+            const ref = `${sn}!${this._colLetter(ci + 1)}${ri + 1}`;
+            const attendu = String(fp.edits[sn][rc] == null ? '' : fp.edits[sn][rc]).trim();
+            const lu = String(((sh.rows || [])[ri] || [])[ci] == null ? '' : ((sh.rows || [])[ri] || [])[ci]).trim();
+            const nA = Number(attendu.replace(',', '.')), nL = Number(lu.replace(',', '.'));
+            const memeNombre = attendu !== '' && lu !== '' && isFinite(nA) && isFinite(nL) && nA === nL;
+            if (lu !== attendu && !memeNombre) ecarts.push(`${ref} : « ${lu} » au lieu de « ${attendu} »`);
+          });
+        });
+      }
       const n = new Date();
-      this.setState(s => s.filePreview ? { filePreview: { ...s.filePreview, dirty: false, edits: {}, saveState: 'saved', savedAt: `${this.dd(n.getHours())}:${this.dd(n.getMinutes())}:${this.dd(n.getSeconds())}` } } : {});
+      const heure = `${this.dd(n.getHours())}:${this.dd(n.getMinutes())}:${this.dd(n.getSeconds())}`;
+      let reserve = '';
+      if (protegees.length) reserve += ` ⚠ ${protegees.length} cellule(s) contiennent une formule Excel et n'ont PAS été modifiées : ${protegees.slice(0, 6).join(', ')}${protegees.length > 6 ? '…' : ''}. Corrigez-les dans Excel.`;
+      if (ecarts.length) reserve += ` ⚠ Relecture : ${ecarts.slice(0, 4).join(' ; ')}${ecarts.length > 4 ? '…' : ''}.`;
+      this.setState(s => s.filePreview ? { filePreview: { ...s.filePreview, dirty: false, edits: {}, saveState: reserve ? 'savedWarn' : 'saved', savedAt: heure, saveNote: `sauvegarde : ${bak.bakName}.${reserve}` } } : {});
     } catch (e) {
       this.setState(s => s.filePreview ? { filePreview: { ...s.filePreview, saveState: 'error', saveError: ((e && e.message) || 'échec de la sauvegarde') + ' — le fichier n’a pas été modifié' } } : {});
     }
@@ -7393,8 +7442,18 @@ class Component {
     catch (e) { console.error('[rafraichirStock]', e); }
     finally { this._stockRecalcEnCours = false; this.setState({ stockRecalcul: false }); }
   }
-  async openHandleFile(handle, name) { try { const file = typeof handle.getFile === 'function' ? await handle.getFile() : handle; const nm = name || file.name || 'document';
-    this._previewHandle = (typeof handle.createWritable === 'function') ? handle : null;
+  // opts.ecriture : n'ouvrir en ÉCRITURE que si l'appelant le demande explicitement. Avant, tout
+  // fichier venu d'un dossier autorisé en lecture-écriture (bordereaux, bibliothèque, historique
+  // du stock) devenait modifiable — et l'aperçu réécrivait le classeur en silence. Les sources
+  // déclarées en lecture seule (bordereaux, crédits, banque, comptable) et la bibliothèque de
+  // documents restent désormais STRICTEMENT en lecture ; seul « Modifier à la source » (stock)
+  // ouvre en écriture, et son enregistrement passe par le circuit complet (saveFilePreview).
+  async openHandleFile(handle, name, opts) { try { const file = typeof handle.getFile === 'function' ? await handle.getFile() : handle; const nm = name || file.name || 'document';
+    const ecriture = !!(opts && opts.ecriture);
+    this._previewHandle = (ecriture && typeof handle.createWritable === 'function') ? handle : null;
+    // Empreinte du fichier à l'ouverture : sert à refuser d'écraser une version enregistrée
+    // entre-temps par Excel (cf. saveFilePreview).
+    this._previewMeta = { lastModified: file.lastModified, size: file.size };
     // Excel / CSV : TOUJOURS l'aperçu intégré — jamais de téléchargement, même si la lecture échoue
     if (/\.(xlsx|xlsm)$/i.test(nm)) {
       let wb = null; try { wb = await this.readWorkbook(await file.arrayBuffer()); } catch (e) { wb = null; }
@@ -7424,7 +7483,7 @@ class Component {
   async openStockSpecies(file, species) {
     const h = (this._stockHandles || {})[file];
     if (!h) { this.setState({ view: 'Paramètres', msg: { kind: 'error', text: 'Reconnectez le dossier Stock (en écriture) pour modifier les fichiers à la source.' } }); return; }
-    await this.openHandleFile(h, file);
+    await this.openHandleFile(h, file, { ecriture: true }); // « Modifier à la source » : seul circuit d'aperçu autorisé à écrire
     const fp = this.state.filePreview;
     if (fp && Array.isArray(fp.wb)) { const idx = fp.wb.findIndex(s => this._norm(s.name) === this._norm(species)); if (idx >= 0) this.setState({ filePreview: { ...fp, si: idx } }); }
   }
@@ -10190,6 +10249,7 @@ class Component {
     // en grille rend l'aperçu bien plus lisible et fidèle qu'un simple tableau).
     let fpRows = [];
     let fpColHeaders = [];
+    let fpTropLongues = 0;
     const fpRowNumStyle = 'flex:0 0 46px;width:46px;padding:7px 6px;border-right:1px solid #dde3ec;border-bottom:1px solid #eef1f6;font-size:11px;font-family:\'IBM Plex Mono\',monospace;color:#93a1b3;text-align:center;background:#f4f7fb;position:sticky;left:0;z-index:1';
     const fpCornerStyle = 'flex:0 0 46px;width:46px;padding:7px 6px;border-right:1px solid #dde3ec;border-bottom:1px solid #dde3ec;background:#eef2f7;position:sticky;left:0;z-index:3';
     if (fpSheet) {
@@ -10205,10 +10265,19 @@ class Component {
       const headBase = 'padding:7px 8px;border-right:1px solid #dde3ec;border-bottom:1px solid #dde3ec;font-size:11px;font-weight:600;font-family:\'IBM Plex Mono\',monospace;color:#69788c;text-align:center;background:#eef2f7;overflow:hidden';
       fpColHeaders = Array.from({ length: nc }, (_, i) => ({ name: colName(i), style: `flex:0 0 ${colW[i]}px;width:${colW[i]}px;` + headBase }));
       const cellBaseCommon = "padding:7px 10px;border-right:1px solid #eef1f6;font-size:12px;font-family:'IBM Plex Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#2a3a4e;";
+      // La valeur posée dans la case de saisie est la valeur COMPLÈTE de la cellule. Elle était
+      // auparavant tronquée à 200 caractères pour l'affichage, et c'est cette valeur tronquée qui
+      // repartait dans le fichier : une cellule de 300 caractères y perdait 100 caractères jamais
+      // vus par l'utilisatrice. Au-delà de 2 000 caractères, l'affichage reste raccourci mais la
+      // cellule N'EST PAS modifiable ici, et on le dit.
+      let cellulesTropLongues = 0;
       fpRows = rawR.map((r2, ri) => ({
         rowNum: ri + 1, rowNumStyle: fpRowNumStyle,
         cells: Array.from({ length: nc }, (_, i2) => {
-          let v = String((r2 || [])[i2] == null ? '' : (r2 || [])[i2]).slice(0, 200);
+          const brut = String((r2 || [])[i2] == null ? '' : (r2 || [])[i2]);
+          const tropLong = brut.length > 2000;
+          if (tropLong) cellulesTropLongues++;
+          let v = tropLong ? brut.slice(0, 200) + ' […]' : brut;
           const isNum = /^-?\d[\d\s.,]*$/.test(v.trim());
           // Décimale longue issue d'une formule (ex. « 73.0999999999 ») → arrondi d'affichage à 2
           const flt = v.match(/^-?\d+\.\d{5,}$/);
@@ -10216,38 +10285,41 @@ class Component {
           const wStyle = `flex:0 0 ${colW[i2]}px;width:${colW[i2]}px;`;
           const cellBase = wStyle + cellBaseCommon;
           const cellInputStyle = cellBase + 'background:transparent;border:none;outline:none;font-family:inherit;';
-          return { v, editable: fpEditable, style: cellBase + (isNum ? 'text-align:right;color:#0e1b2e;' : ''), inputStyle: cellInputStyle + (isNum ? 'text-align:right;' : ''), onEdit: e => this.editFpCell(ri, i2, e.target.value) };
+          return { v, editable: fpEditable && !tropLong, style: cellBase + (isNum ? 'text-align:right;color:#0e1b2e;' : '') + (tropLong ? 'background:#fdf6e7;' : ''), inputStyle: cellInputStyle + (isNum ? 'text-align:right;' : ''), onEdit: e => this.editFpCell(ri, i2, e.target.value) };
         }),
       }));
+      fpTropLongues = cellulesTropLongues;
     }
-    const fpMore = (fp && fp.unreadable) ? "Impossible d'afficher le contenu de ce fichier ici. Utilisez « ⬇ Télécharger » si vous voulez l'ouvrir dans Excel." : (fpSheet && (fpSheet.rows || []).length > 200 ? `… ${fpSheet.rows.length - 200} lignes supplémentaires (ouvrez le fichier dans Excel pour tout voir)` : '');
+    const fpMoreParts = [];
+    if (fp && fp.unreadable) fpMoreParts.push("Impossible d'afficher le contenu de ce fichier ici. Utilisez « ⬇ Télécharger » si vous voulez l'ouvrir dans Excel.");
+    else if (fpSheet && (fpSheet.rows || []).length > 200) fpMoreParts.push(`… ${fpSheet.rows.length - 200} lignes supplémentaires (ouvrez le fichier dans Excel pour tout voir)`);
+    if (fpTropLongues) fpMoreParts.push(`${fpTropLongues} cellule(s) de plus de 2 000 caractères sont affichées raccourcies (fond jaune) et ne sont pas modifiables ici — pour ne jamais amputer un texte que vous n'avez pas vu en entier. Modifiez-les dans Excel.`);
+    const fpMore = fpMoreParts.join(' · ');
     const fpInfo = fpSheet ? `${fpWb.length} feuille${fpWb.length > 1 ? 's' : ''} · ${(fpSheet.rows || []).length} ligne${(fpSheet.rows || []).length > 1 ? 's' : ''}` : '';
     const fpStatusMap = {
-      writable: { text: '✎ Modifiable — enregistrement automatique dans le fichier', color: '#69788c' },
-      readonly: { text: '👁 Lecture seule — modifiez puis téléchargez pour garder vos changements', color: '#9aa7b8' },
-      dirty: { text: '● Modifié — cliquez « ⬇ Télécharger » pour garder vos changements', color: '#b45309' },
-      saving: { text: '● Enregistrement en cours…', color: '#b45309' },
-      saved: { text: `✓ Enregistré dans le fichier${fp && fp.savedAt ? ' — ' + fp.savedAt : ''}`, color: '#1a7f37' },
-      error: { text: `⚠ Échec de l'enregistrement${fp && fp.saveError ? ' : ' + fp.saveError : ''} — téléchargez une copie`, color: '#b91c1c' },
+      writable: { text: "✎ Modifiable — vos changements ne partent dans le fichier QUE si vous cliquez « 💾 Enregistrer dans le fichier » (copie datée déposée avant écriture, formules protégées)", color: '#69788c' },
+      readonly: { text: '👁 Lecture seule — le fichier d’origine ne sera pas modifié ; « ⬇ Télécharger » pour garder une copie de vos changements', color: '#9aa7b8' },
+      dirty: { text: this._previewHandle ? '● Modifié — non enregistré. « 💾 Enregistrer dans le fichier » pour écrire, « ⬇ Télécharger » pour une copie.' : '● Modifié — cliquez « ⬇ Télécharger » pour garder vos changements (le fichier d’origine reste intact)', color: '#b45309' },
+      saving: { text: '● Enregistrement en cours (copie datée, écriture, relecture de contrôle)…', color: '#b45309' },
+      saved: { text: `✓ Enregistré dans le fichier et relu${fp && fp.savedAt ? ' — ' + fp.savedAt : ''}${fp && fp.saveNote ? ' — ' + fp.saveNote : ''}`, color: '#1a7f37' },
+      savedWarn: { text: `✓ Enregistré, AVEC RÉSERVE${fp && fp.savedAt ? ' — ' + fp.savedAt : ''} — ${fp && fp.saveNote ? fp.saveNote : ''}`, color: '#8a5a00' },
+      error: { text: `⚠ Enregistrement refusé${fp && fp.saveError ? ' : ' + fp.saveError : ''}`, color: '#b91c1c' },
     };
     let fpStatus = fp ? (fpStatusMap[fp.saveState] || null) : null;
-    if (fp && fp.closeWarn && fp.dirty) fpStatus = { text: '⚠ Modifications non téléchargées — « ⬇ Télécharger » pour les garder, ou ✕ à nouveau pour fermer sans les garder', color: '#b91c1c' };
-    const onFpClose = async () => {
+    if (fp && fp.closeWarn && fp.dirty) fpStatus = { text: '⚠ Modifications non enregistrées — « 💾 Enregistrer dans le fichier » ou « ⬇ Télécharger » pour les garder, ou « ← Retour » à nouveau pour fermer sans les garder', color: '#b91c1c' };
+    // Bouton d'enregistrement : présent UNIQUEMENT quand le fichier est réellement ouvert en
+    // écriture et qu'il y a quelque chose à écrire — jamais de bouton qui ne fait rien.
+    const fpCanSave = !!(fp && fp.dirty && this._previewHandle);
+    const fpSaveLabel = fp && fp.saveState === 'saving' ? 'Enregistrement…' : '💾 Enregistrer dans le fichier';
+    const fpSaveStyle = 'padding:8px 13px;border-radius:9px;font-size:12.5px;font-weight:700;color:#fff;background:#1a7f37;border:none;cursor:pointer;font-family:inherit;white-space:nowrap';
+    const onFpSave = () => this.saveFilePreview();
+    const onFpClose = () => {
       const fpNow = this.state.filePreview;
-      clearTimeout(this._fpTimer);
-      // Modification en attente + fichier ouvert en écriture : on enregistre AVANT de fermer
-      // (sinon fermer dans la fenêtre de 0,6 s perdait la saisie sans prévenir).
-      if (fpNow && fpNow.dirty && this._previewHandle) {
-        await this.saveFilePreview();
-        const after = this.state.filePreview;
-        if (after && after.saveState === 'error') return; // échec : on reste ouvert, l'erreur est affichée
-      } else if (fpNow && fpNow.dirty && !this._previewHandle && !fpNow.closeWarn) {
-        // Lecture seule : les modifications ne vivent que dans l'aperçu. Premier clic = avertissement,
-        // second clic = fermeture assumée.
-        this.setState({ filePreview: { ...fpNow, closeWarn: true } });
-        return;
-      }
-      this._previewBlob = null; this._previewHandle = null; this.setState({ filePreview: null });
+      // Plus d'enregistrement automatique à la fermeture : écrire dans un classeur comptable ne
+      // peut pas être l'effet de bord d'un clic sur « Retour ». Premier clic = avertissement,
+      // second clic = fermeture assumée.
+      if (fpNow && fpNow.dirty && !fpNow.closeWarn) { this.setState({ filePreview: { ...fpNow, closeWarn: true } }); return; }
+      this._previewBlob = null; this._previewHandle = null; this._previewMeta = null; this.setState({ filePreview: null });
     };
     const onFpDownload = async () => {
       let blob = this._previewBlob;
@@ -10255,8 +10327,11 @@ class Component {
       // éditées (formules, styles et autres feuilles conservés). Si le patch échoue,
       // repli sur une reconstruction simple (valeurs seules) plutôt que rien.
       const pendingEdits = fp && fp.edits && Object.keys(fp.edits).length ? fp.edits : null;
+      let protegees = [];
       if (blob && pendingEdits) {
-        try { blob = await this.patchXlsxFile(await blob.arrayBuffer(), pendingEdits); }
+        // refuseFormula : même règle que l'écriture dans le fichier — une formule n'est jamais
+        // remplacée par une valeur figée, même dans la copie téléchargée.
+        try { blob = await this.patchXlsxFile(await blob.arrayBuffer(), pendingEdits, { refuseFormula: true }); protegees = (blob._skippedFormulaRefs || []).slice(); }
         catch (e) { console.error('[téléchargement] patch impossible, copie valeurs seules :', e); try { blob = await this.buildXlsxBlob(fpWb); } catch (e2) {} }
       } else if (!blob && fpEditable && fpWb.length) {
         try { blob = await this.buildXlsxBlob(fpWb); } catch (e) {}
@@ -10265,7 +10340,11 @@ class Component {
       const base = (filePreviewName || 'document.xlsx').replace(/\.(xlsx|xlsm)$/i, '');
       const dl = (fp && fp.dirty) ? `${base} (modifié).xlsx` : (filePreviewName || 'document.xlsx');
       const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = dl; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
-      if (fp && fp.dirty && !this._previewHandle) this.setState(s => s.filePreview ? { filePreview: { ...s.filePreview, dirty: false, closeWarn: false, saveState: 'saved', savedAt: 'copie téléchargée' } } : {});
+      // Le téléchargement ne touche PAS le fichier d'origine : on le dit, et on signale les
+      // formules conservées telles quelles dans la copie.
+      const noteProt = protegees.length ? ` ⚠ ${protegees.length} cellule(s) en formule non remplacée(s) : ${protegees.slice(0, 6).join(', ')}${protegees.length > 6 ? '…' : ''}.` : '';
+      if (fp && fp.dirty && !this._previewHandle) this.setState(s => s.filePreview ? { filePreview: { ...s.filePreview, dirty: false, closeWarn: false, saveState: noteProt ? 'savedWarn' : 'saved', savedAt: 'copie téléchargée', saveNote: `copie « ${dl} » téléchargée — le fichier d'origine n'a pas été modifié.${noteProt}` } } : {});
+      else if (noteProt) this.setState(s => s.filePreview ? { filePreview: { ...s.filePreview, saveState: 'savedWarn', savedAt: 'copie téléchargée', saveNote: `copie « ${dl} » téléchargée.${noteProt}` } } : {});
     };
     const fpDownloadStyle = `padding:8px 13px;border-radius:9px;font-size:12.5px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.35)};cursor:pointer;font-family:inherit`;
 
@@ -11729,6 +11808,7 @@ class Component {
       resetBtnStyle: 'padding:9px 16px;border-radius:9px;font-size:13px;font-weight:600;color:#b91c1c;background:#fff;border:1px solid #ecc9c9;cursor:pointer;font-family:inherit;white-space:nowrap',
       opsStatusChips, achatStatusChips, grenkeStatusChips,
       filePreviewOpen, filePreviewName, fpTabs, fpRows, fpColHeaders, fpCornerStyle, fpBackStyle, fpMore, fpInfo, onFpClose, onFpDownload, fpDownloadStyle, fpEditable, fpStatus,
+      fpCanSave, fpSaveLabel, fpSaveStyle, onFpSave,
       isGrenkeView, grenkeTableRows, grenkeHeaders, grenkeEmpty, grenkePager,
       emptyStyle, emptyBtnStyle, onGoImport,
       facTabs, facIsList, facIsCredits, facIsReco, facCards, facFilters, facRows, facCount, facturesEmpty,

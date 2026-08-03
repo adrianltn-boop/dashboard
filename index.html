@@ -3389,6 +3389,9 @@
           <span style="font-size:15px;font-weight:600;color:#0e1b2e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📄 {{ filePreviewName }}</span>
           <span style="font-size:12px;color:#9aa7b8;white-space:nowrap">{{ fpInfo }}</span>
         </div>
+        <sc-if value="{{ fpCanSave }}" hint-placeholder-val="{{ false }}">
+          <button style="{{ fpSaveStyle }}" onclick="{{ onFpSave }}">{{ fpSaveLabel }}</button>
+        </sc-if>
         <button style="{{ fpDownloadStyle }}" onclick="{{ onFpDownload }}">Ouvrir dans Excel (télécharger)</button>
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 18px;background:#fff;border-bottom:1px solid #eef1f6">

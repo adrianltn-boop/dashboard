@@ -385,6 +385,44 @@
   sans confirmation et avec msg forcé à null dans chaque
   branche, donc sans le moindre signe que quelque chose
   s'était passé.
+- APERÇU DE FICHIER (Bibliothèque / Bordereaux / Stock) :
+  il RÉÉCRIVAIT le classeur sur le disque, tout seul, 600 ms
+  après chaque frappe. Quatre anomalies bloquantes pour un
+  seul circuit (editFpCell → saveFilePreview) :
+  (1) openHandleFile armait _previewHandle dès que le handle
+  exposait createWritable — donc TOUT fichier venu d'un
+  dossier autorisé en lecture-écriture devenait modifiable,
+  y compris les sources déclarées LECTURE SEULE (bordereaux)
+  et les documents de la bibliothèque. RÈGLE : l'écriture
+  est un OPT-IN explicite de l'appelant
+  (openHandleFile(h, nom, { ecriture: true })) ; seul
+  « Modifier à la source » (stock) le demande.
+  (2) patchXlsxFile était appelé SANS refuseFormula : une
+  cellule en formule (SUM…) était remplacée par une valeur
+  figée, en silence. Reproduit : D4 <f>SUM(D2:D3)</f> devenu
+  <v>120</v>. Désormais refuseFormula partout, y compris
+  dans la copie téléchargée (onFpDownload), et les cellules
+  protégées sont NOMMÉES à l'utilisatrice.
+  (3) saveFilePreview repartait de _previewBlob, l'instantané
+  pris à l'OUVERTURE, jamais revalidé : ce qu'Excel avait
+  enregistré entre-temps était effacé. On compare désormais
+  lastModified ET la taille avant d'écrire (même garde-fou
+  que relectureAuto) et on REFUSE en l'expliquant.
+  (4) fpRows tronquait la valeur à 200 caractères POUR
+  L'AFFICHAGE et alimentait la case de saisie avec cette
+  valeur tronquée : une cellule de 300 caractères en perdait
+  100 à la première frappe. La case porte maintenant la
+  valeur complète ; au-delà de 2 000 caractères la cellule
+  est affichée raccourcie et N'EST PAS modifiable, et on le
+  dit.
+  RÈGLE GÉNÉRALE : l'aperçu n'est plus une exception au
+  pipeline. Écrire est un GESTE (bouton « 💾 Enregistrer
+  dans le fichier »), et ce geste enchaîne fichier inchangé
+  → sauvegarde datée obligatoire (_backupBeforeWrite, pas de
+  sauvegarde = pas d'écriture) → écriture → RELECTURE de
+  contrôle cellule par cellule. Fermer l'aperçu n'écrit plus
+  rien (avant, « Retour » enregistrait) : premier clic =
+  avertissement, second = fermeture assumée.
 - Journal des modifications, photo de référence caduque :
   au-delà de 30 % des lignes de la source OU 50 lignes
   (le plus grand des deux), ne RIEN lister. Poste
