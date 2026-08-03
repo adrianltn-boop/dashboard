@@ -2759,12 +2759,13 @@
 
   <!-- ============ INVITE — préfixe des noms de fichiers (dossier Stock / Bordereaux) ============ -->
   <sc-if value="{{ prefixAskOpen }}" hint-placeholder-val="{{ false }}">
-    <div style="{{ prefixOverlayStyle }}" onclick="{{ onPrefixCancel }}">
+    <div style="{{ prefixOverlayStyle }}" onmousedown="{{ ovDown }}" onclick="{{ onPrefixFond }}">
       <div style="{{ prefixCardStyle }}" onclick="{{ ctxStop }}">
         <div style="font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">{{ prefixAskKindLabel }}</div>
         <div style="font-size:15px;font-weight:600;color:#0e1b2e;margin-top:5px">Quels fichiers lire dans « {{ prefixAskDir }} » ?</div>
         <div style="font-size:12.5px;color:#69788c;margin-top:8px;line-height:1.6">{{ prefixAskHelp }}</div>
         <div style="margin-top:14px"><input data-prefix-input style="{{ prefixInputStyle }}" value="{{ prefixAskValue }}" onchange="{{ onPrefixInput }}" onkeydown="{{ onPrefixKey }}" placeholder="ex. Stock week"></div>
+        <sc-if value="{{ prefixErrShow }}" hint-placeholder-val="{{ false }}"><div style="{{ modalErrStyle }}">{{ prefixErrTxt }}</div></sc-if>
         <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px">
           <button style="{{ prefixCancelStyle }}" onclick="{{ onPrefixCancel }}">Annuler</button>
           <button style="{{ prefixConfirmStyle }}" onclick="{{ onPrefixConfirm }}">Lire le dossier</button>
@@ -2775,12 +2776,13 @@
 
   <!-- ============ BANQUE — nouvelle catégorie ============ -->
   <sc-if value="{{ bankCatAskOpen }}" hint-placeholder-val="{{ false }}">
-    <div style="{{ prefixOverlayStyle }}" onclick="{{ onBankCatCancel }}">
+    <div style="{{ prefixOverlayStyle }}" onmousedown="{{ ovDown }}" onclick="{{ onBankCatFond }}">
       <div style="{{ prefixCardStyle }}" onclick="{{ ctxStop }}">
         <div style="font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">Catégories de dépenses</div>
         <div style="font-size:16px;font-weight:600;color:#0e1b2e;margin-top:6px">Nouvelle catégorie</div>
         <div style="font-size:12.5px;color:#69788c;margin-top:8px;line-height:1.6">Elle sera proposée dans la liste de toutes les lignes, et comptée dans le camembert des dépenses.</div>
         <div style="margin-top:14px"><input style="{{ prefixInputStyle }}" value="{{ bankCatAskValue }}" onchange="{{ onBankCatInput }}" onkeydown="{{ onBankCatKey }}" placeholder="Ex. Entretien bateau" autofocus="{{ true }}"></div>
+        <sc-if value="{{ bankCatErrShow }}" hint-placeholder-val="{{ false }}"><div style="{{ modalErrStyle }}">{{ bankCatErrTxt }}</div></sc-if>
         <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px">
           <button style="{{ prefixCancelStyle }}" onclick="{{ onBankCatCancel }}">Annuler</button>
           <button style="{{ bankCatCommitStyle }}" onclick="{{ onBankCatCommit }}">Ajouter</button>
@@ -2819,7 +2821,7 @@
 
   <!-- ============ RAPPROCHEMENT BANCAIRE — lier une ligne du relevé ============ -->
   <sc-if value="{{ bankLinkOpen }}" hint-placeholder-val="{{ false }}">
-    <div style="{{ prefixOverlayStyle }}" onclick="{{ onBankLinkCancel }}">
+    <div style="{{ prefixOverlayStyle }}" onmousedown="{{ ovDown }}" onclick="{{ onBankLinkFond }}">
       <div style="{{ grenkeLinkCardStyle }}" onclick="{{ ctxStop }}">
         <div style="font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">Rapprochement bancaire</div>
         <div style="font-size:15px;font-weight:600;color:#0e1b2e;margin-top:5px">{{ bankLinkTitle }}</div>
@@ -2889,7 +2891,7 @@
 
   <!-- ============ AGENDA — ajout / édition d'un événement ============ -->
   <sc-if value="{{ agEditOpen }}" hint-placeholder-val="{{ false }}">
-    <div style="{{ prefixOverlayStyle }}" onclick="{{ onAgCancel }}">
+    <div style="{{ prefixOverlayStyle }}" onmousedown="{{ ovDown }}" onclick="{{ onAgFond }}">
       <div style="width:460px;max-width:92vw;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px" onclick="{{ ctxStop }}">
         <div style="font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">Agenda</div>
         <div style="font-size:16px;font-weight:700;color:#0e1b2e;margin-top:4px">Événement</div>

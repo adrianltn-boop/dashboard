@@ -885,7 +885,14 @@ class Component {
     try {
       const rec = await this.idbGet('vehicle:' + vehicleId + ':' + att.id); const file = rec && rec.file;
       if (!file) { this.setState({ msg: { kind: 'error', text: `« ${att.name || 'Pièce jointe'} » est introuvable dans l'archive locale du navigateur : ajoutez-la de nouveau sur ce véhicule.` } }); return; }
-      const url = URL.createObjectURL(file); const w = window.open(url, '_blank', 'noopener');
+      // PIÈGE : window.open(..., 'noopener') renvoie TOUJOURS null, par spécification, même quand
+      // l'onglet s'ouvre parfaitement. Le test « if (!w) » était donc vrai à chaque fois : un
+      // message rouge « votre navigateur a bloqué la nouvelle fenêtre » s'affichait à CHAQUE
+      // ouverture RÉUSSIE. On ouvre sans la mention, ce qui rend la valeur de retour exploitable,
+      // puis on coupe le lien vers la fenêtre appelante à la main — même protection, sans le
+      // faux diagnostic.
+      const url = URL.createObjectURL(file); const w = window.open(url, '_blank');
+      if (w) { try { w.opener = null; } catch (e) {} }
       if (!w) this.setState({ msg: { kind: 'error', text: `« ${att.name || 'Pièce jointe'} » n'a pas pu s'ouvrir : votre navigateur a bloqué la nouvelle fenêtre. Autorisez les fenêtres pop-up pour ce site.` } });
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (e) {
@@ -933,7 +940,14 @@ class Component {
     try {
       const rec = await this.idbGet('payslip:' + this.empDocKey(name, month) + ':' + att.id); const file = rec && rec.file;
       if (!file) { this.setState({ msg: { kind: 'error', text: `« ${att.name || 'Pièce jointe'} » est introuvable dans l'archive locale du navigateur : ajoutez-la de nouveau depuis la ligne de ${name}.` } }); return; }
-      const url = URL.createObjectURL(file); const w = window.open(url, '_blank', 'noopener');
+      // PIÈGE : window.open(..., 'noopener') renvoie TOUJOURS null, par spécification, même quand
+      // l'onglet s'ouvre parfaitement. Le test « if (!w) » était donc vrai à chaque fois : un
+      // message rouge « votre navigateur a bloqué la nouvelle fenêtre » s'affichait à CHAQUE
+      // ouverture RÉUSSIE. On ouvre sans la mention, ce qui rend la valeur de retour exploitable,
+      // puis on coupe le lien vers la fenêtre appelante à la main — même protection, sans le
+      // faux diagnostic.
+      const url = URL.createObjectURL(file); const w = window.open(url, '_blank');
+      if (w) { try { w.opener = null; } catch (e) {} }
       if (!w) this.setState({ msg: { kind: 'error', text: `« ${att.name || 'Pièce jointe'} » n'a pas pu s'ouvrir : votre navigateur a bloqué la nouvelle fenêtre. Autorisez les fenêtres pop-up pour ce site.` } });
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch (e) {
@@ -9157,6 +9171,18 @@ class Component {
       try { fn(e); } finally { this._renderQuiet = false; }
       onDateBlur();
     };
+    // ---------- FOND D'UNE FENÊTRE DE SAISIE : LES DEUX MÊMES GARDE-FOUS, PARTOUT ----------
+    // La fiche crédit avait été corrigée ; les autres fenêtres de saisie, non. Elles se refermaient
+    // au moindre clic à côté, emportant ce qui venait d'être tapé — et pour la fenêtre de préfixe,
+    // le dossier tout juste choisi avec. Deux règles : le clic doit avoir COMMENCÉ sur le fond
+    // (une sélection de texte relâchée à côté produit un « click » dont la cible est le fond), et
+    // si quelque chose a été saisi on REFUSE en le disant DANS la fenêtre — le bandeau global est
+    // recouvert par la fenêtre elle-même, un refus écrit là n'est jamais lu.
+    const fondSaisie = (fermer, aDuTexte, zone) => e => {
+      if (e && (e.target !== e.currentTarget || this._ovDown !== e.currentTarget)) return;
+      if (aDuTexte && aDuTexte()) { this._formErr(zone, 'Votre saisie est conservée. Validez-la, ou utilisez « Annuler » pour l’abandonner.'); return; }
+      fermer();
+    };
     // Sortie d'un champ date : on remet l'affichage à jour (date prévue, filtres…). MAIS jamais
     // tout de suite — le « blur » a lieu à l'APPUI de la souris, et remplacer tout le DOM entre
     // l'appui et le relâchement détruirait le bouton visé : le clic serait purement perdu (le
@@ -9315,6 +9341,7 @@ class Component {
     const onAgNote = e => this.setAgendaField('note', e.target.value);
     const onAgSave = () => this.commitAgenda();
     const onAgCancel = () => this.closeAgendaEdit();
+    const onAgFond = fondSaisie(() => this.closeAgendaEdit(), () => { const a = this.state.agendaEdit || {}; return !!(String(a.titre || '').trim() || String(a.lieu || '').trim() || String(a.note || '').trim()); }, 'agenda');
     const onAgDeleteFromEdit = () => { if (ae && ae.id) this.askDeleteAgenda(ae.id); };
     const onAgNew = () => this.openAgendaNew();
     const onAgPrevMonth = () => this.agendaShiftMonth(-1);
@@ -10348,6 +10375,14 @@ class Component {
     const onAchatDate = dateH(e => this.setAchatField('date', e.target.value));
     const onAchatAddLigne = () => this.addAchatLigne();
     const onAchatCommit = () => this.commitAchatSaisie();
+    // Refus affiché DANS la fenêtre de saisie concernée : le bandeau global est recouvert par la
+    // fenêtre elle-même, un message écrit là n'est jamais lu (règle _formErr, zone par zone).
+    const errZone = z => (this.state.formErr && this.state.formErr.zone === z) ? this.state.formErr.text : '';
+    const modalErrStyle = 'margin-top:12px;padding:10px 12px;border-radius:9px;border:1px solid #f0c8c8;background:#fdeaea;color:#b91c1c;font-size:12.5px;font-weight:600;line-height:1.5';
+    const prefixErrTxt = errZone('prefixe'), prefixErrShow = !!prefixErrTxt;
+    const bankCatErrTxt = errZone('bankcat'), bankCatErrShow = !!bankCatErrTxt;
+    const bankLinkErrTxt = errZone('banklink'), bankLinkErrShow = !!bankLinkErrTxt;
+    const agErrTxt = errZone('agenda'), agErrShow = !!agErrTxt;
     const achatErrShow = !!(this.state.formErr && this.state.formErr.zone === 'achat');
     const achatErrText = achatErrShow ? this.state.formErr.text : '';
     const achatErrStyle = 'margin:0 0 10px;padding:9px 12px;border-radius:9px;border:1px solid #f0c8c8;background:#fdeaea;color:#b91c1c;font-size:12.5px;font-weight:600;line-height:1.45;';
@@ -12057,6 +12092,7 @@ class Component {
     const bankCatAskOpen = !!this.state.bankCatAsk;
     const onBankCatInput = champH(e => this.setState({ bankCatAskValue: e.target.value }));
     const onBankCatCancel = () => this.setState({ bankCatAsk: null, bankCatAskValue: '' });
+    const onBankCatFond = fondSaisie(() => this.setState({ bankCatAsk: null, bankCatAskValue: '' }), () => !!String(this.state.bankCatAskValue || '').trim(), 'bankcat');
     const onBankCatCommit = () => this.commitBankCat();
     const onBankCatKey = e => { if (e.key === 'Enter') this.commitBankCat(); else if (e.key === 'Escape') onBankCatCancel(); };
     const bankCatCommitStyle = `padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:${(this.state.bankCatAskValue || '').trim() ? accent : '#c5cede'};border:none;cursor:pointer;font-family:inherit`;
@@ -12066,6 +12102,7 @@ class Component {
     const bankLinkTitle = bankLinkS ? `${bankLinkS.label} — ${this.fmt(bankLinkS.amt)}` : '';
     const bankLinkHelp = bankLinkS ? `Ligne du ${bankLinkS.date}. Choisissez l'écriture interne (achat, vente, facture, crédit) qui correspond à ce mouvement — les montants identiques sont en tête de liste.` : '';
     const onBankLinkCancel = () => this.setState({ bankLink: null, bankLinkQuery: '' });
+    const onBankLinkFond = fondSaisie(() => this.setState({ bankLink: null, bankLinkQuery: '' }), () => !!String(this.state.bankLinkQuery || '').trim(), 'banklink');
     const onBankLinkQuery = champH(e => this.setState({ bankLinkQuery: e.target.value }));
     const bankLinkManual = bankLinkS ? bankLinksM[bankLinkS.key] : null;
     const bankLinkHasCurrent = !!(bankLinkManual && bankLinkManual !== 'none');
@@ -12374,6 +12411,7 @@ class Component {
     const onPrefixInput = champH(e => this.setState({ prefixAskValue: e.target.value }));
     const onPrefixConfirm = () => { const inp = document.querySelector('[data-prefix-input]'); this.confirmPrefix(inp ? inp.value : undefined); };
     const onPrefixCancel = () => this.cancelPrefix();
+    const onPrefixFond = fondSaisie(() => this.cancelPrefix(), () => !!String(this.state.prefixAskValue || '').trim(), 'prefixe');
     const onPrefixKey = e => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target ? e.target.value : ''; this.setState({ prefixAskValue: v }); this.confirmPrefix(v); } else if (e.key === 'Escape') this.cancelPrefix(); };
     const prefixInputStyle = 'width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #dde3ec;border-radius:9px;font-size:13px;font-family:\'IBM Plex Mono\',monospace;color:#0e1b2e';
     const prefixConfirmStyle = `padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit`;
@@ -12585,6 +12623,8 @@ class Component {
       onGrkNum, onGrkCust, onGrkTtc, onGrkP1, onGrkP2, onGrkCharge, onGrkCom, onGrkCommit, onGrkReset,
       gmDelOpen, gmDelName, onGrkDelConfirm, onGrkDelCancel,
       credPayAskOpen, credPayAskLabel, credPayAskMens, credPayAskHasBank, credPayAskMsg, onCredPayConfirm, onCredPayCancel,
+      onPrefixFond, onBankCatFond, onBankLinkFond, onAgFond,
+      modalErrStyle, prefixErrShow, prefixErrTxt, bankCatErrShow, bankCatErrTxt, bankLinkErrShow, bankLinkErrTxt, agErrShow, agErrTxt,
       onCredNew, credAddStyle, credEditOpen, credIsEdit, credEditTitle, credVals, credTypeIsCredit, credTypeCreditStyle, credTypeAssurStyle, onCredLabel, onCredEnt, onCredTotal, onCredPaid, onCredMens, onCredNext, onCredTypeCredit, onCredTypeAssur, onCredCommit, onCredCancel, onCredDelete, onCredBackdrop, ovDown, onDateBlur, credCommitStyle, credDeleteStyle, credInputStyle, credLabelStyle,
       recoStats, recoRows, recoNote, recoKeyTabs, recoKeyHint, recoEmpty,
       blCards, blRows, blCount, blStatus: this.state.blStatus, blSelectStyle, onBlStatus, modelBtnStyle, onOpenModel, blEmpty,
