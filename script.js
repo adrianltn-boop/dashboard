@@ -2109,10 +2109,75 @@ class Component {
   hSetName(key, empId, name) {
     const weeks = { ...(this.state.heures || {}) };
     const wk = this.hWeekObj(weeks, key);
+    const avant = (wk.employees.find(e => e.id === empId) || {}).name || '';
     wk.employees = wk.employees.map(e => e.id === empId ? { ...e, name } : e);
     weeks[key] = wk;
     const roster = wk.employees.map(e => e.name);
     this.setState({ heures: weeks, hRoster: roster }); this.hSaveHeures(weeks, roster);
+    // Le champ est en `oninput` : il émet à CHAQUE frappe. Propager le dossier lettre par lettre
+    // écrirait le stockage local une fois par touche et ferait clignoter le message. On retient
+    // donc le nom d'AVANT la première frappe de la saisie en cours, et on ne déplace qu'une fois
+    // la frappe terminée.
+    if (this._renomTimer) clearTimeout(this._renomTimer);
+    else this._renomAvant = avant;
+    this._renomTimer = setTimeout(() => {
+      this._renomTimer = null;
+      const depuis = this._renomAvant; this._renomAvant = null;
+      const wkNow = (this.state.heures || {})[key];
+      const emp = wkNow && (wkNow.employees || []).find(e => e.id === empId);
+      if (emp) this._propagerRenommageEmploye(depuis, emp.name);
+    }, 900);
+  }
+  // ---------- CORRIGER UN NOM NE DOIT RIEN DÉTACHER ----------
+  // La vue Employés indexe TOUT par le nom : fiches de paie (avEmpDocs, clé « nom|AAAA-MM »),
+  // pièces jointes dans IndexedDB, et salaires rapprochés (bankLinks, champ `emp`). Corriger une
+  // faute de frappe — « Dupont » → « Dupond » — laissait donc le dossier complet en place mais
+  // plus aucun bouton de l'interface ne l'atteignait : ni ouvrir, ni supprimer le bulletin de paie.
+  // Même famille que le défaut déjà consigné sur hEmpArchiveData (recherche par NOM alors que la
+  // suppression opère par ID) ; le correctif n'avait pas été étendu ici.
+  // On propage le renommage à toutes les cartes indexées par le nom, et on le DIT : un dossier de
+  // paie qui se déplace tout seul doit être annoncé, pas deviné.
+  _propagerRenommageEmploye(avant, apres) {
+    const a = String(avant || '').trim(), b = String(apres || '').trim();
+    if (!a || !b || a === b) return; // création ou nom vidé : rien à déplacer
+    let docs = 0, salaires = 0;
+    // 1. fiches de paie
+    const m = { ...(this.state.empDocs || {}) }; let bouge = false;
+    Object.keys(m).forEach(k => {
+      const i = k.lastIndexOf('|'); if (i < 0) return;
+      if (k.slice(0, i).trim() !== a) return;
+      const nk = this.empDocKey(b, k.slice(i + 1));
+      // La cible existe déjà (deux personnes fusionnées par le renommage) : on CONCATÈNE plutôt
+      // que d'écraser — perdre un bulletin de paie parce qu'un homonyme en avait un serait pire.
+      const liste = Array.isArray(m[k]) ? m[k] : [];
+      m[nk] = (Array.isArray(m[nk]) ? m[nk] : []).concat(liste);
+      delete m[k]; docs += liste.length; bouge = true;
+      // Le PDF lui-même est rangé dans l'archive du navigateur sous « payslip:nom|mois:id ».
+      // Déplacer seulement la fiche laisserait le bulletin illisible : la ligne s'afficherait,
+      // le clic ne trouverait rien. On déplace le contenu avec elle.
+      const ancienDk = k;
+      liste.forEach(att => {
+        if (!att || !att.id) return;
+        this.idbGet('payslip:' + ancienDk + ':' + att.id)
+          .then(rec => { if (rec && rec.file) return this.idbSet('payslip:' + nk + ':' + att.id, { file: rec.file }).then(() => this.idbDel('payslip:' + ancienDk + ':' + att.id)); })
+          .catch(() => { /* archive illisible : la fiche reste listée, le clic le dira */ });
+      });
+    });
+    if (bouge) this.saveEmpDocs(m);
+    // 2. salaires rapprochés depuis la banque
+    const bl = { ...(this.state.bankLinks || {}) }; let bougeB = false;
+    Object.keys(bl).forEach(k => {
+      const v = bl[k];
+      if (!v || typeof v !== 'object' || v.kind !== 'Salaire' || String(v.emp || '').trim() !== a) return;
+      bl[k] = { ...v, emp: b, partner: String(v.partner || '').replace(a, b) }; salaires++; bougeB = true;
+    });
+    if (bougeB) { this.setState({ bankLinks: bl }); this.saveJSON(Component.BLINK_KEY, bl); }
+    if (docs || salaires) {
+      const bouts = [];
+      if (docs) bouts.push(`${docs} fiche${docs > 1 ? 's' : ''} de paie`);
+      if (salaires) bouts.push(`${salaires} salaire${salaires > 1 ? 's' : ''} rapproché${salaires > 1 ? 's' : ''}`);
+      this.setState({ msg: { kind: 'ok', text: `« ${a} » renommé « ${b} » : ${bouts.join(' et ')} suivent la personne.` } });
+    }
   }
   hAddEmployee(key) {
     const weeks = { ...(this.state.heures || {}) };
@@ -8749,7 +8814,25 @@ class Component {
   _credits() { return this.state.credits ? this.state.credits.map(c => ({ ...c })) : (this.state.demoMode !== false ? Component.CREDITS.map(c => ({ ...c })) : []); }
   saveCredits(arr) { this.setState({ credits: arr }); this.saveJSON(Component.CRED_KEY, { name: 'Saisie manuelle', rows: arr }); }
   addMonthIso(iso) { const o = this.pIso(iso); if (!o || !o.y) return iso; let y = o.y, m = o.m + 1; if (m > 12) { m = 1; y++; } const dim = new Date(Date.UTC(y, m, 0)).getUTCDate(); const d = Math.min(o.d || 1, dim); return `${y}-${this.dd(m)}-${this.dd(d)}`; }
-  payCredit(i) { const arr = this._credits(); const c = arr[i]; if (!c) return; const paid = Math.min(c.total || 0, Math.round(((c.paid || 0) + (c.mens || 0)) * 100) / 100); arr[i] = { ...c, paid, next: this.addMonthIso(c.next) }; this.saveCredits(arr); }
+  // ---------- RÉGLER UNE ÉCHÉANCE DOIT SE VOIR ----------
+  // L'affichage se fie à `rest` (capital restant dû, colonne du fichier) dès qu'il existe, et
+  // mapCredits le renseigne TOUJOURS à l'import. Ne mettre à jour que `paid` — ce que faisait cette
+  // fonction — ne changeait donc strictement rien à l'écran sur un crédit importé : remboursé,
+  // barre de progression, restant et capital restant dû ne bougeaient pas d'un centime, alors que
+  // l'échéance suivante, elle, avançait d'un mois. L'état enregistré et l'écran divergeaient en
+  // silence. Les DEUX chiffres avancent désormais ensemble.
+  // On DÉCRÉMENTE `rest` de la mensualité au lieu de le recalculer par « total − payé » : le capital
+  // restant dû du fichier n'est pas toujours l'exact complément du remboursé (intérêts, frais), et
+  // le recalculer écraserait le chiffre de la banque par une approximation.
+  payCredit(i) {
+    const arr = this._credits(); const c = arr[i]; if (!c) return;
+    const mens = +c.mens || 0;
+    const paid = Math.min(c.total || 0, Math.round(((c.paid || 0) + mens) * 100) / 100);
+    const restAvant = (c.rest != null ? +c.rest : (+c.total || 0) - (+c.paid || 0));
+    const rest = Math.max(0, Math.round((restAvant - mens) * 100) / 100);
+    arr[i] = { ...c, paid, rest, next: this.addMonthIso(c.next) };
+    this.saveCredits(arr);
+  }
   openCredNew() { this.setState({ credEdit: { i: -1, label: '', ent: '', type: 'Crédit', total: '', paid: '', mens: '', next: '' } }); }
   openCredEdit(i) { const c = this._credits()[i]; if (!c) return; this.setState({ credEdit: { i, label: c.label || '', ent: c.ent || '', type: c.type || 'Crédit', total: c.total != null ? String(c.total) : '', paid: c.paid != null ? String(c.paid) : '', mens: c.mens != null ? String(c.mens) : '', next: c.next || '' } }); }
   closeCred() { this.setState({ credEdit: null }); }
@@ -8766,7 +8849,11 @@ class Component {
     const e = this.state.credEdit; if (!e) return;
     const label = (e.label || '').trim();
     if (!label) { this.setState({ msg: { kind: 'error', text: 'Indiquez au moins un intitulé (ex. « Crédit camion réfrigéré ») avant d\u2019enregistrer.' } }); return; }
+    // Même raison qu'à payCredit : sur un crédit importé, `rest` prime à l'affichage. Corriger
+    // « Déjà remboursé » sans corriger le restant laissait l'ancien chiffre à l'écran — 9 000 €
+    // saisis, 4 000 € affichés. Ici l'utilisatrice DÉCLARE le remboursé : le restant en découle.
     const rec = { label, ent: (e.ent || '').trim(), type: e.type === 'Assurance' ? 'Assurance' : 'Crédit', total: this._vNum(e.total), paid: this._vNum(e.paid), mens: this._vNum(e.mens), next: e.next || '' };
+    rec.rest = Math.max(0, Math.round(((rec.total || 0) - (rec.paid || 0)) * 100) / 100);
     const arr = this._credits(); if (e.i >= 0) arr[e.i] = { ...arr[e.i], ...rec }; else arr.push(rec);
     this.saveCredits(arr); this.setState({ credEdit: null, msg: { kind: 'success', text: `« ${label} » enregistré : mensualité ${this.fmt(rec.mens)}${rec.next ? ', prochaine échéance le ' + rec.next.split('-').reverse().join('/') : ''}.` } });
   }
