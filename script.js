@@ -2814,6 +2814,16 @@ class Component {
         const ct = dec.decode(files[ctName]).replace(/<Override[^>]*calcChain\.xml[^>]*\/>/g, '');
         files[ctName] = enc.encode(ct);
       }
+      // TROISIÈME ligne, oubliée ici alors que _devalueFormulas la fait : la RELATION vers
+      // calcChain, dans xl/_rels/workbook.xml.rels. Supprimer la partie et son Override en laissant
+      // la relation produit un paquet OPC qui désigne un fichier absent — c'est le « nous avons
+      // trouvé un problème dans le contenu » d'Excel, signalé par Faustine et jamais expliqué
+      // jusqu'ici. LibreOffice et openpyxl, plus tolérants, n'y voyaient rien.
+      const relsName = 'xl/_rels/workbook.xml.rels';
+      if (files[relsName]) {
+        const rl = dec.decode(files[relsName]).replace(/<Relationship[^>]*calcChain\.xml[^>]*\/>/g, '');
+        files[relsName] = enc.encode(rl);
+      }
     }
     // ---------- RECALCUL À L'OUVERTURE : LE DEMANDER, PAS LE FORCER EN VIDANT LES CACHES ----------
     // Une cellule en formule porte DEUX choses : la formule (<f>) et la dernière valeur calculée
@@ -3378,10 +3388,27 @@ class Component {
   // Copie de sauvegarde datée des octets d'origine AVANT toute écriture.
   async _backupBeforeWrite(name, buf) {
     const n = new Date();
-    const stamp = `${n.getFullYear()}-${this.dd(n.getMonth() + 1)}-${this.dd(n.getDate())} ${this.dd(n.getHours())}h${this.dd(n.getMinutes())}`;
+    // ---------- UNE SAUVEGARDE NE DOIT JAMAIS EN ÉCRASER UNE AUTRE ----------
+    // L'horodatage s'arrêtait à la MINUTE. Or un seul achat pêcheur enchaîne trois à quatre
+    // écritures en cinq à dix secondes (pêcheur, chèque, stock) : les sauvegardes successives
+    // portaient le même nom et getFileHandle(name, {create:true}) réouvrait le même fichier. À la
+    // fin d'un achat, le dossier ne contenait plus qu'UNE copie — celle d'APRÈS les deux premières
+    // écritures. Revenir à l'état d'avant l'achat était devenu impossible, alors que c'est la
+    // promesse explicite de la règle « pas de sauvegarde, pas d'écriture ».
+    // Secondes dans le nom, plus un suffixe en cas de collision : le filet doit tenir même si deux
+    // écritures tombent dans la même seconde.
+    const stamp = `${n.getFullYear()}-${this.dd(n.getMonth() + 1)}-${this.dd(n.getDate())} ${this.dd(n.getHours())}h${this.dd(n.getMinutes())}m${this.dd(n.getSeconds())}`;
     const base = String(name || 'fichier').replace(/\.xlsx?$/i, '');
-    const bakName = `${base} — sauvegarde ${stamp}.xlsx`;
+    let bakName = `${base} — sauvegarde ${stamp}.xlsx`;
     const bytes = new Uint8Array(buf.slice(0));
+    if (this._backupDir && this._backupDir.getFileHandle) {
+      for (let i = 2; i <= 50; i++) {
+        let existe = false;
+        try { await this._backupDir.getFileHandle(bakName); existe = true; } catch (e) { existe = false; } // absent = ce qu'on veut
+        if (!existe) break;
+        bakName = `${base} — sauvegarde ${stamp}-${i}.xlsx`;
+      }
+    }
     if (this._backupDir && this._backupDir.getFileHandle) {
       try {
         // Autorisation parfois expirée depuis le dernier démarrage : on la redemande avant d'échouer.
@@ -4429,9 +4456,21 @@ class Component {
       let chequeSheetName = null;
       if (mode === 'cheque') {
         if (chequeCol != null && chequeCol >= 0) {
-          editsBySheet[sheetName][loc.previewIdx + ':' + chequeCol] = pd.chequeNum;
-          verifyTargets.push({ sheetName, rowIdx: loc.previewIdx, col: chequeCol, val: pd.chequeNum });
-          preview.push({ label: 'N° de chèque', col: colName(chequeCol), value: String(pd.chequeNum) });
+          // La colonne « Chèque » de la facture ACCUMULE les numéros, séparés par « / » — c'est
+          // ainsi que requestChq2Preview l'écrit et que la relecture la lit. Ici on l'ÉCRASAIT :
+          // régler le solde avec un second chèque effaçait la référence du premier, qui devenait
+          // orphelin (plus aucun bouton « Encaisser » ni « Annuler » ne le voyait, et il sortait
+          // du total encaissé) alors que sa ligne existait toujours dans le chéquier.
+          const dejaChq = String((row[chequeCol] == null ? '' : row[chequeCol])).trim();
+          const dejaNums = dejaChq ? dejaChq.split('/').map(x => x.trim()).filter(x => /^\d+$/.test(x)) : [];
+          const valChq = (dejaChq && !dejaNums.includes(String(pd.chequeNum).trim())) ? `${dejaChq} / ${pd.chequeNum}` : (dejaChq || String(pd.chequeNum));
+          editsBySheet[sheetName][loc.previewIdx + ':' + chequeCol] = valChq;
+          verifyTargets.push({ sheetName, rowIdx: loc.previewIdx, col: chequeCol, val: valChq });
+          preview.push({ label: 'N° de chèque', col: colName(chequeCol), value: valChq });
+          // Numérotation « Chèque X/Y » cohérente avec le nombre réel de chèques de la facture.
+          const dejaLa = dejaNums.indexOf(String(pd.chequeNum).trim());
+          pd._chqRang = dejaLa >= 0 ? dejaLa + 1 : dejaNums.length + 1;
+          pd._chqTotal = dejaLa >= 0 ? dejaNums.length : dejaNums.length + 1;
         }
         chequeSheetName = this._chequeSheetForNumber(pd.chequeNum, wb, pd.chequier);
         if (!chequeSheetName) { err(`Aucune feuille de chéquier ne correspond au n° ${pd.chequeNum}${pd.chequier ? ` (carnet « ${pd.chequier} »)` : ''}. Vérifiez le numéro, ou créez l'onglet du carnet dans le fichier.`); return; }
@@ -4449,7 +4488,9 @@ class Component {
           return;
         }
         const desc = pd.pecheur || '';
-        const obs = this._chequeObsText(1, 1, pd.ref || '');
+        // « Chèque 1/1 » était codé en dur : deux chèques d'une même facture se déclaraient tous
+        // deux « 1/1 ». Le rang vient du nombre de numéros déjà portés par la facture.
+        const obs = this._chequeObsText(pd._chqRang || 1, pd._chqTotal || 1, pd.ref || '');
         editsBySheet[chequeSheetName] = editsBySheet[chequeSheetName] || {};
         if (cLoc.dateCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.dateCol] = serial; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.dateCol, val: serial }); preview.push({ label: 'Chéquier — Date', col: colName(cLoc.dateCol), value: this._isoToFr(this._payTodayIso()) }); }
         if (cLoc.descCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.descCol] = desc; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.descCol, val: desc }); preview.push({ label: 'Chéquier — Description', col: colName(cLoc.descCol), value: desc }); }
@@ -9156,7 +9197,20 @@ class Component {
       const isoYMD = iso => { const p = String(iso || '').split('-'); return { y: +p[0] || Component.TODAY.y, m: +p[1] || Component.TODAY.m, d: +p[2] || Component.TODAY.d }; };
       const ptById = {}; (this.state.payTrack || []).forEach(p => { ptById[String(p.id)] = p; });
       const vSai = (this.state.ventesSaisie || []).map(v => { const o = isoYMD(v.date); const pt = ptById[String(v.id)]; const regle = pt ? (+pt.regle || 0) : 0; const ttc = +v.ttc || 0; const et = pt ? String(pt.etat || '') : ''; const isPaid = /pay|sold/i.test(et) || regle >= ttc - 0.5; const isLate = !isPaid && /retard/i.test(et); return { y: o.y, m: o.m, d: o.d, ref: v.num || String(v.id || ''), type: 'Vente', partner: v.client, cat: 'Ventes', amt: ttc, ht: +v.ht || ttc, paid: regle, reste: Math.max(0, ttc - regle), status: isPaid ? 'Payée' : isLate ? 'Retard' : 'Non payée', manual: true }; });
-      const aSai = (this.state.achatsSaisie || []).map(a => { const o = isoYMD(a.date); const total = +a.total || 0; const cat = (a.lignes && a.lignes[0] && a.lignes[0].espece) ? a.lignes[0].espece : 'Pêche'; return { y: o.y, m: o.m, d: o.d, ref: a.num || ('AP-' + a.id), type: 'Achat', partner: a.pecheur, cat, amt: -total, paid: total, reste: 0, status: 'Payé', manual: true }; });
+      // Une saisie locale d'achat était affichée « Payé · solde 0 » EN DUR, quel qu'ait été le
+      // paiement réel. Sur un achat enregistré SANS règlement immédiat, l'écran de paiement
+      // affirmait donc qu'il n'y avait rien à payer : le formulaire ne se verrouillait jamais, le
+      // montant du chèque n'était pas pré-rempli au solde, et le chemin correct (ajouter un 2e
+      // moyen de paiement) devenait inaccessible — ne restait que celui qui écrase le chèque
+      // précédent. Ce que la saisie a réellement écrit est déjà connu : achatWriteValues distingue
+      // le règlement immédiat du reste. On lit la MÊME chose ici, pour que l'écran et le fichier
+      // disent la même phrase (même règle que les ETAT_* du suivi de paiement).
+      const aSai = (this.state.achatsSaisie || []).map(a => {
+        const o = isoYMD(a.date); const total = +a.total || 0;
+        const cat = (a.lignes && a.lignes[0] && a.lignes[0].espece) ? a.lignes[0].espece : 'Pêche';
+        const regle = !!a.paiementImmediat;
+        return { y: o.y, m: o.m, d: o.d, ref: a.num || ('AP-' + a.id), type: 'Achat', partner: a.pecheur, cat, amt: -total, paid: regle ? total : 0, reste: regle ? 0 : total, status: regle ? 'Payé' : 'Non payé', manual: true };
+      });
       // Dédoublonnage en DEUX passes.
       // 1) Par NUMÉRO de facture, la saisie manuelle l'emporte (comportement historique).
       // 2) RATTRAPAGE des doublons DÉJÀ créés : une saisie locale dont le numéro ne correspond à
