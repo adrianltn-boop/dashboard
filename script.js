@@ -238,7 +238,7 @@ class Component {
     filePreview: null, hiddenOps: {}, grenkeHidden: {}, trashAsk: null, tblStatusF: {},
     banque: null, banqueName: null, bankLinks: {}, bankHidden: {}, bankLink: null, bankLinkQuery: '', bankQ: '', bankFilter: 'Toutes',
     bankCats: {}, bankCatRules: {}, bankCatList: null, bankCatAsk: null, bankCatAskValue: '', bankCatPick: null,
-    heures: {}, heuresMois: {}, filePaths: {}, annule: {}, hRoster: [], hFocus: null, hMode: 'semaine', hRange: null, hCollapse: {}, hDelAsk: null, hNuit: false, vehDelAsk: null, vehRestore: null, credDelAsk: null, credRestore: null,
+    heures: {}, heuresMois: {}, filePaths: {}, annule: {}, hRoster: [], hFocus: null, hMode: 'semaine', hRange: null, hCollapse: {}, hDelAsk: null, hNuit: false, vehDelAsk: null, vehRestore: null, credDelAsk: null, credRestore: null, msgDelAsk: null, msgRestore: null,
     empDocs: {}, empDelDoc: null, bankSalaryEmp: '', bankSalaryMonth: '',
     agenda: [], agendaMonth: null, agendaEdit: null, agendaDelAsk: null,
     payTrack: [], payDraft: null, payLookup: null,
@@ -2452,10 +2452,16 @@ class Component {
     this.setState({ bankCatRules: rules, msg: { kind: 'success', text: `Règle mémorisée : « ${lk} » → ${cat} — ${n} ligne${n > 1 ? 's' : ''} concernée${n > 1 ? 's' : ''}, prochains imports compris.` } });
     this.saveJSON(Component.BRULE_KEY, rules);
   }
-  commitBankCat() {
-    const ask = this.state.bankCatAsk; const v = (this.state.bankCatAskValue || '').trim();
+  // `valeur` : la valeur AFFICHÉE, transmise par le raccourci clavier. RÈGLE déjà consignée pour la
+  // fenêtre de préfixe et non appliquée ici : le champ étant en `onchange`, l'état n'a pas encore
+  // reçu la frappe au moment du `keydown`. Valider par Entrée lisait donc la valeur d'OUVERTURE —
+  // vide — et la fenêtre se refermait en jetant la catégorie tapée, sans un mot.
+  commitBankCat(valeur) {
+    const ask = this.state.bankCatAsk;
+    const v = String(valeur != null ? valeur : (this.state.bankCatAskValue || '')).trim();
     if (!ask) return;
-    if (!v) { this.setState({ bankCatAsk: null, bankCatAskValue: '' }); return; }
+    // Champ vide : on ne referme plus en silence, on dit pourquoi rien n'a été créé.
+    if (!v) { this._formErr('bankcat', 'Donnez un nom à la catégorie avant de l’ajouter (ex. « Entretien bateau »).'); return; }
     const list = [...new Set([...(this.state.bankCatList || []), v])];
     this.setState({ bankCatList: list, bankCatAsk: null, bankCatAskValue: '' });
     this.saveJSON(Component.BCATLIST_KEY, list);
@@ -8312,6 +8318,34 @@ class Component {
     this._saveMessages([...this.msgList(), m]);
     this.setState({ msgText: '' });
   }
+  // ---------- SUPPRIMER UN MESSAGE : CONFIRMER, ET LAISSER UNE TRACE ----------
+  // Le ✕ détruisait le message dans l'état ET dans le stockage, instantanément, sans confirmation
+  // ni retour possible. Et chez l'autre profil, le texte disparaissait au rafraîchissement suivant
+  // sans le moindre mot : personne ne pouvait savoir qu'un message avait existé.
+  askDeleteMessage(id) {
+    const me = this.activeProfil();
+    const m = this.msgList().find(x => x.id === id); if (!m) return;
+    if (m.from !== me.id && me.role !== 'admin') return;
+    this.setState({ msgDelAsk: { id, auteur: m.fromNom || 'quelqu’un', extrait: String(m.text || '').slice(0, 120), sien: m.from === me.id } });
+  }
+  confirmDeleteMessage() {
+    const a = this.state.msgDelAsk; if (!a) return;
+    const me = this.activeProfil();
+    const m = this.msgList().find(x => x.id === a.id);
+    if (!m) { this.setState({ msgDelAsk: null }); return; }
+    if (m.from !== me.id && me.role !== 'admin') { this.setState({ msgDelAsk: null }); return; }
+    this._msgCorbeille = (this._msgCorbeille || []).concat([m]);
+    this._saveMessages(this.msgList().filter(x => x.id !== a.id));
+    this.setState({ msgDelAsk: null, msgRestore: { id: a.id, auteur: a.auteur }, msg: { kind: 'ok', text: `Message de ${a.auteur} supprimé. Rétablissable depuis le bandeau tant que cet onglet reste ouvert.` } });
+  }
+  restoreMessage() {
+    const r = this.state.msgRestore; if (!r) return;
+    const m = (this._msgCorbeille || []).find(x => x.id === r.id);
+    if (!m) { this.setState({ msgRestore: null, msg: { kind: 'error', text: 'Ce message n’est plus rétablissable : la page a été rechargée depuis la suppression.' } }); return; }
+    this._msgCorbeille = (this._msgCorbeille || []).filter(x => x !== m);
+    this._saveMessages([...this.msgList(), m].sort((x, y) => (x.ts || 0) - (y.ts || 0)));
+    this.setState({ msgRestore: null, msg: { kind: 'ok', text: 'Message rétabli.' } });
+  }
   deleteMessage(id) {
     const me = this.activeProfil();
     const m = this.msgList().find(x => x.id === id); if (!m) return;
@@ -11263,7 +11297,7 @@ class Component {
           ? `max-width:72%;background:${accent};color:#fff;padding:9px 14px;border-radius:13px 13px 4px 13px;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word`
           : 'max-width:72%;background:#fff;border:1px solid #e6ebf2;color:#0e1b2e;padding:9px 14px;border-radius:13px 13px 13px 4px;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word;box-shadow:0 1px 2px rgba(16,32,54,.05)',
         canDelete: mine || isAdminUI,
-        onDelete: () => this.deleteMessage(m.id),
+        onDelete: () => this.askDeleteMessage(m.id),
         delStyle: 'border:none;background:transparent;color:#c4cdd8;font-size:11px;cursor:pointer;padding:2px 4px;font-family:inherit',
       };
     });
@@ -12094,7 +12128,7 @@ class Component {
     const onBankCatCancel = () => this.setState({ bankCatAsk: null, bankCatAskValue: '' });
     const onBankCatFond = fondSaisie(() => this.setState({ bankCatAsk: null, bankCatAskValue: '' }), () => !!String(this.state.bankCatAskValue || '').trim(), 'bankcat');
     const onBankCatCommit = () => this.commitBankCat();
-    const onBankCatKey = e => { if (e.key === 'Enter') this.commitBankCat(); else if (e.key === 'Escape') onBankCatCancel(); };
+    const onBankCatKey = e => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target ? e.target.value : ''; this.setState({ bankCatAskValue: v }); this.commitBankCat(v); } else if (e.key === 'Escape') onBankCatCancel(); };
     const bankCatCommitStyle = `padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:${(this.state.bankCatAskValue || '').trim() ? accent : '#c5cede'};border:none;cursor:pointer;font-family:inherit`;
     // modal de liaison
     const bankLinkS = this.state.bankLink;
@@ -12322,6 +12356,18 @@ class Component {
     const hArChevStyle = 'width:22px;text-align:center;color:#8291a5;font-size:11px;flex-shrink:0';
     const hEditStyle = `padding:7px 13px;border-radius:8px;font-size:12px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.35)};cursor:pointer;font-family:inherit`;
     const hHeaderSub = hIsMonth ? `Vue mensuelle — ${H_MON[arBase.getMonth()]} ${arBase.getFullYear()}` : hIsYear ? `Vue annuelle — ${arBase.getFullYear()}` : hIsCustomArchives ? 'Archives — choisissez une période au calendrier' : ('Semaine du ' + hNavLabel + (hIsThisWeek ? ' · en cours' : ''));
+    // ---------- Messages : confirmation de suppression et rétablissement ----------
+    const msgDelAsk = this.state.msgDelAsk;
+    const msgDelOpen = !!msgDelAsk;
+    const msgDelQui = msgDelAsk ? (msgDelAsk.sien ? 'votre message' : `le message de ${msgDelAsk.auteur}`) : '';
+    const msgDelExtrait = msgDelAsk ? msgDelAsk.extrait : '';
+    const onMsgDelCancel = () => this.setState({ msgDelAsk: null });
+    const onMsgDelConfirm = () => this.confirmDeleteMessage();
+    const msgRestoreAsk = this.state.msgRestore;
+    const msgRestoreOpen = !!msgRestoreAsk;
+    const msgRestoreTxt = msgRestoreAsk ? `Message de ${msgRestoreAsk.auteur} supprimé. Rétablir ?` : '';
+    const onMsgRestore = () => this.restoreMessage();
+    const onMsgRestoreHide = () => this.setState({ msgRestore: null });
     // ---------- Crédits : confirmation de suppression et rétablissement ----------
     const credDelAsk = this.state.credDelAsk;
     const credDelOpen = !!credDelAsk;
@@ -12669,6 +12715,7 @@ class Component {
       hDelOpen, hDelName, onHDelCancel, onHDelConfirm, hDelSummary, hDelHasHours, onHDelArchive, hDelArchiveStyle, hDelSansNom, hDelPeutSupprimer: !hDelSansNom, hDelBloqueTxt, hNuitTabs, hNuitStatus,
       vehDelOpen, vehDelName, vehDelDetail, onVehDelCancel, onVehDelConfirm, vehRestoreOpen, vehRestoreTxt, onVehRestore, onVehRestoreHide,
       credDelOpen, credDelName, credDelDetail, onCredDelCancel, onCredDelConfirm, credRestoreOpen, credRestoreTxt, onCredRestore, onCredRestoreHide,
+      msgDelOpen, msgDelQui, msgDelExtrait, onMsgDelCancel, onMsgDelConfirm, msgRestoreOpen, msgRestoreTxt, onMsgRestore, onMsgRestoreHide,
     };
   }
   setState(update, cb) {

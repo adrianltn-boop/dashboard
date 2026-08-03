@@ -1672,6 +1672,13 @@
     <!-- ============ MESSAGES (chat entre profils) ============ -->
     <sc-if value="{{ isMessages }}" hint-placeholder-val="{{ false }}">
       <div style="padding:0 24px 24px" data-screen-label="Messages" data-help="{{ viewHelp }}" data-help-title="Messages">
+        <sc-if value="{{ msgRestoreOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;padding:11px 14px;border-radius:10px;border:1px solid #f2d9a8;background:#fdf6e7;color:#8a6212;font-size:12.5px;font-weight:600">
+            <span style="flex:1;min-width:220px">{{ msgRestoreTxt }}</span>
+            <button style="{{ msgSendStyle }}" onclick="{{ onMsgRestore }}">↺ Rétablir</button>
+            <button style="{{ prefixCancelStyle }}" onclick="{{ onMsgRestoreHide }}">Masquer</button>
+          </div>
+        </sc-if>
         <div style="background:#fff;border:1px solid #e9edf4;border-radius:14px;box-shadow:0 1px 2px rgba(16,32,54,.04);display:flex;flex-direction:column;height:calc(100vh - 220px);min-height:420px;overflow:hidden">
           <div style="padding:16px 20px;border-bottom:1px solid #eef1f6;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
             <div>
@@ -3345,6 +3352,22 @@
   </sc-if>
 
   <!-- ============ HEURES — confirmation avant d'enlever une personne ============ -->
+  <!-- ============ MESSAGE — confirmation de suppression ============ -->
+  <sc-if value="{{ msgDelOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ prefixOverlayStyle }}" onclick="{{ onMsgDelCancel }}">
+      <div style="width:440px;max-width:92vw;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px" onclick="{{ ctxStop }}">
+        <div style="font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">Supprimer un message</div>
+        <div style="font-size:15px;font-weight:600;color:#0e1b2e;margin-top:6px">🗑 Supprimer {{ msgDelQui }} ?</div>
+        <div style="font-size:12.5px;color:#69788c;margin-top:10px;line-height:1.6">Il disparaîtra aussi chez les autres profils, sans qu'ils en soient avertis.</div>
+        <div style="margin-top:12px;padding:11px 14px;background:#f6f8fc;border:1px solid #e6ebf2;border-radius:10px;font-size:12.5px;color:#0e1b2e;line-height:1.5">« {{ msgDelExtrait }} »</div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px">
+          <button style="{{ prefixCancelStyle }}" onclick="{{ onMsgDelCancel }}">Annuler</button>
+          <button style="{{ trashConfirmStyle }}" onclick="{{ onMsgDelConfirm }}">Supprimer</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
   <!-- ============ CRÉDIT — confirmation de suppression ============ -->
   <sc-if value="{{ credDelOpen }}" hint-placeholder-val="{{ false }}">
     <div style="{{ prefixOverlayStyle }}" onclick="{{ onCredDelCancel }}">
