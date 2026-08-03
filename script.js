@@ -402,7 +402,7 @@ class Component {
   static PAY_OVERRIDE_KEY = 'avPaymentOverrides';
   static MAP_KEY = 'avMappings';
   static AVWMAP_KEY = 'avWriteMap';
-  static APP_VERSION = 'version 34';
+  static APP_VERSION = 'version 35';
   // Mention de copyright affichée dans l'interface (Paramètres) : elle n'accorde aucun
   // droit — le droit d'auteur naît de la création — mais elle informe les tiers et date la
   // revendication. La preuve d'antériorité, elle, repose sur l'historique Git et le dépôt INPI.
@@ -1604,39 +1604,60 @@ class Component {
     const patch = { ...d, [k]: v };
     // Pré-remplissage : dès que le n° de facture correspond à un dossier/facture connu,
     // les informations déjà notées (client, TTC, paiements…) se remplissent toutes seules.
+    // RÈGLE (identique à l'auto-remplissage du suivi de paiement) : ce qu'un numéro PRÉCÉDENT
+    // avait rempli est EFFACÉ avant de chercher le nouveau. Sans cela, corriger « 2041 » en
+    // « 2044 » laissait le client, le TTC, le 1er paiement et les charges du dossier 2041 sous
+    // le numéro 2044 — une fiche chimère, écrite telle quelle dans la ligne du 2044.
     if (k === 'num' && !d.editing) {
+      const auto = d._auto || {};
+      Object.keys(auto).forEach(f => { if (String(patch[f] == null ? '' : patch[f]) === String(auto[f])) patch[f] = ''; });
+      const nouveauAuto = {};
+      const poser = (f, val) => { if (val == null || val === '') return; patch[f] = String(val); nouveauAuto[f] = String(val); };
       const key = this.gNumKey(v);
       if (key) {
         const g = this.state.grenke; const glist = (g && g.list) ? g.list : (Array.isArray(g) ? g : []);
         const gi = glist.find(x => this.gNumKey(x.ref) === key);
         if (gi) {
-          if (!String(d.cust || '').trim() && gi.cust) patch.cust = gi.cust;
-          if (!this._vNum(d.ttc) && gi.ttc) patch.ttc = String(gi.ttc);
-          if (!this._vNum(d.p1) && gi.p1) patch.p1 = String(gi.p1);
-          if (!this._vNum(d.p2) && gi.p2) patch.p2 = String(gi.p2);
-          if (!this._vNum(d.charge) && gi.charge) patch.charge = String(gi.charge);
+          if (!String(patch.cust || '').trim() && gi.cust) poser('cust', gi.cust);
+          if (!this._vNum(patch.ttc) && gi.ttc) poser('ttc', gi.ttc);
+          if (!this._vNum(patch.p1) && gi.p1) poser('p1', gi.p1);
+          if (!this._vNum(patch.p2) && gi.p2) poser('p2', gi.p2);
+          if (!this._vNum(patch.charge) && gi.charge) poser('charge', gi.charge);
         }
         if (!String(patch.cust || '').trim() || !this._vNum(patch.ttc)) {
           const ven = this.state.ventes; const vlist = (ven && ven.list) ? ven.list : (Array.isArray(ven) ? ven : []);
           const vi = vlist.find(x => this.gNumKey(x.ref) === key);
           if (vi) {
-            if (!String(patch.cust || '').trim() && vi.partner && vi.partner !== '—') patch.cust = vi.partner;
-            if (!this._vNum(patch.ttc) && vi.ttc) patch.ttc = String(vi.ttc);
+            if (!String(patch.cust || '').trim() && vi.partner && vi.partner !== '—') poser('cust', vi.partner);
+            if (!this._vNum(patch.ttc) && vi.ttc) poser('ttc', vi.ttc);
           }
         }
         if (!String(patch.cust || '').trim() || !this._vNum(patch.ttc)) {
           const pi = this.payTrackRows().find(x => this.gNumKey(x.num) === key);
           if (pi) {
-            if (!String(patch.cust || '').trim() && pi.client) patch.cust = pi.client;
-            if (!this._vNum(patch.ttc) && pi.ttc) patch.ttc = String(pi.ttc);
+            if (!String(patch.cust || '').trim() && pi.client) poser('cust', pi.client);
+            if (!this._vNum(patch.ttc) && pi.ttc) poser('ttc', pi.ttc);
           }
         }
       }
+      patch._auto = nouveauAuto;
     }
     this.setState({ grkDraft: patch });
   }
   resetGrkDraft() { this.setState({ grkDraft: this.grkDefault() }); }
-  editGrkRow(id) { const r = this.grenkeManRows().find(x => String(x.id) === String(id)); if (!r) return; this.setState({ grkDraft: { ...r, ttc: String(r.ttc == null ? '' : r.ttc), p1: String(r.p1 == null ? '' : r.p1), p2: String(r.p2 == null ? '' : r.p2), charge: String(r.charge == null ? '' : r.charge), editing: true } }); }
+  // Les montants de la fiche ont-ils bougé depuis l'ouverture ? (référence : _remBase)
+  _grkMontantsTouches(d) {
+    const b = d && d._remBase; if (!b) return false;
+    return ['ttc', 'p1', 'p2', 'charge'].some(k => this._vNum(d[k]) !== this._vNum(b[k]));
+  }
+  // Restant dû RELEVÉ DANS LE FICHIER, ou null s'il n'existe pas / n'est plus valable.
+  _grkRemDuFichier(d) {
+    if (!d || d.rem == null || d.rem === '') return null;
+    if (this._grkMontantsTouches(d)) return null;
+    const n = this._vNum(d.rem);
+    return isFinite(n) ? n : null;
+  }
+  editGrkRow(id) { const r = this.grenkeManRows().find(x => String(x.id) === String(id)); if (!r) return; this.setState({ grkDraft: { ...r, ttc: String(r.ttc == null ? '' : r.ttc), p1: String(r.p1 == null ? '' : r.p1), p2: String(r.p2 == null ? '' : r.p2), charge: String(r.charge == null ? '' : r.charge), editing: true, rem: r.rem == null ? '' : r.rem, _remBase: { ttc: r.ttc, p1: r.p1, p2: r.p2, charge: r.charge }, _auto: null } }); }
   // Crayon ✎ du tableau unique : ouvre la fiche locale du dossier, qu'il vienne d'une saisie ou du
   // fichier Excel. Une ligne importée n'a pas encore de fiche — on en prépare une, pré-remplie avec
   // ce que dit le fichier. Ce qui sera enregistré repartira dans la MÊME ligne Excel
@@ -1649,6 +1670,13 @@ class Component {
       ttc: String(src.ttc == null ? '' : src.ttc), p1: String(src.p1 == null || src.p1 === 0 ? '' : src.p1),
       p2: String(src.p2 == null || src.p2 === 0 ? '' : src.p2), charge: String(src.charge == null || src.charge === 0 ? '' : src.charge),
       com: String(src.com || ''), transmis: true, dateRecep: src.dateRecep || '', editing: true, fromExcel: true,
+      // « Remains » relevé dans le fichier : il PRIME sur le recalcul TTC − p1 − p2 − charges tant
+      // qu'aucun montant n'est modifié. Sans ce report, ouvrir une fiche et la réenregistrer sans
+      // rien changer faisait bouger le restant dû ET l'état (jusqu'à « SOLDÉ » sur un dossier où
+      // 51,60 € restaient à percevoir), et ce faux statut partait dans la feuille Grenke.
+      rem: (src.rem == null || src.rem === '') ? '' : src.rem,
+      _remBase: { ttc: src.ttc, p1: src.p1, p2: src.p2, charge: src.charge },
+      _auto: null,
     } });
   }
   commitGrk() {
@@ -1659,8 +1687,12 @@ class Component {
     const id = +d.id || this._grkNextId();
     const prev = this.grenkeManRows().find(x => String(x.id) === String(id));
     const rec = { id, num: (d.num || '').trim(), cust, ttc, p1: this._vNum(d.p1), p2: this._vNum(d.p2), charge: this._vNum(d.charge), com: (d.com || '').trim(), fromVente: prev ? !!prev.fromVente : false, transmis: prev ? !!prev.transmis : !!d.transmis };
-    // État jamais saisi à la main : il découle des montants (voir _grenkeEtat). C'est justement la
-    // saisie libre de l'état qui le rendait périmé dès le paiement suivant.
+    // Restant dû : la valeur relevée dans le fichier reste la référence TANT QUE les montants
+    // n'ont pas été touchés. Dès qu'un montant change, elle est périmée : on la laisse tomber et
+    // le restant est recalculé (la fiche l'annonce, cf. grkRemNote).
+    rec.rem = this._grkRemDuFichier(d);
+    // État jamais saisi à la main : il découle des montants ET du restant (voir _grenkeEtat).
+    // C'est justement la saisie libre de l'état qui le rendait périmé dès le paiement suivant.
     rec.statut = this._grenkeEtat(rec, d.dateRecep || '');
     const arr = this.grenkeManRows().slice(); const i = arr.findIndex(x => String(x.id) === String(id));
     if (i >= 0) arr[i] = rec; else arr.unshift(rec);
@@ -9175,7 +9207,7 @@ class Component {
     const gLocalNorm = grkLocalRows.map(r => {
       const k = gMergeKey(r.num, 'loc#' + r.id); gTakenKeys.add(k);
       return { ref: r.num || '', cust: r.cust || '', ttc: +r.ttc || 0, p1: +r.p1 || 0, p2: +r.p2 || 0,
-        charge: +r.charge || 0, rem: null, recv: null, statut: r.statut || '', com: r.com || '',
+        charge: +r.charge || 0, rem: (r.rem == null || r.rem === '') ? null : (+r.rem || 0), recv: null, statut: r.statut || '', com: r.com || '',
         transmis: !!r.transmis, localId: r.id, fromVente: !!r.fromVente, _mergeKey: k };
     });
     const gExcelNorm = grenkeRows.map((g, i) => ({ ...g, transmis: true, localId: null, _src: g, _mergeKey: gMergeKey(g.ref, 'xl#' + i) }))
@@ -9225,7 +9257,7 @@ class Component {
       // Provenance : une saisie pas encore repartie dans Excel se distingue d'une ligne du fichier.
       isLocal: g.localId != null, srcLabel: g.localId != null ? (g.fromVente ? 'auto' : 'saisie') : '',
       srcStyle: `display:inline-block;padding:1px 6px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:.3px;color:${accent};background:${soft};border:1px solid ${this.hexToRgba(accent, 0.25)}`,
-      onEdit: () => this.editGrenkeDossier({ localId: g.localId, ref: g.ref, cust, ttc: g.ttc, p1: g.p1, p2: g.p2, charge: g.charge, com: g.com, dateRecep: dateO ? `${dateO.y}-${this.dd(dateO.m)}-${this.dd(dateO.d)}` : '' }), editStyle: grkEditBtnStyle,
+      onEdit: () => this.editGrenkeDossier({ localId: g.localId, ref: g.ref, cust, ttc: g.ttc, p1: g.p1, p2: g.p2, charge: g.charge, com: g.com, rem: g.rem, dateRecep: dateO ? `${dateO.y}-${this.dd(dateO.m)}-${this.dd(dateO.d)}` : '' }), editStyle: grkEditBtnStyle,
       // 🗑 : une saisie locale se supprime pour de bon, une ligne du fichier se masque seulement
       // (RÈGLE projet : on ne supprime jamais une ligne d'Excel depuis l'interface).
       onTrash: g.localId != null
@@ -9951,11 +9983,25 @@ class Component {
     const grkDraft = { id: gd.id, num: gd.num || '', cust: gd.cust || '', ttc: gd.ttc === 0 ? '0' : (gd.ttc || ''),
       p1: gd.p1 === 0 ? '' : (gd.p1 || ''), p2: gd.p2 === 0 ? '' : (gd.p2 || ''), charge: gd.charge === 0 ? '' : (gd.charge || ''),
       com: gd.com || '' };
-    const grkDraftRem = this.fmt(Math.round((gTtc - gP1 - gP2 - gCh) * 100) / 100);
+    // Restant dû : la valeur « Remains » relevée dans le fichier PRIME tant qu'aucun montant n'a
+    // été modifié — exactement comme le tableau. La fiche et la ligne ne peuvent plus afficher deux
+    // restants (ni deux états) contradictoires pour le même dossier au même instant.
+    const gRemFichier = this._grkRemDuFichier(gd);
+    const gRemCalcule = Math.round((gTtc - gP1 - gP2 - gCh) * 100) / 100;
+    const gRemEffectif = gRemFichier != null ? gRemFichier : gRemCalcule;
+    const grkDraftRem = this.fmt(gRemEffectif);
     const grkDraftRecv = this.fmt(Math.round((gP1 + gP2) * 100) / 100);
+    // Un montant modifié périme le « Remains » du fichier : on recalcule et ON LE DIT, avec les
+    // deux chiffres. Et on prévient que la colonne Remains du classeur n'est PAS réécrite ici.
+    const gRemFichierBrut = (gd.rem == null || gd.rem === '') ? null : this._vNum(gd.rem);
+    const grkRemNoteShow = gRemFichierBrut != null && this._grkMontantsTouches(gd) && Math.abs(gRemFichierBrut - gRemCalcule) > 0.005;
+    const grkRemNote = grkRemNoteShow
+      ? `Restant recalculé : ${this.fmt(gRemCalcule)} au lieu de ${this.fmt(gRemFichierBrut)} relevé dans le fichier (vous avez modifié un montant). La colonne « Remains » du classeur n'est PAS réécrite par le tableau de bord : corrigez-la dans Excel si nécessaire.`
+      : '';
+    const grkRemNoteStyle = 'margin-top:10px;padding:9px 12px;border-radius:9px;border:1px solid #f0dcae;background:#fff7e6;color:#8a5a00;font-size:12.5px;font-weight:600;line-height:1.5';
     // État TOUJOURS calculé, jamais choisi dans une liste : c'est la saisie libre de l'état qui
     // faisait diverger la fiche, le tableau et le fichier Excel (même correction que payDraftEtat).
-    const grkDraftEtat = this._grenkeEtat({ ttc: gTtc, p1: gP1, p2: gP2, charge: gCh, transmis: !!gd.transmis }, gd.dateRecep || '');
+    const grkDraftEtat = this._grenkeEtat({ ttc: gTtc, p1: gP1, p2: gP2, charge: gCh, rem: gRemFichier, transmis: !!gd.transmis }, gd.dateRecep || '');
     const grkDraftEtatStyle = grenkeStatusStyle(grkDraftEtat);
     const grkEditing = !!(this.state.grkDraft && this.state.grkDraft.editing);
     const onGrkNum = e => this.setGrkField('num', e.target.value);
@@ -12021,6 +12067,7 @@ class Component {
       venteGrenkeBtnLabel, venteGrenkeBtnStyle, onVenteGrenkeOpen,
       venteGrenkeOpen, vgMontant, vgP1, vgP2, vgCharges, vgRest, onVgMontant, onVgP1, onVgP2, onVgCharges, onVgSave, onVgCancel,
       grenkeSummary, grkDraft, grkDraftRem, grkDraftRecv, grkDraftEtat, grkDraftEtatStyle, grkEditing, grkSaveLabel,
+      grkRemNoteShow, grkRemNote, grkRemNoteStyle,
       onGrkNum, onGrkCust, onGrkTtc, onGrkP1, onGrkP2, onGrkCharge, onGrkCom, onGrkCommit, onGrkReset,
       gmDelOpen, gmDelName, onGrkDelConfirm, onGrkDelCancel,
       credPayAskOpen, credPayAskLabel, credPayAskMens, credPayAskHasBank, credPayAskMsg, onCredPayConfirm, onCredPayCancel,

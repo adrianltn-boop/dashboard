@@ -513,6 +513,37 @@
   carte grise) ne pouvait être relue — l'archive était en
   écriture seule. Méthode ajoutée, et les deux appelants
   entourés d'un try/catch qui PARLE.
+- Grenke, colonne « Remains » JETÉE par la fiche : le
+  tableau lui donnait la priorité (rem = g.rem != null ?
+  g.rem : calcul) mais editGrenkeDossier ne la recopiait pas
+  dans le brouillon, commitGrk ne la conservait pas et
+  gLocalNorm forçait rem: null. Ouvrir une fiche par ✎ et
+  cliquer « Mettre à jour » SANS RIEN CHANGER faisait donc
+  bouger le restant dû et l'état — 51,60 € devenus 0,00 € et
+  PARTIELLEMENT RÉGLÉ devenu SOLDÉ, ce faux statut partant
+  dans la colonne Statut de la feuille Grenke pendant que
+  Remains y restait à 51,60. Deux états contradictoires pour
+  le même dossier, au même instant, sur le même écran.
+  Même famille que « Cellule Remains VIDE n'est pas un
+  zéro », sauf qu'ici c'est une cellule RENSEIGNÉE qui était
+  jetée. RÈGLE : `rem` est porté de bout en bout
+  (editGrenkeDossier → grkDraft → commitGrk → gLocalNorm) et
+  PRIME tant qu'aucun montant n'est modifié (_remBase /
+  _grkRemDuFichier). Dès qu'un montant bouge, le restant est
+  recalculé ET la fiche l'annonce avec les DEUX chiffres.
+  ARBITRAGE LAISSÉ OUVERT : le tableau de bord n'écrit PAS
+  la colonne Remains (elle peut porter une formule) ; la
+  fiche le dit explicitement.
+- Fiche Grenke, « N° facture » : setGrkField ne remplissait
+  que les champs VIDES et ne mémorisait pas ce qu'il avait
+  rempli — il n'effaçait donc jamais le pré-remplissage
+  précédent. Corriger 2041 en 2044 laissait le client, le
+  TTC, le 1er paiement et les charges du 2041 sous le numéro
+  2044 (reproduit au clavier), et requestGrenkeUpdate
+  écrivait ces montants dans la ligne du 2044. Même règle
+  que l'auto-remplissage du suivi de paiement : le brouillon
+  mémorise ce qu'il a rempli (`_auto`) et l'efface à chaque
+  changement de numéro.
 - Journal des modifications, photo de référence caduque :
   au-delà de 30 % des lignes de la source OU 50 lignes
   (le plus grand des deux), ne RIEN lister. Poste
