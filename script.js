@@ -402,7 +402,7 @@ class Component {
   static PAY_OVERRIDE_KEY = 'avPaymentOverrides';
   static MAP_KEY = 'avMappings';
   static AVWMAP_KEY = 'avWriteMap';
-  static APP_VERSION = 'version 32';
+  static APP_VERSION = 'version 33';
   // Mention de copyright affichée dans l'interface (Paramètres) : elle n'accorde aucun
   // droit — le droit d'auteur naît de la création — mais elle informe les tiers et date la
   // revendication. La preuve d'antériorité, elle, repose sur l'historique Git et le dépôt INPI.
@@ -1006,13 +1006,22 @@ class Component {
     const solde = Math.round((trouve.ttc - trouve.avoir - trouve.regle) * 100) / 100;
     this.setState({ payDraft: p, payLookup: { found: true, ref, ...trouve, solde } });
   }
-  resetPayDraft() { this.setState({ payDraft: this.payDefault(), payLookup: null }); this.refreshPayIdFacture(); }
+  resetPayDraft() { this.setState({ payDraft: this.payDefault(), payLookup: null, payAmbigu: null }); this.refreshPayIdFacture(); }
   editPayRow(id) { const r = this.payTrackRows().find(x => String(x.id) === String(id)); if (!r) return; const solde = Math.round(((+r.ttc || 0) - (+r.avoir || 0) - (+r.regle || 0)) * 100) / 100; this.setState({ payDraft: { ...r, ttc: r.ttc === '' ? '' : String(r.ttc), avoir: r.avoir === '' ? '' : String(r.avoir), regle: r.regle === '' ? '' : String(r.regle), editing: true, _auto: null, _idAvant: null }, payLookup: { found: true, ref: r.num || String(r.id), source: 'suivi', id: r.id, num: r.num || '', client: r.client || '', ttc: +r.ttc || 0, avoir: +r.avoir || 0, dateFac: r.dateFac || '', dateEch: r.dateEch || '', regle: +r.regle || 0, datePay: r.datePay || '', solde } }); }
   commitPay() {
     const d = this.state.payDraft || this.payDefault();
     const client = (d.client || '').trim();
-    const num = v => { const n = parseFloat(String(v == null ? '' : v).replace(',', '.').replace(/[^\d.-]/g, '')); return isFinite(n) ? n : 0; };
+    // MÊME lecture des montants que partout ailleurs (_vNum) : un num() local divergent était
+    // précisément la cause du « 1.234,56 » enregistré 1,23 €.
+    const num = v => this._vNum(v);
     if (!client || !(num(d.ttc) > 0)) { this.setState({ msg: { kind: 'error', text: 'Indiquez au moins le nom du client et un Montant TTC.' } }); return; }
+    // Montant à la forme ambiguë (« 1,234 ») : on ne devine pas en silence. On applique la
+    // convention française (décimale) et on écrit noir sur blanc ce qui a été compris, À
+    // L'ENDROIT du clic — la personne corrige si ce n'était pas ça.
+    const ambigus = [['Montant TTC', d.ttc], ['Avoir', d.avoir], ['Montant réglé', d.regle]]
+      .filter(([, v]) => this._montantAmbigu(v))
+      .map(([lbl, v]) => `${lbl} : « ${String(v).trim()} » compris comme ${this.fmt(this._vNum(v))} (écrivez ${String(v).trim().replace(/[.,]/, '')} sans séparateur si vous vouliez des milliers)`);
+    if (ambigus.length) this.setState({ payAmbigu: ambigus.join(' · ') }); else if (this.state.payAmbigu) this.setState({ payAmbigu: null });
     // État TOUJOURS recalculé ici (jamais une valeur choisie à la main) : c'est exactement ce
     // paramètre qui rendait les états périmés — un paiement enregistré ne mettait pas à jour l'état
     // en fonction de ce qui était réellement réglé/avoir. Même règle que _venteEtat/_etatAttendu.
@@ -1150,7 +1159,41 @@ class Component {
   saveVenteSaisie(arr) { this.setState({ ventesSaisie: arr }); this.saveJSON(Component.VSAISIE_KEY, arr); }
   grenkeManRows() { return Array.isArray(this.state.grenkeMan) ? this.state.grenkeMan : []; }
   saveGrenkeMan(arr) { this.setState({ grenkeMan: arr }); this.saveJSON(Component.GRKMAN_KEY, arr); }
-  _vNum(v) { const n = parseFloat(String(v == null ? '' : v).replace(',', '.').replace(/[^\d.-]/g, '')); return isFinite(n) ? n : 0; }
+  // Nettoyage d'un montant TAPÉ AU CLAVIER. L'ancienne version faisait
+  // String(v).replace(',', '.') : elle ne remplaçait que la PREMIÈRE virgule, si bien que
+  // « 1.234,56 » devenait « 1.234.56 » que parseFloat tronquait à 1.234 — un règlement de
+  // 1 234,56 € enregistré 1,23 € puis écrit tel quel dans le classeur. Le nettoyage
+  // .replace(/[^\d.-]/g,'') qui suivait ne rattrapait rien, le point étant autorisé.
+  // RÈGLE : on retire d'abord les séparateurs de MILLIERS (espaces sous toutes leurs formes,
+  // apostrophes), puis, si la chaîne contient à la fois des points et des virgules, seul le
+  // DERNIER des deux est le séparateur décimal ; l'autre est un séparateur de milliers.
+  // Plusieurs points et aucune virgule (« 1.234.567 ») = milliers, pas de décimale.
+  _montantTexte(v) {
+    let s = String(v == null ? '' : v).trim();
+    if (!s) return '';
+    s = s.replace(/[−–—]/g, '-');
+    const neg = /-/.test(s);
+    s = s.replace(/[\s   '’]/g, '').replace(/[^\d.,]/g, '');
+    if (!s) return '';
+    const lastC = s.lastIndexOf(','), lastP = s.lastIndexOf('.');
+    let dec = -1;
+    if (lastC >= 0 && lastP >= 0) dec = Math.max(lastC, lastP);
+    else if (lastC >= 0) dec = lastC;                                        // virgule seule : décimale (usage français)
+    else if (lastP >= 0 && (s.split('.').length - 1) === 1) dec = lastP;      // un seul point : décimale
+    let ent = dec >= 0 ? s.slice(0, dec) : s;
+    let frac = dec >= 0 ? s.slice(dec + 1) : '';
+    ent = ent.replace(/[.,]/g, ''); frac = frac.replace(/[.,]/g, '');
+    if (!ent && !frac) return '';
+    return (neg ? '-' : '') + (ent || '0') + (frac ? '.' + frac : '');
+  }
+  _vNum(v) { const n = parseFloat(this._montantTexte(v)); return isFinite(n) ? n : 0; }
+  // Forme réellement AMBIGUË : un seul séparateur suivi d'exactement 3 chiffres (« 1,234 »,
+  // « 12.345 ») — séparateur de milliers ou décimale ? On ne devine pas en silence : on garde
+  // l'interprétation française (décimale, comportement historique) et on le DIT à l'utilisatrice.
+  _montantAmbigu(v) {
+    const s = String(v == null ? '' : v).trim().replace(/[\s   '’€]/g, '');
+    return /^-?\d{1,3}[.,]\d{3}$/.test(s);
+  }
   _addDaysIso(iso, days) { if (!iso) return ''; const p = String(iso).split('-').map(Number); const d = new Date(p[0], (p[1] || 1) - 1, p[2] || 1); d.setDate(d.getDate() + (+days || 0)); return d.getFullYear() + '-' + this.dd(d.getMonth() + 1) + '-' + this.dd(d.getDate()); }
   // Clé INTERNE d'une saisie de vente locale. Ce N'EST PAS un numéro de facture et ce n'est PAS un
   // ID Facture : rien de tout ça ne doit être fabriqué localement (RÈGLE MÉTIER « premier numéro non
@@ -3744,7 +3787,16 @@ class Component {
       if (!loc) { this.setState({ msg: { kind: 'error', text: `Ligne « ${ref} » introuvable dans « ${sheetName} » — le fichier a peut-être changé. Actualisez puis réessayez.` } }); return; }
       const iso = opts.dateIso || this._payTodayIso();
       const colVals = {}; const preview = []; const dateCols = {};
-      if (hasPaye) { colVals[payeCol] = montant; preview.push({ label: 'Paiement', col: this._colLetter(payeCol + 1), value: this.fmt(montant) }); }
+      if (hasPaye) {
+        colVals[payeCol] = montant;
+        // L'aperçu dit ce qui est écrit ET d'où vient le chiffre : sans ça, « 4 630 € » sur une
+        // facture dont 2 000 € étaient déjà encaissés ressemble à une erreur, et « 2 630 € » en
+        // était une.
+        const detail = opts.dejaRegle > 0.005
+          ? `${this.fmt(montant)} (total réglé = ${this.fmt(opts.dejaRegle)} déjà encaissés + ${this.fmt(opts.resteDu || 0)} soldés aujourd'hui)`
+          : this.fmt(montant);
+        preview.push({ label: 'Paiement (total réglé cumulé)', col: this._colLetter(payeCol + 1), value: detail });
+      }
       if (hasDate) {
         // Date en SÉRIE Excel + colonne déclarée dans dateCols (RÈGLE « Dates Excel ») : sur une
         // ligne dont la case Date paiement n'a jamais servi, sans ça la série s'afficherait en
@@ -9278,9 +9330,13 @@ class Component {
         // circuit qui remplit enfin les colonnes Paiement / Date paiement du fichier fournisseurs.
         // Les factures clients se soldent par le Suivi de paiement, pas ici.
         canPayFourn: f.sens === 'Fournisseur' && f.reste > 0.005 && !annulled,
-        onPayFourn: () => this.requestPaiementFournPreview(f.ref, f.reste, { month: f.em.m }),
+        // La colonne « Paiement » du fichier fournisseurs est relue comme le TOTAL RÉGLÉ CUMULÉ
+        // (importSpec('factures'), champ « paid »). On y écrit donc déjà-réglé + reste dû, jamais
+        // le reste seul : écrire 2 630 sur une facture déjà réglée de 2 000 effaçait ces 2 000 €
+        // du classeur, et la facture soldée ressortait en créance de 2 000 € à la relecture.
+        onPayFourn: () => this.requestPaiementFournPreview(f.ref, Math.round(((f.paid || 0) + f.reste) * 100) / 100, { month: f.em.m, dejaRegle: f.paid || 0, resteDu: f.reste }),
         payFournStyle: `padding:4px 9px;border-radius:7px;font-size:11px;font-weight:600;color:${green};background:#fff;border:1px solid #bfe3cd;cursor:pointer;font-family:inherit`,
-        payFournTitle: `Marquer cette facture fournisseur comme payée (${this.fmt(f.reste)}) dans Excel`,
+        payFournTitle: `Solder cette facture fournisseur dans Excel : la colonne Paiement passera à ${this.fmt((f.paid || 0) + f.reste)} (total réglé cumulé), dont ${this.fmt(f.paid || 0)} déjà encaissés`,
       };
     });
 
@@ -9388,6 +9444,10 @@ class Component {
       ? `« Montant réglé » est le TOTAL réglé sur cette facture (déjà ${this.fmt(payLk.regle)} d'après le fichier) : ajoutez-y votre encaissement.`
       : '« Montant réglé » est le total réglé sur la facture, pas seulement le dernier encaissement.';
     const paySaveLabel = payEditing ? 'Mettre à jour' : '＋ Ajouter la facture';
+    // Avertissement posé JUSTE au-dessus du bouton (règle _formErr : on parle là où on clique).
+    const payAmbiguShow = !!this.state.payAmbigu;
+    const payAmbiguText = this.state.payAmbigu || '';
+    const payAmbiguStyle = 'margin-top:10px;padding:9px 12px;border-radius:9px;border:1px solid #f0dcae;background:#fff7e6;color:#8a5a00;font-size:12.5px;font-weight:600;line-height:1.5';
     const payEmpty = ptRows0.length === 0;
     const payListEmpty = payTrackList.length === 0;
     const payEmptyMsg = (payQ && ptRows0.length) ? 'Aucune facture ne correspond à votre recherche.' : 'Aucune facture suivie. Enregistrez un paiement dans la carte ci-dessus.';
@@ -11868,6 +11928,7 @@ class Component {
       facPager,
       relanceRows, creditSummary, creditRows, creditsEmpty, payPager,
       isSuivi, payTrackList, paySummary, payEmpty, payListEmpty, payEmptyMsg, payDraft, payDraftEtatStyle, payEditing, onPayCommit, onPayReset, paySaveLabel,
+      payAmbiguShow, payAmbiguText, payAmbiguStyle,
       payLookupShow, payLookupOk, payLookupStyle, payLookupText, payRegleHint,
       onPayNum, onPayClient, onPayTtc, onPayAvoir, onPayDateFac, onPayDateEch, onPayRegle, onPayDatePay,
       payInput, payInputN, payLbl, paySaveStyle, payResetStyle, payRowBtnStyle, payDraftSolde,

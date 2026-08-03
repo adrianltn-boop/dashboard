@@ -453,6 +453,32 @@
   succès vert. Et une ligne écartée est NOMMÉE (n° de
   facture, tiers, n° de ligne, raison) — un chiffre d'affaires
   amputé de moitié ne tient pas dans le mot « ignorées ».
+- Bouton « Payée » d'une facture FOURNISSEUR : il envoyait
+  f.reste (le reste dû) dans la colonne « Paiement ». Or
+  cette colonne est RELUE comme le total réglé CUMULÉ
+  (importSpec('factures'), champ « paid »). Sur une facture
+  de 4 630 € dont 2 000 € étaient déjà encaissés, la cellule
+  passait de 2 000 à 2 630 : les 2 000 € disparaissaient du
+  classeur, et la facture soldée ressortait à la relecture en
+  créance de 2 000 €, bouton « Payée » toujours proposé. On
+  écrit désormais paid + reste, et l'aperçu détaille d'où
+  vient le chiffre. Même famille que « TTC moins réglé » des
+  duplicata et que « Montant réglé est un TOTAL cumulé ».
+- _vNum et le num() local de commitPay faisaient
+  String(v).replace(',', '.') : UNE SEULE virgule remplacée.
+  « 1.234,56 » devenait « 1.234.56 », tronqué par parseFloat
+  à 1.234 — un règlement de 1 234,56 € enregistré 1,23 €
+  puis écrit tel quel dans la feuille « Suivi des
+  paiements ». RÈGLE : un seul lecteur (_montantTexte, via
+  _vNum) ; on retire les séparateurs de MILLIERS (espaces
+  sous toutes leurs formes, apostrophes), puis, quand points
+  et virgules coexistent, seul le DERNIER des deux est la
+  décimale. Plusieurs points sans virgule = milliers.
+  Un num() local qui diverge du lecteur commun est la
+  cause, pas le symptôme : commitPay appelle _vNum.
+  Forme réellement ambiguë (« 1,234 ») : on garde la lecture
+  française (décimale) et on l'ÉCRIT au-dessus du bouton
+  (_montantAmbigu → payAmbigu), jamais un choix muet.
 - Journal des modifications, photo de référence caduque :
   au-delà de 30 % des lignes de la source OU 50 lignes
   (le plus grand des deux), ne RIEN lister. Poste

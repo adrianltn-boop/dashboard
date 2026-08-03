@@ -504,6 +504,9 @@
             <div style="{{ payLookupStyle }}">{{ payLookupText }}</div>
           </sc-if>
           <div style="font-size:11.5px;color:#8291a5;margin-top:8px">{{ payRegleHint }}</div>
+          <sc-if value="{{ payAmbiguShow }}" hint-placeholder-val="{{ false }}">
+            <div style="{{ payAmbiguStyle }}">⚠ Montant à la forme ambiguë — {{ payAmbiguText }}</div>
+          </sc-if>
           <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;margin-top:14px;padding-top:12px;border-top:1px solid #f1f4f8;flex-wrap:wrap">
             <div style="font-size:13px;color:#69788c">Solde restant <b style="font-family:'IBM Plex Mono',monospace;font-size:17px;color:#0e1b2e;margin-left:6px">{{ payDraftSolde }}</b> <span style="font-size:11.5px;color:#9aa7b8">(TTC − avoir − réglé)</span></div>
             <div style="display:flex;gap:8px"><button style="{{ payResetStyle }}" onclick="{{ onPayReset }}">Réinitialiser</button><button style="{{ paySaveStyle }}" onclick="{{ onPayCommit }}">{{ paySaveLabel }}</button></div>
