@@ -544,6 +544,18 @@
   que l'auto-remplissage du suivi de paiement : le brouillon
   mémorise ce qu'il a rempli (`_auto`) et l'efface à chaque
   changement de numéro.
+- Modale du préfixe des dossiers (Stock / Livraison /
+  Transport) : le champ est en `onchange` (jamais
+  `oninput`) et onPrefixKey faisait e.preventDefault() puis
+  confirmPrefix() DANS le keydown — donc avant que le
+  navigateur n'émette « change ». confirmPrefix lisait
+  state.prefixAskValue restée à la valeur d'OUVERTURE :
+  « Chronopost, DHL, Heppner » validé par Entrée
+  enregistrait une chaîne VIDE (dossier lu sans filtre,
+  aucun transporteur attribué), et « BL-2026 » enregistrait
+  « BL ». RÈGLE : quand un raccourci clavier valide un
+  formulaire, il transmet la valeur AFFICHÉE (e.target.value)
+  — jamais l'état, qui n'a pas encore reçu le « change ».
 - Journal des modifications, photo de référence caduque :
   au-delà de 30 % des lignes de la source OU 50 lignes
   (le plus grand des deux), ne RIEN lister. Poste
@@ -723,3 +735,33 @@ Excel) et shell.openPath (ouverture Excel).
 La règle "aucune dépendance externe" 
 s'applique au code métier uniquement, 
 pas au packaging final.
+
+RÈGLE ABSOLUE DU PASSAGE ELECTRON — L'ORIGINE
+NE DOIT PAS CHANGER. localStorage et IndexedDB
+sont cloisonnés par ORIGINE. Aujourd'hui tout
+vit sous http://localhost:8080. Un
+win.loadFile('index.html') charge la page en
+file:// — une origine DIFFÉRENTE : au premier
+double-clic sur l'icône, Faustine retrouverait
+un tableau de bord VIERGE. Perdus : entreprise,
+objectifs, saisies locales non encore portées
+dans Excel (avVentesSaisie, avAchatsSaisie,
+avGrenkeManuel), lignes annulées (avAnnule),
+réglages d'écriture (avWriteMap), photo de
+référence du journal (avSeenSnap), et les
+handles de fichiers de la base IndexedDB
+avHandles — donc les 8 sources à reconnecter
+une à une. Reproduit en navigateur réel
+(anomalie d'audit).
+⇒ Electron démarre un petit serveur local Node
+(≈40 lignes, remplaçant server.py) et charge
+l'interface par
+win.loadURL('http://localhost:8080'). Données
+retrouvées telles quelles, aucune migration,
+et /open-file peut même être conservé.
+⇒ Si l'on choisit malgré tout loadFile, il FAUT
+une migration explicite au premier lancement
+(export de sauvegarde depuis l'origine http
+puis restauration) — elle ne récupère PAS les
+handles IndexedDB. À décider par Adrian avant
+l'empaquetage, jamais après.

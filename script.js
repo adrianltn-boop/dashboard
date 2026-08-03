@@ -402,7 +402,7 @@ class Component {
   static PAY_OVERRIDE_KEY = 'avPaymentOverrides';
   static MAP_KEY = 'avMappings';
   static AVWMAP_KEY = 'avWriteMap';
-  static APP_VERSION = 'version 35';
+  static APP_VERSION = 'version 36';
   // Mention de copyright affichée dans l'interface (Paramètres) : elle n'accorde aucun
   // droit — le droit d'auteur naît de la création — mais elle informe les tiers et date la
   // revendication. La preuve d'antériorité, elle, repose sur l'historique Git et le dépôt INPI.
@@ -7494,9 +7494,15 @@ class Component {
   prefixOf(kind) { const p = (this.state.prefixes || {})[kind]; return (p != null && p !== '') ? p : (Component.DEFAULT_PREFIX[kind] || ''); }
   matchPrefix(name, prefix) { if (!prefix) return true; return this._norm(name).startsWith(this._norm(prefix)); }
   cancelPrefix() { this._pendingDir = null; this.setState({ prefixAsk: null }); }
-  async confirmPrefix() {
+  // valeurTapee : ce que le champ affiche RÉELLEMENT au moment du geste. Le champ est en
+  // `onchange` (jamais `oninput`) et onPrefixKey faisait preventDefault() puis confirmPrefix()
+  // DANS le keydown — donc AVANT que le navigateur n'émette « change ». confirmPrefix lisait
+  // alors state.prefixAskValue restée à la valeur d'OUVERTURE : « Chronopost, DHL, Heppner »
+  // tapé puis validé par Entrée enregistrait une chaîne VIDE, et le dossier était lu sans
+  // aucun filtre. La valeur affichée fait foi.
+  async confirmPrefix(valeurTapee) {
     const ask = this.state.prefixAsk; const dir = this._pendingDir; if (!ask || !dir) { this.setState({ prefixAsk: null }); return; }
-    const kind = ask.kind; const prefix = (this.state.prefixAskValue || '').trim();
+    const kind = ask.kind; const prefix = String(valeurTapee != null ? valeurTapee : (this.state.prefixAskValue || '')).trim();
     const prefixes = { ...(this.state.prefixes || {}), [kind]: prefix }; this.saveJSON(Component.PREFIX_KEY, prefixes);
     this.setState({ prefixes, prefixAsk: null });
     if (kind === 'stock') { this._stockDir = dir; this.idbSet('dir:stock', { type: 'dir', role: 'stock', name: dir.name, handle: dir }); await this.refreshStockFolder(dir, false); }
@@ -11858,9 +11864,9 @@ class Component {
       : 'Ne lire que les ' + prefixAskThing + ' dont le nom commence par le texte ci-dessous. Laissez vide pour lister tous les fichiers du dossier.') : '';
     const prefixAskValue = this.state.prefixAskValue || '';
     const onPrefixInput = e => this.setState({ prefixAskValue: e.target.value });
-    const onPrefixConfirm = () => this.confirmPrefix();
+    const onPrefixConfirm = () => { const inp = document.querySelector('[data-prefix-input]'); this.confirmPrefix(inp ? inp.value : undefined); };
     const onPrefixCancel = () => this.cancelPrefix();
-    const onPrefixKey = e => { if (e.key === 'Enter') { e.preventDefault(); this.confirmPrefix(); } else if (e.key === 'Escape') this.cancelPrefix(); };
+    const onPrefixKey = e => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target ? e.target.value : ''; this.setState({ prefixAskValue: v }); this.confirmPrefix(v); } else if (e.key === 'Escape') this.cancelPrefix(); };
     const prefixInputStyle = 'width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #dde3ec;border-radius:9px;font-size:13px;font-family:\'IBM Plex Mono\',monospace;color:#0e1b2e';
     const prefixConfirmStyle = `padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit`;
     const prefixCancelStyle = 'padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#69788c;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit';
