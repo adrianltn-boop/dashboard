@@ -565,6 +565,140 @@
   fausses alertes). On le dit franchement, on enregistre
   la nouvelle photo, on ne demande rien.
 
+- CACHE DES FORMULES (<v>) : ne JAMAIS l'effacer en masse.
+  patchXlsxFile vidait le <v> de TOUTES les formules de la
+  feuille écrite pour forcer Excel à recalculer. Excel
+  recalculait bien, mais le TABLEAU DE BORD lit le fichier,
+  pas Excel : une vente vidait les 12 868 valeurs du
+  « Suivi des paiements », qui passait de 1 721 lignes
+  lisibles à 9 jusqu'à réouverture manuelle dans Excel.
+  RÈGLE : demander le recalcul par l'attribut prévu
+  (calcPr fullCalcOnLoad, inséré AVANT oleSize /
+  customWorkbookViews / pivotCaches / extLst — séquence
+  CT_Workbook, même famille de piège que <strike/>), et
+  n'effacer que les caches DÉPENDANT des cellules écrites,
+  dans la seule ligne touchée. Formule partagée sans texte
+  (<f t="shared" si="3"/>) : résoudre la maîtresse par si,
+  et comparer les COLONNES (ses références se décalent).
+  Mesuré sur le classeur réel : 3 cellules changées au lieu
+  de 12 868.
+- SUPPRESSION DE calcChain : TROIS gestes, pas deux. La
+  partie xl/calcChain.xml, son Override dans
+  [Content_Types].xml, ET la relation dans
+  xl/_rels/workbook.xml.rels. En laisser une qui désigne
+  une partie absente produit « nous avons trouvé un
+  problème dans le contenu » à l'ouverture — le défaut
+  signalé par Faustine, invisible sous LibreOffice et
+  openpyxl, plus tolérants. _devalueFormulas le faisait,
+  patchXlsxFile non.
+- SAUVEGARDE DATÉE : horodatage à la SECONDE + suffixe en
+  cas de collision. À la minute, les 3-4 écritures d'un
+  seul achat portaient le même nom et s'écrasaient : il ne
+  restait que l'état intermédiaire, et revenir à l'état
+  d'avant l'achat — la promesse de « pas de sauvegarde, pas
+  d'écriture » — était impossible.
+- LIGNE DE CHÉQUIER DÉJÀ REMPLIE : ne jamais réécrire.
+  _locateChequeRow retrouve un numéro pré-imprimé sans
+  juger de son contenu. Deux causes cumulées faisaient
+  écraser un chèque émis : _paiementAfterWrite ne rappelait
+  pas _refreshChequiersLive (le numéro consommé était
+  reproposé), et rien ne vérifiait que la ligne était
+  vierge. On REFUSE en nommant ce que la ligne porte et le
+  premier numéro libre.
+- Colonne « Chèque » d'une facture : elle ACCUMULE les
+  numéros séparés par « / » (c'est ainsi que la relecture
+  la lit). L'écraser rendait le premier chèque orphelin —
+  plus aucun bouton ne le voyait, il sortait du total
+  encaissé. Et « Chèque X/Y » se compte sur les numéros
+  réellement présents, jamais « 1/1 » en dur.
+- « Payé » (achats) et « Payée » (ventes, factures)
+  désignent le MÊME état et cohabitent sur les mêmes
+  listes. Les comparer par égalité stricte à « Payé »
+  excluait toute vente réelle — seule la DÉMO portait le
+  masculin, d'où un tableau de bord juste en démo et faux
+  en production : « Flux net (période) » valait
+  −décaissements en permanence. Un seul prédicat,
+  _estPaye().
+- _etatAttendu : un solde NÉGATIF est un TROP-PERÇU, donc
+  PAYÉE. `Math.abs(s) <= 0.005` ne retenait que le solde
+  exactement nul : une facture de 1 000 € réglée 1 200 €
+  était écrite « PAYÉE » et attendue « PARTIELLEMENT
+  RÉGLÉE », en boucle sans fin. _paySuiviEtat testait déjà
+  `solde <= 0.005`.
+- Colonne « Remains » de Grenke : SIGNE INVERSÉ (négative
+  quand il reste à recevoir). Le correctif avait été posé
+  sur le KPI (gDueOf) mais ni sur _grenkeEtat ni sur la
+  colonne du tableau : un dossier à −10 544 € se déclarait
+  SOLDÉ, en vert. Le restant dû est la valeur ABSOLUE.
+- _grkEtatConnu : tester les NÉGATIONS en premier.
+  « NON PAYE », « pas réglé », « impayé », « unpaid »
+  contiennent tous un mot du solde et étaient rattachés à
+  SOLDÉ — l'inverse de ce que la cellule dit.
+- Vente financée Grenke : _etatsEcarts ignore le
+  vocabulaire Grenke et réclamait « EN ATTENTE » à chaque
+  démarrage sur une cellule que le tableau de bord venait
+  d'écrire. Même piège que le drapeau `transmis` de
+  l'onglet Grenke. Un écart n'est signalé que si la facture
+  est désormais SOLDÉE.
+- LE PREMIER CLIC APRÈS UNE FRAPPE : tout champ validé par
+  « change » émet à l'APPUI de la souris ; le rendu
+  reconstruit le DOM et le bouton visé disparaît entre
+  l'appui et le relâchement. Le remède d'onDateBlur est
+  généralisé par `champH` — l'état change tout de suite,
+  l'AFFICHAGE attend la fin du clic. Posé sur les
+  recherches (relevé, modale Lier, Bibliothèque), le champ
+  de préfixe, « Nouvelle catégorie » et les cellules de
+  l'aperçu.
+- FOND D'UNE FENÊTRE DE SAISIE : garde-fou générique
+  `fondSaisie` (clic COMMENCÉ sur le fond + rien de tapé).
+  Et le refus s'écrit DANS la fenêtre : le bandeau global
+  est recouvert par la fenêtre elle-même, un refus écrit là
+  n'est jamais lu.
+- window.open(..., 'noopener') renvoie TOUJOURS null, par
+  spécification. Le test `if (!w)` était vrai à chaque
+  ouverture RÉUSSIE : un message rouge « fenêtre bloquée »
+  s'affichait à chaque clic sur une pièce jointe. Ouvrir
+  sans la mention et couper `w.opener` à la main.
+- SUPPRESSIONS SANS FILET : véhicule, crédit, message. Ces
+  trois objets n'existent dans AUCUN fichier Excel. Ils
+  partaient au premier clic, sans confirmation ni retour.
+  Règle appliquée partout : confirmation qui NOMME et
+  CHIFFRE ce qui sera perdu, puis rétablissement tant que
+  la page n'est pas rechargée.
+- SAUVEGARDE COMPLÈTE : elle emportait la LISTE des pièces
+  jointes mais pas leur CONTENU (IndexedDB). Après
+  restauration, l'écran promettait des bulletins de paie
+  introuvables. Le zip porte désormais pieces-jointes/ +
+  index.json qui transporte la clé d'origine — un nom de
+  fichier ne peut pas la porter, « : » et « / » étant
+  interdits sous Windows.
+- RENOMMER NE DOIT RIEN DÉTACHER : fiches de paie, fichiers
+  dans IndexedDB et salaires rapprochés sont indexés par le
+  NOM. Corriger une faute de frappe rendait le dossier
+  inatteignable. Le renommage propage les clés, une seule
+  fois en fin de frappe (le champ est en `oninput`).
+- Un raccourci clavier transmet la valeur AFFICHÉE
+  (e.target.value), jamais l'état — règle du préfixe,
+  étendue à « Nouvelle catégorie » où Entrée jetait la
+  saisie et refermait la fenêtre sans un mot.
+- Une apparence de refus n'est PAS un refus : « Enregistrer
+  le réglage » était peint en gris sans attribut `disabled`
+  et activait l'écriture avec AUCUNE colonne pointée.
+- Un chiffre affiché en haut doit être la SOMME de ce qu'on
+  lit en dessous : les compteurs d'Employés totalisaient
+  des personnes retirées du roster (46h45 pour 18h00 de
+  cartes).
+- Heures : une plage INCOMPLÈTE (frappe en cours) ne met
+  plus la journée à zéro — les plages valides comptent. Le
+  mode Nuit s'applique à TOUTE plage, pas seulement à la
+  journée à plage unique. Et le ⚠ dit le diagnostic RÉEL,
+  au lieu d'un texte figé qui parlait toujours du départ
+  avant l'arrivée.
+- Messages : ce qui est AFFICHÉ comme destinataire et ce
+  qui est ENVOYÉ viennent du même calcul (msgDestinataire).
+  L'écran annonçait « À tout le monde » et le message
+  partait en privé à un profil supprimé.
+
 ## Performance (mesurée, pas supposée)
 - fmt() : JAMAIS Number.toLocaleString directement — il
   reconstruit un formateur Intl à chaque appel (~50 µs)
