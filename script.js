@@ -9145,6 +9145,18 @@ class Component {
     // ré-affichage (voir setState/_renderQuiet), sinon le champ est détruit en pleine frappe.
     // `onDateBlur` remet tout à jour dès que l'utilisatrice quitte le champ.
     const dateH = fn => e => { this._renderQuiet = true; try { fn(e); } finally { this._renderQuiet = false; } };
+    // ---------- LE PREMIER CLIC APRÈS UNE FRAPPE NE DOIT PAS ÊTRE PERDU ----------
+    // Un champ validé par « change » émet son événement au moment où l'on clique ailleurs, donc à
+    // l'APPUI de la souris. Le setState reconstruit tout le DOM : le bouton visé disparaît ENTRE
+    // l'appui et le relâchement, et le clic n'atteint jamais personne. Il faut cliquer deux fois.
+    // C'est exactement le piège déjà corrigé pour les champs date et heure (onDateBlur), jamais
+    // étendu aux champs de recherche et de saisie ordinaires. Même remède : l'état change tout de
+    // suite, l'AFFICHAGE attend la fin du clic en cours.
+    const champH = fn => e => {
+      this._renderQuiet = true;
+      try { fn(e); } finally { this._renderQuiet = false; }
+      onDateBlur();
+    };
     // Sortie d'un champ date : on remet l'affichage à jour (date prévue, filtres…). MAIS jamais
     // tout de suite — le « blur » a lieu à l'APPUI de la souris, et remplacer tout le DOM entre
     // l'appui et le relâchement détruirait le bouton visé : le clic serait purement perdu (le
@@ -10956,7 +10968,7 @@ class Component {
           const wStyle = `flex:0 0 ${colW[i2]}px;width:${colW[i2]}px;`;
           const cellBase = wStyle + cellBaseCommon;
           const cellInputStyle = cellBase + 'background:transparent;border:none;outline:none;font-family:inherit;';
-          return { v, editable: fpEditable && !tropLong, style: cellBase + (isNum ? 'text-align:right;color:#0e1b2e;' : '') + (tropLong ? 'background:#fdf6e7;' : ''), inputStyle: cellInputStyle + (isNum ? 'text-align:right;' : ''), onEdit: e => this.editFpCell(ri, i2, e.target.value) };
+          return { v, editable: fpEditable && !tropLong, style: cellBase + (isNum ? 'text-align:right;color:#0e1b2e;' : '') + (tropLong ? 'background:#fdf6e7;' : ''), inputStyle: cellInputStyle + (isNum ? 'text-align:right;' : ''), onEdit: champH(e => this.editFpCell(ri, i2, e.target.value)) };
         }),
       }));
       fpTropLongues = cellulesTropLongues;
@@ -11343,7 +11355,7 @@ class Component {
     const libraryEmpty = libAll.length === 0;
     const hasLibrary = libAll.length > 0;
     const libTypeChips = libTypes.map(name => ({ name, onClick: () => this.setState({ libType: name }), style: libType === name ? `padding:6px 12px;border-radius:99px;font-size:12px;font-weight:600;color:#fff;background:${accent};border:1px solid ${accent};cursor:pointer;font-family:inherit` : 'padding:6px 12px;border-radius:99px;font-size:12px;font-weight:500;color:#5b6b7f;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit' }));
-    const onLibSearch = e => this.setState({ libSearch: e.target.value });
+    const onLibSearch = champH(e => this.setState({ libSearch: e.target.value }));
     const libSearchStyle = 'flex:1;min-width:200px;padding:9px 12px;border:1px solid #dde3ec;border-radius:9px;font-size:13px;font-family:inherit;color:#0e1b2e;background:#fff';
     const libraryBtnStyle = folderBtnStyle;
     const libraryBtnLabel = this.state.folder ? 'Changer de dossier' : 'Connecter le dossier';
@@ -11759,7 +11771,7 @@ class Component {
     const bankEmpty = bankRaw.length === 0;
     const bankNoResult = !bankEmpty && bankFiltered.length === 0;
     const bankSearchStyle = 'width:230px;padding:7px 11px;border:1px solid #dbe2ec;border-radius:9px;font-size:12.5px;font-family:inherit;color:#0e1b2e;background:#fff';
-    const onBankQ = e => this.setState({ bankQ: e.target.value, page: 0 });
+    const onBankQ = champH(e => this.setState({ bankQ: e.target.value, page: 0 }));
     const hiddenBankChip = { show: bankHiddenCount > 0, label: `${bankHiddenCount} ligne${bankHiddenCount > 1 ? 's' : ''} masquée${bankHiddenCount > 1 ? 's' : ''} · Rétablir`, onClick: () => this.restoreHidden('bank'), style: hiddenChipStyle };
     // camembert des dépenses (repliable)
     const bankExp = bankVisible.filter(r => r.b.amt < 0);
@@ -12043,7 +12055,7 @@ class Component {
     const bankCatPickNewStyle = 'margin-top:10px;padding:8px 13px;border-radius:9px;font-size:12.5px;font-weight:600;color:#69788c;background:#f6f8fb;border:1px dashed #c9d2de;cursor:pointer;font-family:inherit;width:100%';
     // modal nouvelle catégorie
     const bankCatAskOpen = !!this.state.bankCatAsk;
-    const onBankCatInput = e => this.setState({ bankCatAskValue: e.target.value });
+    const onBankCatInput = champH(e => this.setState({ bankCatAskValue: e.target.value }));
     const onBankCatCancel = () => this.setState({ bankCatAsk: null, bankCatAskValue: '' });
     const onBankCatCommit = () => this.commitBankCat();
     const onBankCatKey = e => { if (e.key === 'Enter') this.commitBankCat(); else if (e.key === 'Escape') onBankCatCancel(); };
@@ -12054,7 +12066,7 @@ class Component {
     const bankLinkTitle = bankLinkS ? `${bankLinkS.label} — ${this.fmt(bankLinkS.amt)}` : '';
     const bankLinkHelp = bankLinkS ? `Ligne du ${bankLinkS.date}. Choisissez l'écriture interne (achat, vente, facture, crédit) qui correspond à ce mouvement — les montants identiques sont en tête de liste.` : '';
     const onBankLinkCancel = () => this.setState({ bankLink: null, bankLinkQuery: '' });
-    const onBankLinkQuery = e => this.setState({ bankLinkQuery: e.target.value });
+    const onBankLinkQuery = champH(e => this.setState({ bankLinkQuery: e.target.value }));
     const bankLinkManual = bankLinkS ? bankLinksM[bankLinkS.key] : null;
     const bankLinkHasCurrent = !!(bankLinkManual && bankLinkManual !== 'none');
     const bankLinkHasOverride = !!bankLinkManual;
@@ -12359,7 +12371,7 @@ class Component {
       ? 'Indiquez le début du nom des fichiers de chaque transporteur. Plusieurs transporteurs ? Séparez-les par une virgule (ex. « Chronopost, DHL, Heppner »). Laissez vide pour lister tous les fichiers.'
       : 'Ne lire que les ' + prefixAskThing + ' dont le nom commence par le texte ci-dessous. Laissez vide pour lister tous les fichiers du dossier.') : '';
     const prefixAskValue = this.state.prefixAskValue || '';
-    const onPrefixInput = e => this.setState({ prefixAskValue: e.target.value });
+    const onPrefixInput = champH(e => this.setState({ prefixAskValue: e.target.value }));
     const onPrefixConfirm = () => { const inp = document.querySelector('[data-prefix-input]'); this.confirmPrefix(inp ? inp.value : undefined); };
     const onPrefixCancel = () => this.cancelPrefix();
     const onPrefixKey = e => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target ? e.target.value : ''; this.setState({ prefixAskValue: v }); this.confirmPrefix(v); } else if (e.key === 'Escape') this.cancelPrefix(); };
