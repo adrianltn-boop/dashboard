@@ -402,7 +402,7 @@ class Component {
   static PAY_OVERRIDE_KEY = 'avPaymentOverrides';
   static MAP_KEY = 'avMappings';
   static AVWMAP_KEY = 'avWriteMap';
-  static APP_VERSION = 'version 31';
+  static APP_VERSION = 'version 32';
   // Mention de copyright affichée dans l'interface (Paramètres) : elle n'accorde aucun
   // droit — le droit d'auteur naît de la création — mais elle informe les tiers et date la
   // revendication. La preuve d'antériorité, elle, repose sur l'historique Git et le dépôt INPI.
@@ -2220,8 +2220,8 @@ class Component {
     hits.sort((a, z) => z.sc - a.sc || a.dd - z.dd);
     return hits;
   }
-  mapBanque(text) {
-    const { rows, find } = this.parseTable(text);
+  mapBanque(text, opts) {
+    const { rows, find, malformees } = this.parseTable(text, opts);
     const ci = {
       date: find('date operation', 'date comptable', 'date de valeur', 'date'),
       label: find('libelle operation', 'libelle', 'label', 'description', 'operation', 'detail', 'intitule', 'communication'),
@@ -2231,19 +2231,22 @@ class Component {
       solde: find('solde courant', 'solde apres', 'nouveau solde', 'solde comptable', 'solde', 'balance'),
     };
     if (ci.date < 0 || (ci.montant < 0 && ci.debit < 0 && ci.credit < 0)) return { list: [], error: 'colonnes « Date » et « Montant » (ou « Débit » / « Crédit ») introuvables' };
-    const list = []; let skipped = 0;
-    rows.forEach(f => {
-      const o = this.smartDate(f[ci.date]); if (!o) { skipped++; return; }
+    const list = []; let skipped = 0; const ecartees = [];
+    // Une ligne bancaire écartée est NOMMÉE (ligne du fichier + libellé) : un simple compteur ne
+    // permet pas de savoir ce qui manque au solde.
+    const ecarte = (i, f, pourquoi) => { skipped++; if (ecartees.length < 40) ecartees.push(`ligne ${i + 2} « ${String((ci.label >= 0 ? f[ci.label] : f[0]) || '').slice(0, 40) || '—'} » (${pourquoi})`); };
+    rows.forEach((f, i) => {
+      const o = this.smartDate(f[ci.date]); if (!o) { ecarte(i, f, 'date illisible'); return; }
       const label = ci.label >= 0 ? String(f[ci.label] || '').trim() : '';
       let amt = null;
       if (ci.montant >= 0) { const v = this.parseAmount(f[ci.montant]); if (v != null && !isNaN(v) && v !== 0) amt = v; }
       if (amt == null) { const dv = ci.debit >= 0 ? Math.abs(this.parseAmount(f[ci.debit]) || 0) : 0; const cv = ci.credit >= 0 ? Math.abs(this.parseAmount(f[ci.credit]) || 0) : 0; if (dv || cv) amt = cv - dv; }
-      if (amt == null || !label) { skipped++; return; }
+      if (amt == null || !label) { ecarte(i, f, amt == null ? 'montant illisible' : 'libellé vide'); return; }
       const sv = ci.solde >= 0 ? this.parseAmount(f[ci.solde]) : null;
       list.push({ y: o.y, m: o.m, d: o.d, label, amt: Math.round(amt * 100) / 100, solde: (sv == null || isNaN(sv)) ? null : Math.round(sv * 100) / 100 });
     });
     list.sort((a, z) => this.days(z) - this.days(a));
-    return { list, skipped, error: list.length ? null : 'aucune ligne exploitable (Date / Libellé / Montant)' };
+    return { list, skipped, malformees, ecartees, error: list.length ? null : 'aucune ligne exploitable (Date / Libellé / Montant)' };
   }
   setGrenkeLink(gref, factRef) { const m = { ...(this.state.grenkeLinks || {}) }; m[gref] = factRef; this.setState({ grenkeLinks: m, grenkeLink: null, grenkeLinkQuery: '' }); this.saveJSON(Component.GLINK_KEY, m); }
   clearGrenkeLink(gref) { const m = { ...(this.state.grenkeLinks || {}) }; delete m[gref]; this.setState({ grenkeLinks: m, grenkeLink: null, grenkeLinkQuery: '' }); this.saveJSON(Component.GLINK_KEY, m); }
@@ -6170,13 +6173,13 @@ class Component {
   async fileToText(file, kind) { if (/\.(xlsx|xlsm)$/i.test(file.name)) { const buf = await file.arrayBuffer(); return await this.xlsxToText(buf, this.sheetOpts(kind)); } return await file.text(); }
 
   // ---------- crédits / assurances ----------
-  mapCredits(text) {
-    const { rows, find } = this.parseTable(text);
+  mapCredits(text, opts) {
+    const { rows, find, malformees } = this.parseTable(text, opts);
     const ci = { label: find('denomination', 'libelle', 'intitule', 'designation', 'nom'), type: find('type', 'nature'), ent: find('entreprise', 'organisme', 'banque'), total: find('montant total', 'total', 'capital'), mens: find('mensualite', 'echeance mensuelle', 'par mois'), rest: find('restant', 'reste', 'solde', 'du'), paid: find('paye', 'regle', 'rembourse') };
     if (ci.total < 0 && ci.mens < 0) return { list: [], error: 'colonnes « Montant total » ou « Mensualité » introuvables' };
     const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     const list = rows.filter(f => (ci.label >= 0 && f[ci.label]) || (ci.total >= 0 && this.parseAmount(f[ci.total]))).map((f, i) => { const total = ci.total >= 0 ? (this.parseAmount(f[ci.total]) || 0) : 0; const rest = ci.rest >= 0 ? (this.parseAmount(f[ci.rest]) || 0) : 0; const paid = ci.paid >= 0 ? (this.parseAmount(f[ci.paid]) || 0) : Math.max(0, total - rest); const t = ci.type >= 0 ? norm(f[ci.type]) : norm((ci.label >= 0 && f[ci.label]) || ''); return { label: (ci.label >= 0 && f[ci.label]) || ('Engagement ' + (i + 1)), ent: (ci.ent >= 0 && f[ci.ent]) || '—', type: t.includes('assur') ? 'Assurance' : 'Crédit', mens: ci.mens >= 0 ? (this.parseAmount(f[ci.mens]) || 0) : 0, total, rest: ci.rest >= 0 ? rest : Math.max(0, total - paid), paid: Math.max(0, Math.min(total || paid, paid)), next: '2026-07-31' }; });
-    return { list };
+    return { list, malformees };
   }
 
   fallbackCopy(txt) { try { const ta = document.createElement('textarea'); ta.value = txt; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); document.body.removeChild(ta); return ok; } catch (e) { return false; } }
@@ -6255,23 +6258,47 @@ class Component {
   setObj(key, val) { const obj = { ...(this.state.obj || {}) }; obj[key] = val; this.setState({ obj }); this.saveJSON(Component.OBJ_KEY, obj); }
 
   // ---------- parsing ----------
-  parseTable(text) {
+  // opts.sep      : s\u00E9parateur IMPOS\u00C9. Les flux internes (emitTSV) ont une structure CONNUE \u2014
+  //                 tabulation. La re-deviner corrompait tout : sepScore prend le MAXIMUM sur
+  //                 15 lignes, et un libell\u00E9 bancaire ordinaire (\u00AB PRLV SEPA EDF, REF 4471,
+  //                 MDT 908812, ECH 03/26 \u00BB) portant 3 virgules suffisait \u00E0 faire \u00E9lire \u00AB , \u00BB
+  //                 sur un gabarit \u00E0 4 colonnes. Toutes les colonnes s'effondraient en une, et
+  //                 parseDate/parseAmount retombaient par hasard sur des chiffres plausibles :
+  //                 import annonc\u00E9 en VERT, montants faux.
+  // opts.brut     : pas de grammaire CSV. Dans un flux TSV interne, le guillemet est un
+  //                 caract\u00E8re ORDINAIRE (\u00AB CREVETTES 16/20 5" LOT \u00BB, \u00AB LE P"TIT MOUSSE \u00BB).
+  //                 Le traiter comme une citation avalait les tabulations suivantes, fusionnait
+  //                 les colonnes Montant et Date, et faisait dispara\u00EEtre la ligne enti\u00E8re.
+  // opts.headerIdx: ligne d'en-t\u00EAte IMPOS\u00C9E (emitTSV la pose toujours en premi\u00E8re ligne) ;
+  //                 sans quoi une ligne de donn\u00E9es mieux not\u00E9e pouvait \u00EAtre prise pour l'en-t\u00EAte.
+  parseTable(text, opts) {
     text = String(text || '').replace(/^\uFEFF/, '');
-    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const impose = opts && opts.sep;
+    // Un flux \u00E0 s\u00E9parateur impos\u00E9 n'est PAS retaill\u00E9 ligne par ligne : \u00AB \tDupont\t12 \u00BB commence
+    // par une colonne vide, et un trim() de la ligne d\u00E9calerait toutes les colonnes d'un cran.
+    const lines = text.split(/\r?\n/).map(l => impose ? l.replace(/\r$/, '') : l.trim()).filter(l => l.trim());
     if (lines.length < 2) return { header: [], rows: [], find: () => -1 };
     const probe = lines.slice(0, 15);
     const sepScore = s => probe.reduce((m, l) => Math.max(m, l.split(s).length), 0);
-    const sep = [';', ',', '\t'].reduce((b, s) => sepScore(s) > sepScore(b) ? s : b, ';');
-    const split = line => { const out = []; let cur = '', q = false; for (let i = 0; i < line.length; i++) { const ch = line[i];
-      if (ch === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; } else if (ch === sep && !q) { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out.map(x => x.trim()); };
+    const sep = impose || [';', ',', '\t'].reduce((b, s) => sepScore(s) > sepScore(b) ? s : b, ';');
+    const brut = (opts && opts.brut != null) ? !!opts.brut : !!impose;
+    const split = brut
+      ? line => line.split(sep).map(x => x.trim())
+      : line => { const out = []; let cur = '', q = false; for (let i = 0; i < line.length; i++) { const ch = line[i];
+          if (ch === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; } else if (ch === sep && !q) { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out.map(x => x.trim()); };
     const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
     const KW = ['date', 'montant', 'facture', 'client', 'fournisseur', 'paiement', 'paiment', 'semaine', 'statut', 'reference', 'numero', 'ttc', 'solde', 'echeance', 'poids', 'total', 'destinataire', 'transporteur', 'valo', 'mortalite', 'partenaire', 'categorie'];
     let hi = 0, hscore = -1;
-    for (let i = 0; i < Math.min(lines.length, 15); i++) { const cs = split(lines[i]).map(norm); const sc = cs.filter(c => c && KW.some(k => c.includes(k))).length; if (sc > hscore) { hscore = sc; hi = i; } }
+    if (opts && opts.headerIdx != null) hi = opts.headerIdx;
+    else for (let i = 0; i < Math.min(lines.length, 15); i++) { const cs = split(lines[i]).map(norm); const sc = cs.filter(c => c && KW.some(k => c.includes(k))).length; if (sc > hscore) { hscore = sc; hi = i; } }
     const header = split(lines[hi]).map(norm);
     const rows = lines.slice(hi + 1).map(split);
     const find = (...keys) => { for (const k of keys) { const idx = header.findIndex(h => h.includes(k)); if (idx >= 0) return idx; } return -1; };
-    return { header, rows, find };
+    // Contr\u00F4le de structure : sur un flux interne, chaque ligne DOIT porter le m\u00EAme nombre de
+    // colonnes que l'en-t\u00EAte. Une divergence signale une lecture qui a d\u00E9rap\u00E9 \u2014 on la remonte
+    // au lieu de laisser passer des chiffres plausibles.
+    const malformees = impose ? rows.reduce((n, r) => n + (r.length === header.length ? 0 : 1), 0) : 0;
+    return { header, rows, find, malformees, nbColonnes: header.length };
   }
   parseDate(s) { return this.smartDate(s); }
   vDate(mo, d, y) {
@@ -6297,8 +6324,8 @@ class Component {
     return null;
   }
 
-  mapOperations(text) {
-    const { rows, find } = this.parseTable(text);
+  mapOperations(text, opts) {
+    const { rows, find, malformees } = this.parseTable(text, opts);
     const ci = { date: find('date'), ref: find('ref', 'piece', 'numero', 'n°'), type: find('type', 'sens', 'nature'), partner: find('partenaire', 'tiers', 'client', 'fournisseur', 'libelle', 'nom'), cat: find('categorie', 'famille', 'rubrique'), amt: find('montant', 'total', 'somme', 'valeur', 'amount', 'prix'), paid: find('paye', 'regle', 'cheque'), solde: find('solde', 'restant', 'reste'), status: find('statut', 'status', 'etat', 'reglement'), chq: find('cheque') };
     if (ci.date < 0 || ci.amt < 0) return { list: [], error: 'colonnes « Date » et « Montant » introuvables' };
     const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -6328,7 +6355,7 @@ class Component {
       const colA = String(f[0] == null ? '' : f[0]).trim();
       list.push({ y: dt.y, m: dt.m, d: dt.d, ref: (ci.ref >= 0 && f[ci.ref]) || 'OP-' + (i + 1), type, partner: (ci.partner >= 0 && f[ci.partner]) || '—', cat: (ci.cat >= 0 && f[ci.cat]) || 'Autre', amt: type === 'Achat' ? -gross : gross, paid, reste, status, paymentWarning, chq, colA }); });
     list.sort((a, b) => (b.y * 12 + b.m) - (a.y * 12 + a.m) || b.d - a.d);
-    return { list, skipped };
+    return { list, skipped, malformees };
   }
   // Détecte ce que contient la colonne « Chèque » d'une facture pêcheur : un ou plusieurs numéros
   // purs (« 602407 » ou « 602407 / 516906 »), code virement (« BB »), observation libre, ou vide.
@@ -6354,8 +6381,8 @@ class Component {
   }
   // Texte de la colonne OBS du chéquier : « Chèque X/Y — Facture N°REF ».
   _chequeObsText(idx, total, ref) { return `Chèque ${idx}/${total} — Facture N°${ref}`; }
-  mapFactures(text) {
-    const { header, rows, find } = this.parseTable(text);
+  mapFactures(text, opts) {
+    const { header, rows, find, malformees } = this.parseTable(text, opts);
     const clientCol = find('nom du client', 'nom client', 'clients', 'client'), fournCol = find('fournisseur');
     const ci = {
       date: find('date facture', 'date de facture', 'date', 'emis'),
@@ -6377,9 +6404,16 @@ class Component {
     // garde : une colonne « Date … » ne doit jamais servir de montant payé
     if (ci.paid >= 0 && /date/.test(norm(header[ci.paid] || ''))) ci.paid = -1;
     const defSens = clientCol >= 0 ? 'Client' : fournCol >= 0 ? 'Fournisseur' : 'Client';
-    const list = []; let skipped = 0;
+    const list = []; let skipped = 0; const ecartees = [];
     rows.forEach((f, i) => {
-      const dt = this.parseDate(f[ci.date]); const ttc = this.parseAmount(f[ci.ttc]); if (!dt || ttc === null) { skipped++; return; }
+      const dt = this.parseDate(f[ci.date]); const ttc = this.parseAmount(f[ci.ttc]);
+      // Ligne écartée : on dit LAQUELLE (n° de facture, tiers, ligne du fichier) et POURQUOI.
+      // « 2 lignes ignorées » cachait 6 000 € sur 12 000 €.
+      if (!dt || ttc === null) {
+        skipped++;
+        if (ecartees.length < 40) ecartees.push(`ligne ${i + 2}${ci.ref >= 0 && f[ci.ref] ? ' · ' + String(f[ci.ref]).slice(0, 20) : ''}${ci.partner >= 0 && f[ci.partner] ? ' · ' + String(f[ci.partner]).slice(0, 28) : ''} (${!dt ? 'date illisible' : 'montant TTC illisible'})`);
+        return;
+      }
       let sens = defSens; if (ci.sens >= 0) { const s = norm(f[ci.sens]); if (s.startsWith('f') || s.includes('achat') || s.includes('fourni')) sens = 'Fournisseur'; else if (s.startsWith('c') || s.includes('vente')) sens = 'Client'; }
       // Réglé prioritaire ; sinon Solde (solde 0 = payé, solde vide = inconnu → 0 payé)
       const _paidRaw = ci.paid >= 0 ? this.parseAmount(f[ci.paid]) : null;
@@ -6407,7 +6441,7 @@ class Component {
       const htv = ci.ht >= 0 ? Math.abs(this.parseAmount(f[ci.ht]) || 0) : Math.abs(ttc);
       list.push({ d: this.iso(dt), due: this.iso(due), ref: (ci.ref >= 0 && f[ci.ref]) || 'FAC-' + (i + 1), sens, partner: (ci.partner >= 0 && f[ci.partner]) || '—', cat: (ci.cat >= 0 && f[ci.cat]) || 'Autre', ttc: Math.abs(ttc), ht: htv, paid: Math.max(0, Math.min(Math.abs(ttc), paid)), statusPaid: !!statusPaid, paymentStatus, paymentWarning, stText: ci.status >= 0 ? (f[ci.status] || '') : '', delai: delaiJ });
     });
-    return { list, skipped };
+    return { list, skipped, malformees, ecartees };
   }
   paymentIssueSignature(f, issue) {
     const i = issue || f.paymentIssue || {};
@@ -6550,8 +6584,8 @@ class Component {
     }
     this.savePayTrack(list);
   }
-  mapBordereaux(text) {
-    const { rows, find } = this.parseTable(text);
+  mapBordereaux(text, opts) {
+    const { rows, find, malformees } = this.parseTable(text, opts);
     const ci = { date: find('date'), ref: find('bordereau', 'bl', 'ref', 'numero', 'n°'), dest: find('destinataire', 'client', 'livraison', 'nom'), fac: find('facture', 'commande'), colis: find('colis', 'quantite', 'nb'), transp: find('transporteur', 'transport'), statut: find('statut', 'status', 'etat') };
     if (ci.date < 0 || ci.dest < 0) return { list: [], error: 'colonnes « Date » et « Destinataire » introuvables' };
     const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -6560,19 +6594,19 @@ class Component {
       let statut = 'Préparé'; if (ci.statut >= 0) { const s = norm(f[ci.statut]); if (s.includes('livr')) statut = 'Livré'; else if (s.includes('transit')) statut = 'En transit'; else if (s.includes('exped') || s.includes('envoi')) statut = 'Expédié'; else if (s.includes('attente')) statut = 'En attente'; }
       list.push({ d: this.iso(dt), ref: (ci.ref >= 0 && f[ci.ref]) || 'BL-' + (i + 1), dest: f[ci.dest], fac: (ci.fac >= 0 && f[ci.fac]) || '—', colis: (ci.colis >= 0 && f[ci.colis]) || '—', transp: (ci.transp >= 0 && f[ci.transp]) || '—', statut }); });
     list.sort((a, b) => a.d < b.d ? 1 : -1);
-    return { list, skipped };
+    return { list, skipped, malformees };
   }
-  mapComptable(text) {
-    const { rows, find } = this.parseTable(text);
+  mapComptable(text, opts) {
+    const { rows, find, malformees } = this.parseTable(text, opts);
     const ci = { date: find('date'), ref: find('numero de facture', 'facture', 'piece', 'numero', 'reference', 'ref'), partner: find('partenaire', 'client', 'fournisseur', 'tiers', 'compte', 'nom'), montant: find('montant ttc', 'montant', 'ttc', 'total') };
     if (ci.ref < 0 && ci.montant < 0) return { list: [], error: 'colonnes « N° de facture » ou « Montant » introuvables' };
     const list = []; let skipped = 0;
     rows.forEach(f => { const ref = (ci.ref >= 0 && String(f[ci.ref]).trim()) || ''; const amount = ci.montant >= 0 ? Math.abs(this.parseAmount(f[ci.montant]) || 0) : 0; if (!ref && !amount) { skipped++; return; } const dt = ci.date >= 0 ? this.smartDate(f[ci.date]) : null; list.push({ ref, partner: (ci.partner >= 0 && String(f[ci.partner]).trim()) || '—', amount, d: dt ? this.iso(dt) : '' }); });
     if (!list.length) return { list: [], error: 'aucune ligne exploitable' };
-    return { list, skipped };
+    return { list, skipped, malformees };
   }
-  mapStock(text, hint) {
-    const { rows, find } = this.parseTable(text);
+  mapStock(text, hint, opts) {
+    const { rows, find, malformees } = this.parseTable(text, opts);
     const ci = { sem: find('semaine', 'periode', 'fichier'), poids: find('poids total', 'poids kg', 'poids', 'kg', 'quantite', 'total kg'), valo: find('total prix', 'prix total', 'valorisation', 'valo', 'valeur', 'total', 'montant') };
     if (ci.valo < 0 && ci.poids < 0) return { list: [], error: 'colonnes « Poids » ou « Total prix » introuvables' };
     // Feuille RECAP (une ligne par espèce, pas de colonne semaine) → un TOTAL par fichier
@@ -6580,10 +6614,10 @@ class Component {
       let poids = 0, valo = 0;
       rows.forEach(f => { poids += ci.poids >= 0 ? (this.parseAmount(f[ci.poids]) || 0) : 0; valo += ci.valo >= 0 ? (this.parseAmount(f[ci.valo]) || 0) : 0; });
       const wk = hint ? String(hint).replace(/\.(xlsx|xlsm|xls|csv|txt)$/i, '') : 'Total';
-      return { list: [{ file: hint || '', sem: wk, poids, valo }] };
+      return { list: [{ file: hint || '', sem: wk, poids, valo }], malformees };
     }
     const list = rows.map((f, i) => ({ file: '', sem: (ci.sem >= 0 && f[ci.sem]) || ('Semaine ' + (i + 1)), poids: ci.poids >= 0 ? (this.parseAmount(f[ci.poids]) || 0) : 0, valo: ci.valo >= 0 ? (this.parseAmount(f[ci.valo]) || 0) : 0 }));
-    return { list };
+    return { list, malformees };
   }
   setBlStatut(ref, val) { const ov = { ...(this.state.blOverrides || {}) }; ov[ref] = val; this.setState({ blOverrides: ov }); this.saveJSON(Component.BLOV_KEY, ov); }
 
@@ -6820,7 +6854,11 @@ class Component {
       let hi = p.headerIdx;
       if (p.combine && sh !== chosen) { hi = sh.rows.findIndex(r => sig(r) === chosenSig); if (hi < 0) return; }
       const passes = [p.fields]; const tw = twinOf(sh.rows[hi]); if (tw) passes.push(tw);
-      sh.rows.slice(hi + 1).forEach(r => { if (!r.some(c => String(c).trim())) return; passes.forEach(flds => { const v = spec.emit(r, flds); if (v) out.push(v.map(x => String(x == null ? '' : x)).join('\t')); }); });
+      // Une cellule Excel peut contenir une tabulation ou un retour à la ligne (saisie multiligne).
+      // Sans neutralisation, elle ferait naître une colonne ou une ligne fantôme dans le flux
+      // interne — exactement le genre de décalage silencieux qui fausse les montants.
+      const plat = x => String(x == null ? '' : x).replace(/[\t\r\n]+/g, ' ');
+      sh.rows.slice(hi + 1).forEach(r => { if (!r.some(c => String(c).trim())) return; passes.forEach(flds => { const v = spec.emit(r, flds); if (v) out.push(v.map(plat).join('\t')); }); });
     });
     return out.join('\n');
   }
@@ -7369,7 +7407,7 @@ class Component {
   analyzeStockWorkbook(wb, fileName) {
     const summaries = [];
     (wb || []).forEach((sh, index) => {
-      const res = this.mapStock((sh.rows || []).map(r => r.join('\t')).join('\n'), fileName);
+      const res = this.mapStock((sh.rows || []).map(r => r.join('\t')).join('\n'), fileName, { sep: '\t', brut: true });
       if (!res.list || !res.list.length) return;
       const poids = res.list.reduce((s, r) => s + (+r.poids || 0), 0);
       const valo = res.list.reduce((s, r) => s + (+r.valo || 0), 0);
@@ -7794,16 +7832,29 @@ class Component {
   }
   applyImport(kind, text, name, silent) {
     let res, key, patch;
-    if (kind === 'factures') { res = this.mapFactures(text); key = Component.FAC_KEY; }
-    else if (kind === 'bordereaux') { res = this.mapBordereaux(text); key = Component.BL_KEY; }
-    else if (kind === 'stock') { res = this.mapStock(text, name); key = Component.STK_KEY; }
-    else if (kind === 'credits') { res = this.mapCredits(text); key = Component.CRED_KEY; }
-    else if (kind === 'comptable') { res = this.mapComptable(text); key = Component.CMP_KEY; }
-    else if (kind === 'banque') { res = this.mapBanque(text); key = Component.BNK_KEY; }
-    else if (kind === 'ventes') { res = this.mapFactures(text); key = Component.VEN_KEY; }
-    else { res = this.mapOperations(text); key = Component.OPS_KEY; }
+    // Le texte reçu ici vient TOUJOURS d'emitTSV : sa structure est connue (tabulation, en-tête en
+    // première ligne, aucune citation CSV). On l'annonce au lecteur au lieu de le laisser deviner.
+    const fmtInterne = { sep: '\t', brut: true, headerIdx: 0 };
+    if (kind === 'factures') { res = this.mapFactures(text, fmtInterne); key = Component.FAC_KEY; }
+    else if (kind === 'bordereaux') { res = this.mapBordereaux(text, fmtInterne); key = Component.BL_KEY; }
+    else if (kind === 'stock') { res = this.mapStock(text, name, fmtInterne); key = Component.STK_KEY; }
+    else if (kind === 'credits') { res = this.mapCredits(text, fmtInterne); key = Component.CRED_KEY; }
+    else if (kind === 'comptable') { res = this.mapComptable(text, fmtInterne); key = Component.CMP_KEY; }
+    else if (kind === 'banque') { res = this.mapBanque(text, fmtInterne); key = Component.BNK_KEY; }
+    else if (kind === 'ventes') { res = this.mapFactures(text, fmtInterne); key = Component.VEN_KEY; }
+    else { res = this.mapOperations(text, fmtInterne); key = Component.OPS_KEY; }
     if (!res.list.length) { this.setState({ msg: { kind: 'error', text: `Import de « ${name} » impossible : ${res.error || 'aucune ligne valide'}.` } }); return; }
     let done = `${res.list.length} ligne${res.list.length > 1 ? 's' : ''} importée${res.list.length > 1 ? 's' : ''}${res.skipped ? ` (${res.skipped} ignorée${res.skipped > 1 ? 's' : ''})` : ''}`;
+    // Une ligne écartée n'est jamais un simple compteur : on dit LESQUELLES. Un chiffre d'affaires
+    // amputé de moitié ne doit pas tenir dans le mot « ignorées ».
+    const ecartees = Array.isArray(res.ecartees) ? res.ecartees : [];
+    if (ecartees.length) done += ` — non lue(s) : ${ecartees.slice(0, 6).join(' ; ')}${ecartees.length > 6 ? ` … et ${ecartees.length - 6} autre(s)` : ''}`;
+    // Structure incohérente : la lecture a dérapé, on ne présente JAMAIS ça comme un succès.
+    if (res.malformees) {
+      const t = `Import de « ${name} » REFUSÉ : ${res.malformees} ligne(s) n'ont pas le bon nombre de colonnes — la lecture du fichier a dérapé et les montants seraient faux. Rien n'a été importé. Vérifiez la feuille et la ligne d'en-tête choisies (« ⚙ Régler l'écriture » / « Revoir les colonnes »).`;
+      this.setState({ msg: { kind: 'error', text: t } });
+      return;
+    }
     if (kind === 'ventes' || kind === 'factures') { const nP = res.list.filter(r => r.statusPaid || (r.paid || 0) >= (r.ttc || 0) - 0.005).length; done += ` — ${nP} payée${nP > 1 ? 's' : ''}, ${res.list.length - nP} à suivre`; if (!nP && res.list.length > 3) { done += ' ⚠ aucune facture payée détectée : vérifiez le mappage des colonnes Réglé/Solde/État'; const mi = this._mapInfo; if (mi && mi.kind === kind) done += ` [feuille « ${mi.sheet} » — ${mi.desc}]`; } }
     if (kind === 'factures') patch = { factures: res.list, facturesName: name };
     else if (kind === 'bordereaux') patch = { bordereaux: res.list, bordereauxName: name };

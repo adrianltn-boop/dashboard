@@ -423,6 +423,36 @@
   contrôle cellule par cellule. Fermer l'aperçu n'écrit plus
   rien (avant, « Retour » enregistrait) : premier clic =
   avertissement, second = fermeture assumée.
+- IMPORT, parseTable : ne JAMAIS re-deviner la structure
+  d'un flux qu'on a soi-même produit. applyImport reçoit
+  TOUJOURS la sortie d'emitTSV (tabulation, en-tête en
+  première ligne, aucune citation CSV) ; parseTable la
+  jetait et re-devinait le séparateur. sepScore prend le
+  MAXIMUM sur 15 lignes : un libellé bancaire ordinaire
+  (« PRLV SEPA EDF, REF 4471, MDT 908812, ECH 03/26 »)
+  portant 3 virgules faisait élire « , » sur un gabarit à
+  4 colonnes. Toutes les colonnes s'effondraient en une, et
+  parseDate/parseAmount retombaient par hasard sur des
+  chiffres plausibles : message VERT « 3 lignes importées »
+  avec des montants de 3, 4 et 5 €. Et la grammaire CSV
+  appliquée au même flux faisait disparaître toute ligne
+  contenant un guillemet impair (« CREVETTES 16/20 5" LOT »,
+  « LE P"TIT MOUSSE ») : 6 000 € sur 12 000 € perdus derrière
+  « 2 lignes ignorées ». RÈGLE : parseTable(texte,
+  { sep:'\t', brut:true, headerIdx:0 }) pour tout flux
+  interne ; la détection automatique ne subsiste que pour un
+  texte d'origine inconnue.
+  PIÈGE VOISIN, corrigé du même geste : parseTable faisait
+  l.trim() sur CHAQUE ligne — une première colonne vide
+  (« \tDupont\t12 ») décalait toutes les suivantes d'un cran.
+  Et emitTSV n'aplatissait pas les cellules : une tabulation
+  ou un retour à la ligne saisi dans Excel créait une colonne
+  ou une ligne fantôme.
+  CONTRÔLE : une ligne dont le nombre de colonnes diffère de
+  l'en-tête fait REFUSER l'import (message rouge), jamais un
+  succès vert. Et une ligne écartée est NOMMÉE (n° de
+  facture, tiers, n° de ligne, raison) — un chiffre d'affaires
+  amputé de moitié ne tient pas dans le mot « ignorées ».
 - Journal des modifications, photo de référence caduque :
   au-delà de 30 % des lignes de la source OU 50 lignes
   (le plus grand des deux), ne RIEN lister. Poste
