@@ -1168,7 +1168,13 @@ class Component {
           put(sloc.sheetName, rowIdx, sloc.cols.solde, Math.round((this._vNum(rec.ttc) - this._vNum(rec.avoir) - this._vNum(rec.regle)) * 100) / 100, 'Solde restant (Suivi des paiements)', this.fmt(Math.round((this._vNum(rec.ttc) - this._vNum(rec.avoir) - this._vNum(rec.regle)) * 100) / 100));
           if (rec.datePay) putDate(sloc.sheetName, rowIdx, sloc.cols.datePay, rec.datePay, 'Date du paiement (Suivi des paiements)');
           put(sloc.sheetName, rowIdx, sloc.cols.etat, rec.etat, 'État (Suivi des paiements)');
-          if (rec.avoir > 0) put(sloc.sheetName, rowIdx, sloc.cols.avoir, rec.avoir, 'Avoir (Suivi des paiements)', this.fmt(rec.avoir));
+          // L'AVOIR EST TOUJOURS ÉCRIT, MÊME À ZÉRO. Il ne l'était que s'il était strictement
+          // positif : effacer un avoir du formulaire laissait donc l'ANCIENNE valeur dans la
+          // cellule, alors que le Solde juste au-dessus était réécrit SANS elle. Le fichier
+          // portait dès lors un solde qui ne correspondait plus à ses propres colonnes, et le
+          // contrôle des soldes signalait un écart à chaque relecture. Écrire une case vide plutôt
+          // qu'un zéro : une case vide n'est pas un montant, c'est l'absence d'avoir.
+          put(sloc.sheetName, rowIdx, sloc.cols.avoir, this._vNum(rec.avoir) > 0 ? rec.avoir : '', 'Avoir (Suivi des paiements)', this._vNum(rec.avoir) > 0 ? this.fmt(rec.avoir) : '—');
           sheets.push(sloc.sheetName);
         } else {
           // TRANSPARENCE : la feuille existe mais la ligne est introuvable. On le DIT dans l'aperçu,
@@ -1536,6 +1542,17 @@ class Component {
     // les vues opérationnelles (suivi de paiement, Grenke) ne sont alimentées qu'APRÈS le succès.
     if (i >= 0) { this.setState({ msg: { kind: 'error', text: 'La modification d’une vente déjà enregistrée n’est pas encore disponible : corrigez-la directement dans votre fichier Excel. (Bientôt : correction guidée.)' } }); return; }
     if (!this._venteWriteReady()) { this.setState({ msg: { kind: 'error', text: 'Avant d’enregistrer une vente, réglez l’écriture de votre fichier : Paramètres → « Ventes client » → « Régler l’écriture », puis connectez le fichier. Rien n’est enregistré tant que le fichier ne peut pas être écrit.' } }); return; }
+    // UNE FACTURE SANS NUMÉRO NE DOIT PAS PARTIR DANS LE FICHIER.
+    // Quand la dernière ligne pré-imprimée du classeur a déjà été utilisée — cas courant : le
+    // numéro a été tapé directement dans Excel — le champ « N° de facture » reste vide, le repère
+    // vert disparaît sans explication, l'aperçu affiche « — », et l'écriture se faisait quand même,
+    // avec un message de succès vert. Une facture sans numéro est ensuite introuvable par la
+    // relance, le duplicata et l'enregistrement d'un paiement, et elle échappe au dédoublonnage
+    // par numéro — la famille des « 7000 ». On refuse, en disant quoi faire.
+    if (!rec.num) {
+      this.setState({ msg: { kind: 'error', text: 'Aucun numéro de facture n’a pu être lu dans votre fichier : la dernière ligne pré-imprimée est déjà utilisée. Ajoutez la ligne suivante avec son numéro dans le classeur (colonne des numéros), puis « ⟳ Rafraîchir ». Rien n’a été enregistré — une facture sans numéro serait introuvable par la relance, le duplicata et l’enregistrement d’un paiement.' } });
+      return;
+    }
     // Montant total négatif → c'est un AVOIR : on demande confirmation avant d'enregistrer. Le
     // draft n'ayant pas bougé, la confirmation relance simplement commitVenteSaisie avec le drapeau.
     if (rec.ttc < 0 && !this._venteAvoirConfirmed) { this.setState({ venteAvoirAsk: { montant: rec.ttc } }); return; }
@@ -9448,7 +9465,19 @@ class Component {
       const manualRefs = new Set([...vSai, ...aSai].map(r => this.nrm(r.ref)).filter(Boolean));
       const fileKept = baseAll.filter(r => !(r.ref && manualRefs.has(this.nrm(r.ref))));
       const fileSigs = new Set(fileKept.map(sigOp));
-      const manuelsKept = [...vSai, ...aSai].filter(r => !fileSigs.has(sigOp(r)));
+      // PIÈGE des deux passes, corrigé : la passe 2 ne doit s'appliquer qu'aux saisies dont le
+      // numéro est INCONNU du fichier. Sinon, deux achats du même pêcheur, le même jour, pour le
+      // même montant — ce qui arrive dès qu'on rejoue une saisie — se détruisaient mutuellement :
+      // la passe 1 retirait la ligne du fichier (une saisie locale porte son numéro), puis la
+      // passe 2 retirait la saisie locale parce que sa signature métier se retrouvait dans le
+      // fichier… mais portée par l'AUTRE facture. Ni l'une ni l'autre ne survivait, et une ligne
+      // écrite noir sur blanc dans le classeur disparaissait de l'écran.
+      const fileRefs = new Set(baseAll.map(r => this.nrm(r.ref)).filter(Boolean));
+      const manuelsKept = [...vSai, ...aSai].filter(r => {
+        const ref = this.nrm(r.ref || '');
+        if (ref && fileRefs.has(ref)) return true; // la passe 1 a déjà tranché pour cette ligne
+        return !fileSigs.has(sigOp(r));
+      });
       const opsAll = [...manuelsKept, ...fileKept];
       const ops = opsAll.filter(r => !hiddenOps[this.opHideKey(r)]);
       ops.sort((a, b) => (b.y * 10000 + b.m * 100 + b.d) - (a.y * 10000 + a.m * 100 + a.d));
@@ -12380,7 +12409,13 @@ class Component {
     const arStart = this.hParse(arFrom), arEnd = this.hParse(arTo);
     const arKeys = Object.keys(hStore).filter(k => { const a = this.hParse(k); const b = new Date(a); b.setDate(b.getDate() + 6); return b >= arStart && a <= arEnd; }).sort().reverse();
     let arPeriodTot = 0;
-    const arRows = arKeys.map(k => { const dates = hWeekDates(k); const wk = hStore[k]; const wt = hWeekTot(wk, dates); arPeriodTot += wt; const isOpen = !!hCol['ar_' + k]; const lines = (wk.employees || []).map(e => ({ key: e.id, name: e.name || '—', total: hFmt(hEmpWeek(e, dates)) })); const n = (wk.employees || []).length; return { key: k, label: hWeekLabel(k), weekTotal: hFmt(wt), isOpen, chevron: isOpen ? '▾' : '▸', onToggle: () => this.hToggleCollapse('ar_' + k), lines, onEdit: ev => { if (ev && ev.stopPropagation) ev.stopPropagation(); this.hGoWeek(k); }, empCount: n + ' personne' + (n > 1 ? 's' : '') }; });
+    // Une semaine à cheval sur deux mois était comptée ENTIÈRE dans les deux : les 4 h du mardi
+    // 28 juillet apparaissaient dans le total d'août, et le même chiffre était additionné deux
+    // fois selon la période consultée. C'est un chiffre de PAIE. La vue « Semaine » filtrait déjà
+    // jour par jour (hMonthTot) ; les Archives, non. On ne retient donc que les jours RÉELLEMENT
+    // dans la période, tout en gardant la semaine dans la liste (elle chevauche, elle a sa place).
+    const arDansPeriode = iso => { const d = this.hParse(iso); return d && d >= arStart && d <= arEnd; };
+    const arRows = arKeys.map(k => { const dates = hWeekDates(k).filter(arDansPeriode); const wk = hStore[k]; const wt = hWeekTot(wk, dates); arPeriodTot += wt; const isOpen = !!hCol['ar_' + k]; const lines = (wk.employees || []).map(e => ({ key: e.id, name: e.name || '—', total: hFmt(hEmpWeek(e, dates)) })); const n = (wk.employees || []).length; return { key: k, label: hWeekLabel(k), weekTotal: hFmt(wt), isOpen, chevron: isOpen ? '▾' : '▸', onToggle: () => this.hToggleCollapse('ar_' + k), lines, onEdit: ev => { if (ev && ev.stopPropagation) ev.stopPropagation(); this.hGoWeek(k); }, empCount: n + ' personne' + (n > 1 ? 's' : '') }; });
     const arEmpty = arRows.length === 0;
     const arPeriodLabel = hFmt(arPeriodTot);
     const arCountLabel = arRows.length + ' semaine' + (arRows.length > 1 ? 's' : '');
