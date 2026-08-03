@@ -479,6 +479,40 @@
   Forme réellement ambiguë (« 1,234 ») : on garde la lecture
   française (décimale) et on l'ÉCRIT au-dessus du bouton
   (_montantAmbigu → payAmbigu), jamais un choix muet.
+- <input type="time"> : MÊME piège que <input type="date">,
+  et il avait été oublié. Chrome émet « input » dès que la
+  valeur devient momentanément valide (18:03 au premier
+  chiffre des minutes) ; le setState reconstruisait tout le
+  DOM, le champ était détruit et recréé, le curseur repartait
+  au PREMIER segment, et la 4e frappe changeait les HEURES.
+  Reproduit au clavier : 18:30 tapé, 12:03 enregistré — dans
+  l'état, dans localStorage, dans les totaux de semaine, dans
+  la fiche mensuelle et sur la feuille de présence imprimée.
+  RÈGLE ÉLARGIE : tout champ <input type="date"> OU
+  type="time" passe par dateH/_renderQuiet et onchange,
+  jamais oninput, avec rattrapage par onDateBlur.
+  (Heures → Semaine, et l'heure d'un rendez-vous d'Agenda.)
+- Suppression d'une personne dans les Heures : le
+  récapitulatif « Historique complet » et le bouton d'archive
+  PDF étaient construits par hEmpArchiveData(NOM) alors que
+  la suppression opère par ID. Nom vidé (geste courant : on
+  efface pour retaper) ⇒ aucune correspondance ⇒ « Aucune
+  heure enregistrée », bouton d'archive masqué, et
+  « Enlever » détruisait 24 h de saisie. hEmpArchiveData
+  cherche désormais par IDENTIFIANT (le nom n'est qu'un
+  repli), et une ligne PORTANT des heures mais SANS nom ne
+  peut plus être supprimée : on dit pourquoi et on renvoie
+  vers la saisie du nom — une archive PDF sans nom ne
+  désigne personne.
+- idbGet n'existait pas. Le prototype ne portait que _idb,
+  idbSet, idbGetAll et idbDel, mais openEmpDoc et
+  openVehicleAttachment appelaient this.idbGet : la promesse
+  était rejetée AVANT le test « if (!file) », donc même le
+  message d'erreur prévu par le code était mort. Aucune
+  pièce jointe (bulletin de paie, feuille d'heures signée,
+  carte grise) ne pouvait être relue — l'archive était en
+  écriture seule. Méthode ajoutée, et les deux appelants
+  entourés d'un try/catch qui PARLE.
 - Journal des modifications, photo de référence caduque :
   au-delà de 30 % des lignes de la source OU 50 lignes
   (le plus grand des deux), ne RIEN lister. Poste

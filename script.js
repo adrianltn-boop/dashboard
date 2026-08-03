@@ -402,7 +402,7 @@ class Component {
   static PAY_OVERRIDE_KEY = 'avPaymentOverrides';
   static MAP_KEY = 'avMappings';
   static AVWMAP_KEY = 'avWriteMap';
-  static APP_VERSION = 'version 33';
+  static APP_VERSION = 'version 34';
   // Mention de copyright affichée dans l'interface (Paramètres) : elle n'accorde aucun
   // droit — le droit d'auteur naît de la création — mais elle informe les tiers et date la
   // revendication. La preuve d'antériorité, elle, repose sur l'historique Git et le dépôt INPI.
@@ -852,7 +852,17 @@ class Component {
   deleteVehicle(id) { this.saveVehicles(this.vehicleRows().filter(v => v.id !== id)); }
   linkVehicleBank(id, key) { const v = this.vehicleRows().find(x => x.id === id); if (!v) return; const keys = Array.isArray(v.bankKeys) ? v.bankKeys.slice() : []; const i = keys.indexOf(key); if (i >= 0) keys.splice(i, 1); else keys.push(key); this.updateVehicle(id, { bankKeys: keys }); }
   pickVehicleAttachment(id) { const inp = document.createElement('input'); inp.type = 'file'; inp.multiple = true; inp.onchange = () => { const files = [...(inp.files || [])]; if (!files.length) return; const v = this.vehicleRows().find(x => x.id === id); if (!v) return; const attachments = Array.isArray(v.attachments) ? v.attachments.slice() : []; files.forEach(f => { const aid = 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); attachments.push({ id: aid, name: f.name, type: f.type || '', size: f.size || 0 }); this.idbSet('vehicle:' + id + ':' + aid, { file: f }); }); this.updateVehicle(id, { attachments }); }; inp.click(); }
-  async openVehicleAttachment(vehicleId, att) { const rec = await this.idbGet('vehicle:' + vehicleId + ':' + att.id); const file = rec && rec.file; if (!file) { this.setState({ msg: { kind: 'error', text: 'Pièce jointe indisponible : ajoutez-la de nouveau.' } }); return; } const url = URL.createObjectURL(file); window.open(url, '_blank', 'noopener'); setTimeout(() => URL.revokeObjectURL(url), 60000); }
+  async openVehicleAttachment(vehicleId, att) {
+    try {
+      const rec = await this.idbGet('vehicle:' + vehicleId + ':' + att.id); const file = rec && rec.file;
+      if (!file) { this.setState({ msg: { kind: 'error', text: `« ${att.name || 'Pièce jointe'} » est introuvable dans l'archive locale du navigateur : ajoutez-la de nouveau sur ce véhicule.` } }); return; }
+      const url = URL.createObjectURL(file); const w = window.open(url, '_blank', 'noopener');
+      if (!w) this.setState({ msg: { kind: 'error', text: `« ${att.name || 'Pièce jointe'} » n'a pas pu s'ouvrir : votre navigateur a bloqué la nouvelle fenêtre. Autorisez les fenêtres pop-up pour ce site.` } });
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      this.setState({ msg: { kind: 'error', text: `Ouverture de « ${att && att.name || 'la pièce jointe'} » impossible : ${(e && e.message) || 'erreur'}.` } });
+    }
+  }
   // ---------- Employés : fiches de paie (archive locale) + salaires issus du rapprochement bancaire ----------
   empDocKey(name, month) { return String(name || '').trim() + '|' + month; } // month = 'AAAA-MM'
   saveEmpDocs(m) { this.setState({ empDocs: m }); this.saveJSON(Component.EMPDOCS_KEY, m); }
@@ -889,9 +899,17 @@ class Component {
     inp.click();
   }
   async openEmpDoc(name, month, att) {
-    const rec = await this.idbGet('payslip:' + this.empDocKey(name, month) + ':' + att.id); const file = rec && rec.file;
-    if (!file) { this.setState({ msg: { kind: 'error', text: 'Pièce jointe indisponible : ajoutez-la de nouveau.' } }); return; }
-    const url = URL.createObjectURL(file); window.open(url, '_blank', 'noopener'); setTimeout(() => URL.revokeObjectURL(url), 60000);
+    // try/catch : un échec futur doit PARLER, jamais rester muet (le défaut d'origine était
+    // totalement silencieux — 12 clics sur 12 sans le moindre message).
+    try {
+      const rec = await this.idbGet('payslip:' + this.empDocKey(name, month) + ':' + att.id); const file = rec && rec.file;
+      if (!file) { this.setState({ msg: { kind: 'error', text: `« ${att.name || 'Pièce jointe'} » est introuvable dans l'archive locale du navigateur : ajoutez-la de nouveau depuis la ligne de ${name}.` } }); return; }
+      const url = URL.createObjectURL(file); const w = window.open(url, '_blank', 'noopener');
+      if (!w) this.setState({ msg: { kind: 'error', text: `« ${att.name || 'Pièce jointe'} » n'a pas pu s'ouvrir : votre navigateur a bloqué la nouvelle fenêtre. Autorisez les fenêtres pop-up pour ce site.` } });
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      this.setState({ msg: { kind: 'error', text: `Ouverture de « ${att && att.name || 'la pièce jointe'} » impossible : ${(e && e.message) || 'erreur'}.` } });
+    }
   }
   deleteEmpDoc(name, month, att) {
     const dk = this.empDocKey(name, month); const m = { ...(this.state.empDocs || {}) };
@@ -2095,14 +2113,24 @@ class Component {
   hSetRange(key, empId, iso, index, field, value) { const d = this.hGetDay(key, empId, iso); if (index === 0) { this.hSetCell(key, empId, iso, field, value); return; } const ranges = Array.isArray(d.ranges) ? d.ranges.map(r => ({ ...r })) : []; if (!ranges[index - 1]) return; ranges[index - 1][field] = value; this.hSetCell(key, empId, iso, 'ranges', ranges); }
   hRemoveRange(key, empId, iso, index) { if (index <= 0) return; const d = this.hGetDay(key, empId, iso); const ranges = Array.isArray(d.ranges) ? d.ranges.slice() : []; ranges.splice(index - 1, 1); this.hSetCell(key, empId, iso, 'ranges', ranges); }
   // ---------- archive complète d'une personne (toutes les semaines, par NOM) ----------
-  hEmpArchiveData(name) {
+  // Le récapitulatif se construit d'abord sur l'IDENTIFIANT de la personne, pas sur son nom.
+  // Chercher par nom était un piège : la suppression, elle, opère par id. Un nom vidé (geste
+  // courant : on efface pour retaper) ne correspondait à rien, le récapitulatif ressortait
+  // « Aucune heure enregistrée », le bouton d'archive PDF disparaissait, et « Enlever »
+  // détruisait 24 h de saisie sans que rien ne l'annonce. Le nom ne sert plus que de repli,
+  // pour les semaines où la même personne porte un autre identifiant.
+  hEmpArchiveData(name, empId) {
     const target = String(name || '').trim().toLowerCase();
+    const id = empId == null ? null : String(empId);
     const weeks = this.state.heures || {};
     const H_DOW = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
     const out = { name: String(name || '').trim(), weeks: [], total: 0, dayCount: 0 };
     Object.keys(weeks).sort().forEach(k => {
-      const emp = ((weeks[k] && weeks[k].employees) || []).find(e => String(e.name || '').trim().toLowerCase() === target);
+      const liste = (weeks[k] && weeks[k].employees) || [];
+      const emp = (id != null ? liste.find(e => String(e.id) === id) : null)
+        || (target ? liste.find(e => String(e.name || '').trim().toLowerCase() === target) : null);
       if (!emp) return;
+      if (!out.name) out.name = String(emp.name || '').trim();
       const monday = this.hParse(k);
       const days = [];
       let weekTotal = 0;
@@ -2127,8 +2155,9 @@ class Component {
     out.totalLabel = this.hFmtH(out.total);
     return out;
   }
-  _buildEmpArchiveHtml(name) {
-    const a = this.hEmpArchiveData(name);
+  _buildEmpArchiveHtml(name, empId) {
+    const a = this.hEmpArchiveData(name, empId);
+    a.name = a.name || 'Personne sans nom';
     const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     const accent = this.entCfg().accent;
     const n = new Date();
@@ -2139,9 +2168,9 @@ class Component {
       : `<p class="empty">Aucune heure enregistrée pour cette personne.</p>`;
     return `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>Archive des heures — ${esc(a.name)}</title><style>*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0e1b2e;background:#f4f6fa}.sheet{max-width:820px;margin:24px auto;background:#fff;padding:38px 44px;box-shadow:0 2px 12px rgba(16,32,54,.08)}header.rh{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid ${accent};padding-bottom:16px}header.rh .t{font-size:22px;font-weight:800}header.rh .s{font-size:13px;color:#5a6b80;margin-top:4px}header.rh .m{font-size:12px;color:#8291a5;text-align:right;line-height:1.5}.grand{margin-top:18px;border:1.5px solid ${accent};background:${this.hexToRgba(accent, 0.06)};border-radius:10px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center}.grand .gl{font-size:13px;font-weight:600}.grand .gv{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}section{margin-top:20px;page-break-inside:avoid}h2{font-size:14px;font-weight:700;margin:0 0 8px;display:flex;align-items:center;gap:10px}.badge{font-size:11.5px;font-weight:600;color:${accent};background:${this.hexToRgba(accent, 0.1)};padding:3px 9px;border-radius:20px}table{width:100%;border-collapse:collapse;font-size:12.5px}th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#93a1b3;padding:6px 8px;border-bottom:1.5px solid #e6ebf2}td{padding:7px 8px;border-bottom:1px solid #f1f4f8}.r{text-align:right}.mono{font-variant-numeric:tabular-nums;font-family:'SFMono-Regular',Consolas,monospace}.empty{font-size:12.5px;color:#9aa7b8;font-style:italic}footer{margin-top:26px;padding-top:14px;border-top:1px solid #eef1f6;font-size:11px;color:#aeb8c6;text-align:center}.bar{position:sticky;top:0;background:#fff;border-bottom:1px solid #e6ebf2;padding:10px 16px;display:flex;gap:10px;justify-content:flex-end}.bar button{padding:9px 15px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;border:1px solid ${accent};background:${accent};color:#fff}.bar button.sec{background:#fff;color:#475569;border-color:#d7dde6}@media print{body{background:#fff}.sheet{box-shadow:none;margin:0;max-width:none;padding:0}.bar{display:none}@page{margin:14mm}}</style></head><body><div class="bar"><button class="sec" onclick="window.close()">Fermer</button><button onclick="window.print()">Imprimer / Enregistrer en PDF</button></div><div class="sheet"><header class="rh"><div><div class="t">Archive des heures — ${esc(a.name)}</div><div class="s">${esc(this.entCfg().nom)} — totalité des heures enregistrées</div></div><div class="m">éditée le ${esc(stamp)}<br>${a.weeks.length} semaine${a.weeks.length > 1 ? 's' : ''} · ${a.dayCount} jour${a.dayCount > 1 ? 's' : ''}</div></header><div class="grand"><span class="gl">TOTAL GÉNÉRAL</span><span class="gv">${esc(a.totalLabel)}</span></div>${body}<footer>Archive générée depuis le tableau de bord — à enregistrer en PDF via Imprimer.</footer></div></body></html>`;
   }
-  generateEmpArchive(name) {
-    const a = this.hEmpArchiveData(name);
-    this.openDocument('heures', this._buildEmpArchiveHtml(name), { tiers: (a && a.name) || name });
+  generateEmpArchive(name, empId) {
+    const a = this.hEmpArchiveData(name, empId);
+    this.openDocument('heures', this._buildEmpArchiveHtml(name, empId), { tiers: (a && a.name) || name || 'Personne sans nom' });
   }
   dd(n) { return String(n).padStart(2, '0'); }
   pIso(s) { if (s && typeof s === 'object') return s; const p = String(s).split('-'); return { y: +p[0], m: +p[1], d: +p[2] }; }
@@ -8026,6 +8055,17 @@ class Component {
     return this.__idbP;
   }
   async idbSet(key, val) { try { const db = await this._idb(); await new Promise((res, rej) => { const tx = db.transaction('h', 'readwrite'); tx.objectStore('h').put(val, key); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); } catch (e) {} }
+  // idbGet : lecture d'UNE entrée. Elle MANQUAIT au prototype alors que openEmpDoc et
+  // openVehicleAttachment l'appelaient : « this.idbGet is not a function » rejetait la promesse
+  // AVANT le test « if (!file) », donc même le message d'erreur prévu était mort. Les pièces
+  // jointes (bulletins de paie, feuilles d'heures signées, cartes grises) se déposaient sans
+  // jamais pouvoir être relues — une archive en écriture seule.
+  async idbGet(key) {
+    try {
+      const db = await this._idb();
+      return await new Promise(res => { const tx = db.transaction('h', 'readonly'); const rq = tx.objectStore('h').get(key); rq.onsuccess = () => res(rq.result); rq.onerror = () => res(null); });
+    } catch (e) { return null; }
+  }
   async idbGetAll() { try { const db = await this._idb(); return await new Promise((res) => { const out = []; const tx = db.transaction('h', 'readonly'); const rq = tx.objectStore('h').openCursor(); rq.onsuccess = () => { const c = rq.result; if (c) { out.push({ key: c.key, val: c.value }); c.continue(); } else res(out); }; rq.onerror = () => res(out); }); } catch (e) { return []; } }
   async idbDel(key) { try { const db = await this._idb(); await new Promise((res) => { const tx = db.transaction('h', 'readwrite'); tx.objectStore('h').delete(key); tx.oncomplete = res; tx.onerror = res; }); } catch (e) {} }
   _applyRestored(val) {
@@ -8768,7 +8808,7 @@ class Component {
     const agRecurOptions = [{ value: 'none', label: 'Ponctuel (une seule fois)' }, { value: 'weekly', label: 'Chaque semaine' }, { value: 'monthly', label: 'Chaque mois' }];
     const onAgTitle = e => this.setAgendaField('title', e.target.value);
     const onAgDate = dateH(e => this.setAgendaField('date', e.target.value));
-    const onAgTime = e => this.setAgendaField('time', e.target.value);
+    const onAgTime = dateH(e => this.setAgendaField('time', e.target.value)); // même piège que type="date" : jamais oninput sur un champ horaire
     const onAgCat = e => this.setAgendaField('cat', e.target.value);
     const onAgRecur = e => this.setAgendaField('recur', e.target.value);
     const onAgNote = e => this.setAgendaField('note', e.target.value);
@@ -11611,7 +11651,13 @@ class Component {
         const d = (emp.days || {})[iso] || {};
         const wknd = i >= 5;
         const rawRanges = this.hRanges(d); if (!rawRanges.length) rawRanges.push({ arr: '', dep: '', pse: '' });
-        const ranges = rawRanges.map((pl, pi) => { const cell = f => ({ value: pl[f] == null ? '' : String(pl[f]), onInput: e => this.hSetRange(key, emp.id, iso, pi, f, e.target.value) }); return { arr: cell('arr'), dep: cell('dep'), pse: cell('pse'), label: pi === 0 ? '+' : '−', title: pi === 0 ? 'Ajouter une plage horaire' : 'Supprimer cette plage', onAction: () => pi === 0 ? this.hAddRange(key, emp.id, iso) : this.hRemoveRange(key, emp.id, iso, pi), btnStyle: `width:32px;height:32px;border-radius:8px;border:1px solid ${this.hexToRgba(accent, .3)};background:#fff;color:${pi === 0 ? accent : '#b91c1c'};font-size:16px;font-weight:700;cursor:pointer;font-family:inherit` }; });
+        // PIÈGE identique à <input type="date"> (voir CLAUDE.md) : sur un <input type="time">, Chrome
+        // émet « input » dès que la valeur devient momentanément valide (18:03 au 1er chiffre des
+        // minutes). Avec un oninput, chaque setState remplaçait TOUT le DOM : le champ était détruit
+        // et recréé, le curseur revenait au premier segment, et la 4e frappe modifiait les HEURES —
+        // 18:30 tapé au clavier était enregistré 12:03. Circuit dateH/_renderQuiet + onchange, et
+        // rattrapage de l'affichage à la sortie du champ (onDateBlur).
+        const ranges = rawRanges.map((pl, pi) => { const cell = f => ({ value: pl[f] == null ? '' : String(pl[f]), onChange: dateH(e => this.hSetRange(key, emp.id, iso, pi, f, e.target.value)), onInput: e => this.hSetRange(key, emp.id, iso, pi, f, e.target.value) }); return { arr: cell('arr'), dep: cell('dep'), pse: cell('pse'), label: pi === 0 ? '+' : '−', title: pi === 0 ? 'Ajouter une plage horaire' : 'Supprimer cette plage', onAction: () => pi === 0 ? this.hAddRange(key, emp.id, iso) : this.hRemoveRange(key, emp.id, iso, pi), btnStyle: `width:32px;height:32px;border-radius:8px;border:1px solid ${this.hexToRgba(accent, .3)};background:#fff;color:${pi === 0 ? accent : '#b91c1c'};font-size:16px;font-weight:700;cursor:pointer;font-family:inherit` }; });
         const dt = this.hParse(iso);
         // journée encore à l'ancien format (Matin/Après-midi…) : le total reste juste, on le signale
         const oldFmt = !(d.arr || d.dep) && !!(d.matin || d.aprem || d.repas || d.pause);
@@ -11708,18 +11754,24 @@ class Component {
     const hHeaderSub = hIsMonth ? `Vue mensuelle — ${H_MON[arBase.getMonth()]} ${arBase.getFullYear()}` : hIsYear ? `Vue annuelle — ${arBase.getFullYear()}` : hIsCustomArchives ? 'Archives — choisissez une période au calendrier' : ('Semaine du ' + hNavLabel + (hIsThisWeek ? ' · en cours' : ''));
     const hDelAsk = this.state.hDelAsk;
     const hDelOpen = !!hDelAsk;
-    const hDelName = hDelAsk ? (hDelAsk.name || 'cette personne') : '';
+    const hDelName = hDelAsk ? (hDelAsk.name || 'cette personne (nom non renseigné)') : '';
     const onHDelCancel = () => this.setState({ hDelAsk: null });
     const onHDelConfirm = () => this.hConfirmDelete();
-    // Récapitulatif de TOUTES ses heures + bouton d'archive PDF avant suppression
-    const hDelArch = hDelOpen ? this.hEmpArchiveData(hDelName) : null;
+    // Récapitulatif de TOUTES ses heures + bouton d'archive PDF avant suppression. Recherche par
+    // IDENTIFIANT (celui-là même que vise la suppression), le nom n'étant qu'un repli : un nom
+    // vidé faisait disparaître le garde-fou et 24 h de saisie avec lui.
+    const hDelArch = hDelOpen ? this.hEmpArchiveData(hDelAsk.name, hDelAsk.empId) : null;
     const hDelSummary = hDelArch
       ? (hDelArch.weeks.length
         ? `${hDelArch.totalLabel} enregistrées sur ${hDelArch.weeks.length} semaine${hDelArch.weeks.length > 1 ? 's' : ''} (${hDelArch.dayCount} jour${hDelArch.dayCount > 1 ? 's' : ''}).`
         : 'Aucune heure enregistrée pour cette personne.')
       : '';
     const hDelHasHours = !!(hDelArch && hDelArch.weeks.length);
-    const onHDelArchive = () => this.generateEmpArchive(hDelName);
+    // Suppression d'une ligne PORTANT DES HEURES et sans nom : on refuse tant qu'elle n'est pas
+    // nommée. Sans nom, ni l'archive PDF ni le retour arrière ne veulent dire quoi que ce soit.
+    const hDelSansNom = !!(hDelOpen && !String(hDelAsk.name || '').trim() && hDelHasHours);
+    const hDelBloqueTxt = hDelSansNom ? "Cette personne porte des heures enregistrées mais n'a pas de nom. Renseignez son nom avant de l'enlever : sans nom, l'archive PDF que vous devez conserver ne désigne personne. Fermez cette fenêtre, tapez le nom, puis recommencez." : '';
+    const onHDelArchive = () => this.generateEmpArchive(hDelAsk && hDelAsk.name, hDelAsk && hDelAsk.empId);
     const hDelArchiveStyle = `padding:9px 15px;border-radius:9px;font-size:12.5px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.35)};cursor:pointer;font-family:inherit;white-space:nowrap`;
 
     const titles = {
@@ -12013,7 +12065,7 @@ class Component {
       hPrintChooseEmployee, hPrintChoosePeriod, hPrintEmployeeName, hPrintWeekLabel, hPrintMonthLabel, onHPrintWeek, onHPrintMonth, onHPrintBack, hPrintPeriodStyle, hPrintBackStyle,
       hEmployees, hEmpty, onHAddEmp, hAddStyle, hEmpCardStyle, hChevStyle, hNameStyle, hCellStyle, hTotCellStyle, hDelStyle, hEmpTotStyle, hGridHeadStyle, hLegendStyle, hEmptyStyle,
       arFrom, arTo, onArFrom, onArTo, arMonthValue, arYearValue, arMonthOptions, arYearOptions, onArMonth, onArYear, hDateStyle, arRows, arEmpty, arPeriodLabel, arCountLabel, hArHeadStyle, hArLineStyle, hArChevStyle, hEditStyle,
-      hDelOpen, hDelName, onHDelCancel, onHDelConfirm, hDelSummary, hDelHasHours, onHDelArchive, hDelArchiveStyle, hNuitTabs, hNuitStatus,
+      hDelOpen, hDelName, onHDelCancel, onHDelConfirm, hDelSummary, hDelHasHours, onHDelArchive, hDelArchiveStyle, hDelSansNom, hDelPeutSupprimer: !hDelSansNom, hDelBloqueTxt, hNuitTabs, hNuitStatus,
     };
   }
   setState(update, cb) {
