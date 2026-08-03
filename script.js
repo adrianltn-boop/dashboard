@@ -2207,10 +2207,20 @@ class Component {
   }
   hNumVal(v) { const n = parseFloat(String(v == null ? '' : v).replace(',', '.')); return isFinite(n) ? n : 0; }
   hRanges(d) { if (!d) return []; return [{ arr: d.arr || '', dep: d.dep || '', pse: d.pse || '' }, ...(Array.isArray(d.ranges) ? d.ranges : [])]; }
+  // Le mode Nuit s'applique à TOUTE plage, pas seulement à la journée sans plages multiples :
+  // une nuit 22:00 → 06:00 saisie en deuxième plage était comptée 0 alors que la même nuit
+  // saisie seule donnait 8h00. Le passage de minuit n'est jamais deviné — il ne compte que si
+  // « Programmation horaire » est réglée sur Nuit.
+  hSpanDuree(a, b) {
+    if (a == null || b == null) return null;
+    let w = b - a;
+    if (w < 0) { if (!this.state.hNuit) return null; w += 24; }
+    return w;
+  }
   hRangeIssue(d) {
     const spans = this.hRanges(d).map(r => ({ a: this.hTimeVal(r.arr), b: this.hTimeVal(r.dep) })).filter(r => r.a != null || r.b != null);
     if (spans.some(r => r.a == null || r.b == null)) return 'Plage incomplète';
-    if (spans.some(r => r.b <= r.a)) return 'Le départ doit être après l’arrivée, sans passage de minuit';
+    if (spans.some(r => this.hSpanDuree(r.a, r.b) == null || this.hSpanDuree(r.a, r.b) === 0)) return this.state.hNuit ? 'Le départ doit être différent de l’arrivée' : 'Le départ doit être après l’arrivée, sans passage de minuit';
     spans.sort((x, y) => x.a - y.a); if (spans.some((r, i) => i > 0 && r.a < spans[i - 1].b)) return 'Plages qui se chevauchent';
     return '';
   }
@@ -2221,13 +2231,19 @@ class Component {
   hDayTotal(d) {
     if (!d) return 0;
     if (Array.isArray(d.ranges) && d.ranges.length) {
-      if (this.hRangeIssue(d)) return 0;
-      return this.hRanges(d).reduce((sum, r) => sum + Math.max(0, this.hTimeVal(r.dep) - this.hTimeVal(r.arr) - this.hPauseVal(r.pse)), 0);
+      // Une plage en cours de frappe (arrivée tapée, départ pas encore) mettait TOUTE la journée à
+      // 0h00 : les 4 heures déjà saisies le matin disparaissaient du jour, de la semaine, du mois
+      // et de la feuille imprimée, sur un simple clic sur « + ». Les plages VALIDES continuent
+      // maintenant de compter ; celle qui est incomplète vaut 0 et le ⚠ dit laquelle.
+      return this.hRanges(d).reduce((sum, r) => {
+        const w = this.hSpanDuree(this.hTimeVal(r.arr), this.hTimeVal(r.dep));
+        return w == null ? sum : sum + Math.max(0, w - this.hPauseVal(r.pse));
+      }, 0);
     }
     const a = this.hTimeVal(d.arr), b = this.hTimeVal(d.dep);
     if (a != null && b != null) {
-      let w = b - a;
-      if (w < 0) { if (!this.state.hNuit) return 0; w += 24; }
+      const w = this.hSpanDuree(a, b);
+      if (w == null) return 0;
       return Math.max(0, w - this.hPauseVal(d.pse));
     }
     return Math.max(0, this.hNumVal(d.matin) + this.hNumVal(d.aprem) - this.hNumVal(d.repas) - this.hNumVal(d.pause));
@@ -12128,7 +12144,7 @@ class Component {
         const dt = this.hParse(iso);
         // journée encore à l'ancien format (Matin/Après-midi…) : le total reste juste, on le signale
         const oldFmt = !(d.arr || d.dep) && !!(d.matin || d.aprem || d.repas || d.pause);
-        return { key: emp.id + iso, dow: H_DOW[i], date: dt.getDate() + ' ' + H_MON[dt.getMonth()].slice(0, 4) + '.', ranges, oldFmt, negWarn: !!this.hRangeIssue(d), total: hFmt(hDayTot(d)), rowStyle: 'display:grid;grid-template-columns:150px 1fr 1fr 1fr 96px;gap:8px;align-items:center;padding:6px 14px;border-top:1px solid #f1f4f8;font-size:13px;background:' + (wknd ? '#f8fafc' : '#fff'), dayStyle: 'display:flex;flex-direction:column;gap:1px;' + (wknd ? 'color:#8291a5' : 'color:#0e1b2e') };
+        return { key: emp.id + iso, dow: H_DOW[i], date: dt.getDate() + ' ' + H_MON[dt.getMonth()].slice(0, 4) + '.', ranges, oldFmt, negWarn: !!this.hRangeIssue(d), warnTxt: this.hRangeIssue(d) ? `${this.hRangeIssue(d)} — cette plage compte 0, les autres restent comptées.` : '', total: hFmt(hDayTot(d)), rowStyle: 'display:grid;grid-template-columns:150px 1fr 1fr 1fr 96px;gap:8px;align-items:center;padding:6px 14px;border-top:1px solid #f1f4f8;font-size:13px;background:' + (wknd ? '#f8fafc' : '#fff'), dayStyle: 'display:flex;flex-direction:column;gap:1px;' + (wknd ? 'color:#8291a5' : 'color:#0e1b2e') };
       });
       return { id: emp.id, name: emp.name, isOpen: !collapsed, chevron: collapsed ? '▸' : '▾', headStyle: 'display:flex;align-items:center;gap:10px;padding:12px 14px;' + (collapsed ? '' : 'border-bottom:1px solid #eef1f6'), onToggle: () => this.hToggleCollapse(cid), onName: e => this.hSetName(key, emp.id, e.target.value), onDelete: () => this.hAskDelete(key, emp.id, emp.name), weekTotal: hFmt(hEmpWeek(emp, hDates)), rows };
     };

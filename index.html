@@ -1817,7 +1817,7 @@
                               </div>
                             </sc-for>
                           </div>
-                          <span style="{{ hTotCellStyle }}">{{ r.total }}<sc-if value="{{ r.oldFmt }}" hint-placeholder-val="{{ false }}"><span title="Journée saisie à l'ancien format (Matin/Après-midi) — le total reste juste" style="font-size:10px;color:#b45309;margin-left:4px">●</span></sc-if><sc-if value="{{ r.negWarn }}" hint-placeholder-val="{{ false }}"><span title="Départ avant l'arrivée : compte 0 en mode Journée. Vérifiez la saisie, ou activez « Nuit » dans Paramètres → Programmation horaire." style="font-size:11px;margin-left:4px">⚠</span></sc-if></span>
+                          <span style="{{ hTotCellStyle }}">{{ r.total }}<sc-if value="{{ r.oldFmt }}" hint-placeholder-val="{{ false }}"><span title="Journée saisie à l'ancien format (Matin/Après-midi) — le total reste juste" style="font-size:10px;color:#b45309;margin-left:4px">●</span></sc-if><sc-if value="{{ r.negWarn }}" hint-placeholder-val="{{ false }}"><span title="{{ r.warnTxt }}" style="font-size:11px;margin-left:4px">⚠</span></sc-if></span>
                         </div>
                       </sc-for>
                     </div>
