@@ -402,7 +402,7 @@ class Component {
   static PAY_OVERRIDE_KEY = 'avPaymentOverrides';
   static MAP_KEY = 'avMappings';
   static AVWMAP_KEY = 'avWriteMap';
-  static APP_VERSION = 'version 29';
+  static APP_VERSION = 'version 30';
   // Mention de copyright affichée dans l'interface (Paramètres) : elle n'accorde aucun
   // droit — le droit d'auteur naît de la création — mais elle informe les tiers et date la
   // revendication. La preuve d'antériorité, elle, repose sur l'historique Git et le dépôt INPI.
@@ -423,13 +423,33 @@ class Component {
   static BCAT_KEY = 'avBankCats';
   static BRULE_KEY = 'avBankCatRules';
   static BCATLIST_KEY = 'avBankCatList';
+  // RÈGLE UNIQUE de la sauvegarde : ce que buildBackupZip EXPORTE et ce que la restauration ACCEPTE
+  // sont décidés par CETTE seule expression. Avant, deux listes coexistaient (« toutes les clés av… »
+  // à l'écriture, une liste blanche figée à la lecture) : elles avaient divergé de 14 clés et
+  // l'application refusait sa PROPRE sauvegarde dès le premier lancement (avSetupDone). Une liste
+  // blanche à tenir à jour à la main re-divergera : la règle doit être structurelle.
+  static CLE_SAUVEGARDE_RE = /^av[A-Z][A-Za-z0-9]{0,40}$/;
+  static estCleSauvegarde(k) { return Component.CLE_SAUVEGARDE_RE.test(String(k || '')); }
+  // Clés connues du tableau de bord. Ne sert PLUS à autoriser (cf. ci-dessus) mais seulement à
+  // signaler dans l'aperçu de restauration les réglages venus d'une version différente.
   static RESTORE_KEYS = new Set([
     'avOps','avHeures','avFactures','avBordereaux','avStock','avStockEspeces','avChargesSel','avEntreprise',
     'avProfils','avMessages','avHoraireNuit','avAutoRefresh','avBlStatuts','avLinks','avModels','avObjectifs',
     'avObservations','avCredits','avVentes','avMappings','avComptable','avGrenke','avGrenkeLinks','avHiddenOps',
     'avHiddenGrenke','avDemoMode','avPrefixes','avRecoKey','avBlLibrary','avBanque','avBankLinks','avHiddenBank',
-    'avBankCats','avBankCatRules','avBankCatList','avVehicles','avPaymentOverrides','avSideNote','avSideCollapsed','avGuideSeen','avReportHeader','avEmpDocs','avAgenda','avPayTrack','avWriteMap','avFournSaisie'
+    'avBankCats','avBankCatRules','avBankCatList','avVehicles','avPaymentOverrides','avSideNote','avSideCollapsed','avGuideSeen','avReportHeader','avEmpDocs','avAgenda','avPayTrack','avWriteMap','avFournSaisie',
+    // Les 14 clés que l'application écrit réellement et que l'ancienne liste blanche ignorait —
+    // dont avVentesSaisie / avAchatsSaisie / avGrenkeManuel / avAnnule, les SEULES données qui
+    // n'existent nulle part ailleurs que dans le navigateur.
+    'avSetupDone','avPrintCfg','avVentesSaisie','avAchatsSaisie','avStockModele','avFilePaths','avGrenkeManuel',
+    'avAnalytique','avAnnule','avHeuresMois','avPendingWrites','avSeenSnap','avStockObs','avBankCatsOrder'
   ]);
+  // Plafonds de la restauration. L'ancien plafond (10 Mo par clé, 30 Mo au total) était SIX FOIS
+  // supérieur au quota réel d'un localStorage (~5 Mo) : une archive validée pouvait donc échouer
+  // à mi-écriture, après avoir effacé les données en place.
+  static RESTORE_MAX_VAL = 4 * 1024 * 1024;
+  static RESTORE_MAX_TOTAL = 4.5 * 1024 * 1024;
+  static RESTORE_MAX_KEYS = 200;
   static BANK_CATS = ['Achat pêcheur', 'Achat fournisseur', 'Alimentation', 'Carburant', 'Crédit & assurance', 'EDF', 'Encaissement client', 'Frais bancaires', 'Impôts & taxes', 'Location véhicule', 'Logement', 'Salaires & charges', 'Transport', 'Autre'];
   static TODAY = (() => { try { const n = new Date(); const y = n.getFullYear(); if (y >= 2020 && y <= 2100) return { y, m: n.getMonth() + 1, d: n.getDate() }; } catch (e) {} return { y: 2026, m: 7, d: 5 }; })();
   static MONTHS = ['', 'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
@@ -5807,7 +5827,9 @@ class Component {
       try { entries.push({ name: 'Dashboard Achat-Vente.html', bytes: enc.encode('<!doctype html>\n' + document.documentElement.outerHTML) }); } catch (e2) {}
     }
     const state = {};
-    Object.keys(localStorage).filter(k => k.startsWith('av')).forEach(k => { state[k] = localStorage.getItem(k); });
+    // MÊME règle que la restauration (Component.estCleSauvegarde) : ce qui est sauvegardé est,
+    // par construction, ce qui est restaurable. Les deux ne peuvent plus diverger.
+    Object.keys(localStorage).filter(k => Component.estCleSauvegarde(k)).forEach(k => { state[k] = localStorage.getItem(k); });
     entries.push({ name: 'donnees/etat.json', bytes: enc.encode(JSON.stringify(state, null, 2)) });
     const seen = {};
     const addHandle = async (name, handle) => {
@@ -5898,37 +5920,77 @@ class Component {
       const files = await this.unzipAll(buf);
       const etatBytes = files['donnees/etat.json'];
       if (!etatBytes) throw new Error("fichier « donnees/etat.json » introuvable dans cette archive — ce n'est pas une sauvegarde valide.");
-      const state = this.validateRestoreState(JSON.parse(new TextDecoder().decode(etatBytes)));
+      const val = this.validateRestoreState(JSON.parse(new TextDecoder().decode(etatBytes)));
+      const state = val.state;
       const xlsxNames = Object.keys(files).filter(n => /\.(xlsx|xlsm)$/i.test(n) && n.startsWith('donnees/'));
       this._restoreFiles = files;
+      // Réserves annoncées AVANT de restaurer : ni surprise, ni rejet global.
+      const reserves = [];
+      if (val.inconnues.length) reserves.push(`${val.inconnues.length} réglage(s) venus d'une autre version seront tout de même restaurés : ${val.inconnues.slice(0, 6).join(', ')}${val.inconnues.length > 6 ? '…' : ''}.`);
+      if (val.ecartees.length) reserves.push(`⚠ ${val.ecartees.length} entrée(s) écartée(s) : ${val.ecartees.slice(0, 4).join(', ')}${val.ecartees.length > 4 ? '…' : ''}.`);
       this.setState({
         restoreStatus: null,
-        restorePreview: { name: file.name, keyCount: Object.keys(state).length, xlsxFiles: xlsxNames.map(n => n.replace(/^donnees\//, '')), state },
+        restorePreview: { name: file.name, keyCount: Object.keys(state).length, xlsxFiles: xlsxNames.map(n => n.replace(/^donnees\//, '')), state, reserves: reserves.join(' ') },
       });
     } catch (e) {
       this.setState({ restoreStatus: 'error', restoreError: (e && e.message) || 'archive illisible' });
     }
   }
   cancelRestore() { this._restoreFiles = null; this.setState({ restorePreview: null, restoreStatus: null }); }
+  // Retourne { state, inconnues, ecartees } — JAMAIS d'exception sur une clé isolée : une archive
+  // ne doit pas être rejetée en entier (c'est la seule bouée de sauvetage) parce qu'une clé vient
+  // d'une autre version. Les clés hors format sont écartées et NOMMÉES, les clés inconnues mais
+  // bien formées sont restaurées et signalées dans l'aperçu.
   validateRestoreState(state) {
     if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('état de sauvegarde invalide');
     const entries = Object.entries(state);
-    if (entries.length > Component.RESTORE_KEYS.size) throw new Error('trop de clés dans la sauvegarde');
+    if (entries.length > Component.RESTORE_MAX_KEYS) throw new Error(`trop de clés dans la sauvegarde (${entries.length}, maximum ${Component.RESTORE_MAX_KEYS})`);
+    const out = {}; const inconnues = []; const ecartees = [];
     let total = 0;
     for (const [k, v] of entries) {
-      if (!Component.RESTORE_KEYS.has(k)) throw new Error(`clé non autorisée dans la sauvegarde : ${k}`);
-      if (typeof v !== 'string') throw new Error(`valeur invalide pour ${k}`);
+      if (!Component.estCleSauvegarde(k)) { ecartees.push(`${k} (nom de réglage non reconnu)`); continue; }
+      if (typeof v !== 'string') { ecartees.push(`${k} (contenu illisible)`); continue; }
+      if (v.length > Component.RESTORE_MAX_VAL) { ecartees.push(`${k} (${Math.round(v.length / 1048576)} Mo, au-delà de la limite du navigateur)`); continue; }
       total += v.length;
-      if (v.length > 10 * 1024 * 1024 || total > 30 * 1024 * 1024) throw new Error('données de sauvegarde trop volumineuses');
+      if (total > Component.RESTORE_MAX_TOTAL) throw new Error(`sauvegarde trop volumineuse pour ce navigateur (plus de ${Math.round(Component.RESTORE_MAX_TOTAL / 1048576 * 10) / 10} Mo de réglages) — elle ne tiendrait pas en mémoire et la restauration serait interrompue en cours de route.`);
+      if (!Component.RESTORE_KEYS.has(k)) inconnues.push(k);
+      out[k] = v;
     }
-    return Object.fromEntries(entries);
+    if (!Object.keys(out).length) throw new Error("cette archive ne contient aucun réglage restaurable — ce n'est pas une sauvegarde du tableau de bord.");
+    return { state: out, inconnues, ecartees };
   }
+  // Restauration TRANSACTIONNELLE. Avant : on effaçait tout puis on réécrivait, chaque écriture
+  // enveloppée d'un catch VIDE, puis location.reload() — un dépassement de quota effaçait donc les
+  // données de Faustine sans écrire les nouvelles, et sans un mot. Désormais : photo de l'existant,
+  // écriture comptée, et en cas d'échec RETOUR À L'ÉTAT D'AVANT + message explicite, sans recharger.
   confirmRestore() {
     const rp = this.state.restorePreview; if (!rp) return;
+    let avant = null;
     try {
-      Object.keys(localStorage).filter(k => k.startsWith('av')).forEach(k => { try { localStorage.removeItem(k); } catch (e) {} });
-      Object.entries(rp.state).forEach(([k, v]) => { try { localStorage.setItem(k, v); } catch (e) {} });
-    } catch (e) {}
+      avant = {};
+      Object.keys(localStorage).filter(k => Component.estCleSauvegarde(k)).forEach(k => { avant[k] = localStorage.getItem(k); });
+    } catch (e) {
+      this.setState({ restoreStatus: 'error', restoreError: "impossible de lire les données actuelles — restauration annulée, rien n'a été modifié." });
+      return;
+    }
+    const echecs = [];
+    try {
+      Object.keys(avant).forEach(k => localStorage.removeItem(k));
+      Object.entries(rp.state).forEach(([k, v]) => { try { localStorage.setItem(k, v); } catch (e) { echecs.push(k); } });
+    } catch (e) { echecs.push('(interruption : ' + ((e && e.message) || 'erreur') + ')'); }
+    if (echecs.length) {
+      // Retour en arrière : on remet EXACTEMENT ce qui était là avant le clic.
+      let rollbackKo = 0;
+      try {
+        Object.keys(localStorage).filter(k => Component.estCleSauvegarde(k)).forEach(k => { try { localStorage.removeItem(k); } catch (e) { rollbackKo++; } });
+        Object.entries(avant).forEach(([k, v]) => { try { localStorage.setItem(k, v); } catch (e) { rollbackKo++; } });
+      } catch (e) { rollbackKo++; }
+      this.setState({
+        restoreStatus: 'error',
+        restoreError: `Restauration interrompue : ${echecs.length} réglage(s) n'ont pas pu être enregistrés (${echecs.slice(0, 4).join(', ')}${echecs.length > 4 ? '…' : ''}) — la mémoire du navigateur est pleine. ` + (rollbackKo ? `⚠ Le retour à vos données précédentes a lui aussi échoué (${rollbackKo} réglage(s)) : NE FERMEZ PAS cette page, refaites une sauvegarde depuis un autre poste avant toute chose.` : 'Vos données précédentes ont été remises en place, rien n\'est perdu. Libérez de la place (Paramètres → Tout réinitialiser sur un poste de test) ou restaurez cette archive sur un navigateur vierge.'),
+      });
+      return; // surtout PAS de rechargement : le message doit être lu
+    }
     location.reload();
   }
   downloadRestoreFile(name) {
@@ -7727,6 +7789,35 @@ class Component {
     if (changed) this.setState({ watchCount: Object.keys(w).length });
   }
   saveBlLib(lib) { if (lib && lib.length) this.saveJSON(Component.BLLIB_KEY, { rows: lib.map(f => ({ name: f.name, type: f.type, transporteur: f.transporteur })) }); else { try { localStorage.removeItem(Component.BLLIB_KEY); } catch (e) {} } }
+  // Ce que « Réinitialiser » détruit RÉELLEMENT, source par source. Certaines de ces données
+  // (règles de catégorisation bancaire, catégories créées à la main, espèces de stock, dossiers
+  // Grenke) représentent des mois de travail et n'existent NULLE PART ailleurs qu'ici : elles ne
+  // sont dans aucun fichier Excel. Elles doivent être nommées avant d'être effacées.
+  static RESET_DETAIL = {
+    banque: ['le relevé importé', 'les catégories bancaires créées à la main', 'les règles de catégorisation automatique', 'les rapprochements avec les factures', 'les lignes masquées'],
+    stock: ['les inventaires lus', 'le dossier Stock connecté', 'le détail par espèce'],
+    ventes: ['les ventes importées', 'les dossiers Grenke rattachés au fichier de ventes'],
+    factures: ['les factures fournisseurs importées'],
+    bordereaux: ['les bordereaux importés', 'le dossier Bordereaux connecté'],
+    livraison: ['le dossier Livraison connecté et sa liste de fichiers'],
+    transport: ['le dossier Transport connecté et sa liste de fichiers'],
+    credits: ['les crédits et assurances importés'],
+    comptable: ["l'export comptable importé"],
+    operations: ['les achats pêcheurs importés'],
+  };
+  // Étape 1 : on DEMANDE, en nommant ce qui sera perdu. Avant, un seul clic effaçait tout, sans
+  // confirmation et sans compte rendu (msg forcé à null dans chaque branche) — alors que le bouton
+  // global « Tout réinitialiser », lui, demandait bien confirmation.
+  askResetSource(kind, label) {
+    this.setState({ srcResetAsk: { kind, label: label || kind, detail: Component.RESET_DETAIL[kind] || ['les données importées de cette source'] } });
+  }
+  cancelResetSource() { this.setState({ srcResetAsk: null }); }
+  confirmResetSource() {
+    const a = this.state.srcResetAsk; if (!a) return;
+    this.resetSource(a.kind);
+    // Étape 2 : compte rendu explicite. Le silence laissait croire que le bouton n'avait rien fait.
+    this.setState({ srcResetAsk: null, msg: { kind: 'warn', text: `Source « ${a.label} » réinitialisée — effacé : ${a.detail.join(', ')}. Vos fichiers Excel ne sont pas modifiés ; réimportez la source pour repartir.` } });
+  }
   resetSource(kind) {
     const keyMap = { factures: Component.FAC_KEY, bordereaux: Component.BL_KEY, stock: Component.STK_KEY, credits: Component.CRED_KEY, comptable: Component.CMP_KEY, ventes: Component.VEN_KEY, operations: Component.OPS_KEY, banque: Component.BNK_KEY };
     const key = keyMap[kind]; if (key) { try { localStorage.removeItem(key); } catch (e) {} }
@@ -10259,7 +10350,7 @@ class Component {
     const rp = this.state.restorePreview;
     const restoreOpen = !!rp;
     const restorePreview = rp ? {
-      name: rp.name, keyCount: rp.keyCount,
+      name: rp.name, keyCount: rp.keyCount, reserves: rp.reserves || '',
       xlsxFiles: (rp.xlsxFiles || []).map(n => ({ name: n, onDownload: () => this.downloadRestoreFile(n), style: openBtnStyle })),
     } : null;
     const onRestoreConfirm = () => this.confirmRestore();
@@ -10407,7 +10498,7 @@ class Component {
     const ghost = `padding:7px 13px;border-radius:8px;font-size:12px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.3)};cursor:pointer;font-family:inherit`;
     const openStyle = `padding:7px 11px;border-radius:8px;font-size:13px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.3)};cursor:pointer;font-family:inherit;flex-shrink:0`;
     const EXCEL_OPEN_KINDS = ['ventes', 'operations', 'factures', 'credits', 'comptable', 'banque'];
-    const mkSrc = (key, name, desc, columns, connected, cname) => ({ name, desc, columns, connected, ...srcStatus(connected, cname), importStyle: impBtn, ghostStyle: ghost, openStyle, remapStyle: ghost, canRemap: connected && !['stock', 'bordereaux', 'transport', 'livraison'].includes(key), onRemap: () => this.reopenMapping(key), importLabel: key === 'stock' ? '📁 Choisir le dossier Stock' : key === 'bordereaux' ? '📁 Choisir le dossier Bordereaux' : 'Importer le fichier', onImport: () => this.importFile(key), onReset: () => this.resetSource(key), linkValue: (this.state.links || {})[key] || '', onLinkChange: e => this.setLink(key, e.target.value), onOpen: () => { const l = (this.state.links || {})[key]; if (l) this.openUrl(l); else this.setState({ msg: { kind: 'error', text: `Renseignez d'abord le lien du fichier « ${name} » ci-dessus.` } }); }, canOpenExcel: connected && EXCEL_OPEN_KINDS.includes(key), onOpenExcel: () => this.openSourceInExcel(key, name), menuOpen: !!(this.state.srcMenuOpen || {})[key], onMenu: () => this.setState({ srcMenuOpen: { ...(this.state.srcMenuOpen || {}), [key]: !(this.state.srcMenuOpen || {})[key] } }), moreLabel: (this.state.srcMenuOpen || {})[key] ? '▴ Fermer' : '⋯ Réglages', ...(this.writeableKinds().indexOf(key) >= 0 ? this._srcWriteProps(key) : { canWrite: false }) });
+    const mkSrc = (key, name, desc, columns, connected, cname) => ({ name, desc, columns, connected, ...srcStatus(connected, cname), importStyle: impBtn, ghostStyle: ghost, openStyle, remapStyle: ghost, canRemap: connected && !['stock', 'bordereaux', 'transport', 'livraison'].includes(key), onRemap: () => this.reopenMapping(key), importLabel: key === 'stock' ? '📁 Choisir le dossier Stock' : key === 'bordereaux' ? '📁 Choisir le dossier Bordereaux' : 'Importer le fichier', onImport: () => this.importFile(key), onReset: () => this.askResetSource(key, name), linkValue: (this.state.links || {})[key] || '', onLinkChange: e => this.setLink(key, e.target.value), onOpen: () => { const l = (this.state.links || {})[key]; if (l) this.openUrl(l); else this.setState({ msg: { kind: 'error', text: `Renseignez d'abord le lien du fichier « ${name} » ci-dessus.` } }); }, canOpenExcel: connected && EXCEL_OPEN_KINDS.includes(key), onOpenExcel: () => this.openSourceInExcel(key, name), menuOpen: !!(this.state.srcMenuOpen || {})[key], onMenu: () => this.setState({ srcMenuOpen: { ...(this.state.srcMenuOpen || {}), [key]: !(this.state.srcMenuOpen || {})[key] } }), moreLabel: (this.state.srcMenuOpen || {})[key] ? '▴ Fermer' : '⋯ Réglages', ...(this.writeableKinds().indexOf(key) >= 0 ? this._srcWriteProps(key) : { canWrite: false }) });
     const mkModel = (key, label) => ({
       hasModel: true, modelLabel: label,
       modelValue: (this.state.models || {})[key] || '',
@@ -11629,6 +11720,12 @@ class Component {
       onResetAsk: () => this.setState({ resetAsk: true }),
       onResetCancel: () => this.setState({ resetAsk: null }),
       onResetConfirm: () => this.fullReset(),
+      // Confirmation du « Réinitialiser » d'UNE source (aussi destructeur que le bouton global).
+      srcResetOpen: !!this.state.srcResetAsk,
+      srcResetLabel: this.state.srcResetAsk ? this.state.srcResetAsk.label : '',
+      srcResetItems: this.state.srcResetAsk ? this.state.srcResetAsk.detail.map(t => ({ txt: t })) : [],
+      onSrcResetCancel: () => this.cancelResetSource(),
+      onSrcResetConfirm: () => this.confirmResetSource(),
       resetBtnStyle: 'padding:9px 16px;border-radius:9px;font-size:13px;font-weight:600;color:#b91c1c;background:#fff;border:1px solid #ecc9c9;cursor:pointer;font-family:inherit;white-space:nowrap',
       opsStatusChips, achatStatusChips, grenkeStatusChips,
       filePreviewOpen, filePreviewName, fpTabs, fpRows, fpColHeaders, fpCornerStyle, fpBackStyle, fpMore, fpInfo, onFpClose, onFpDownload, fpDownloadStyle, fpEditable, fpStatus,

@@ -345,6 +345,46 @@
   déjà-réglé du fichier et l'écrit noir sur blanc sous le
   formulaire : sans cette phrase, saisir « le chèque du
   jour » écraserait les règlements précédents.
+- SAUVEGARDE / RESTAURATION, le filet qui n'existait pas
+  (bloquant, 4 anomalies d'audit pour UNE cause) :
+  buildBackupZip exportait « toutes les clés av… » et
+  validateRestoreState les validait contre une LISTE BLANCHE
+  figée. Les deux listes avaient divergé de 14 clés — dont
+  avSetupDone, écrite dès le premier clic sur « Terminer ✓ » :
+  AUCUNE sauvegarde d'un poste réel n'était restaurable, et
+  le refus tombait sur la PREMIÈRE clé inconnue, rejetant
+  l'archive entière. Manquaient aussi avVentesSaisie /
+  avAchatsSaisie / avGrenkeManuel / avAnnule, les seules
+  données qui n'existent nulle part ailleurs que dans le
+  navigateur. RÈGLE : une seule règle STRUCTURELLE
+  (Component.estCleSauvegarde, /^av[A-Z]…/) décide à la fois
+  ce qui est exporté et ce qui est accepté — deux listes
+  tenues à la main re-divergeront toujours. RESTORE_KEYS ne
+  sert plus qu'à SIGNALER les réglages venus d'une autre
+  version. Une clé inconnue mais bien formée est restaurée
+  (une version plus récente ne doit rien perdre) et annoncée
+  dans l'aperçu ; une entrée hors format est écartée et
+  NOMMÉE. Jamais de rejet global.
+- confirmRestore, trois catch VIDES sur le seul chemin de
+  récupération : on effaçait toutes les clés av… PUIS on
+  écrivait, chaque setItem enveloppé d'un catch vide, puis
+  location.reload(). Quota dépassé ⇒ les données de Faustine
+  étaient détruites, les nouvelles non écrites, et la page
+  rechargée sans un mot (reproduit : 3 clés avant, 1 après).
+  Désormais TRANSACTIONNEL : photo de l'existant, écriture
+  comptée, et au moindre échec RETOUR à l'état d'avant +
+  message explicite, SANS rechargement. Plafonds ramenés
+  sous le quota réel du navigateur (4 Mo/clé, 4,5 Mo au
+  total ; c'était 10 et 30 Mo, six fois le quota).
+- « Réinitialiser » d'UNE source : passe par la même
+  confirmation que le bouton global, en NOMMANT ce qui sera
+  perdu (Component.RESET_DETAIL), et affiche un compte rendu
+  après coup. Un clic effaçait auparavant les règles de
+  catégorisation bancaire et les catégories créées à la main
+  — des mois de travail, absents de tout fichier Excel —
+  sans confirmation et avec msg forcé à null dans chaque
+  branche, donc sans le moindre signe que quelque chose
+  s'était passé.
 - Journal des modifications, photo de référence caduque :
   au-delà de 30 % des lignes de la source OU 50 lignes
   (le plus grand des deux), ne RIEN lister. Poste
