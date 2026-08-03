@@ -238,7 +238,7 @@ class Component {
     filePreview: null, hiddenOps: {}, grenkeHidden: {}, trashAsk: null, tblStatusF: {},
     banque: null, banqueName: null, bankLinks: {}, bankHidden: {}, bankLink: null, bankLinkQuery: '', bankQ: '', bankFilter: 'Toutes',
     bankCats: {}, bankCatRules: {}, bankCatList: null, bankCatAsk: null, bankCatAskValue: '', bankCatPick: null,
-    heures: {}, heuresMois: {}, filePaths: {}, annule: {}, hRoster: [], hFocus: null, hMode: 'semaine', hRange: null, hCollapse: {}, hDelAsk: null, hNuit: false, vehDelAsk: null, vehRestore: null,
+    heures: {}, heuresMois: {}, filePaths: {}, annule: {}, hRoster: [], hFocus: null, hMode: 'semaine', hRange: null, hCollapse: {}, hDelAsk: null, hNuit: false, vehDelAsk: null, vehRestore: null, credDelAsk: null, credRestore: null,
     empDocs: {}, empDelDoc: null, bankSalaryEmp: '', bankSalaryMonth: '',
     agenda: [], agendaMonth: null, agendaEdit: null, agendaDelAsk: null,
     payTrack: [], payDraft: null, payLookup: null,
@@ -6299,7 +6299,37 @@ class Component {
       if (!c || !c.name || seen[c.name]) continue;
       try { const blob = await this.buildXlsxBlob(c.wb); entries.push({ name: 'donnees/' + c.name, bytes: new Uint8Array(await blob.arrayBuffer()) }); seen[c.name] = true; } catch (e) {}
     }
-    const readme = `SAUVEGARDE — Dashboard Faustine\nCréée le ${new Date().toLocaleString('fr-FR')}\n\nContenu de cette archive :\n- Dashboard Achat-Vente.html : une copie complète du tableau de bord, prête à ouvrir sur n'importe quel ordinateur (double-clic, hors ligne).\n- donnees/etat.json : toutes vos données du tableau de bord (imports, crédits, observations, heures, catégories bancaires, réglages…).\n- donnees/*.xlsx : une copie de vos fichiers Excel connectés au moment de la sauvegarde.\n\nPour tout récupérer :\n1. Ouvrez « Dashboard Achat-Vente.html » (double-clic, dans Chrome ou Edge).\n2. Allez dans Paramètres → Sauvegarde complète → « Restaurer une sauvegarde… » et choisissez ce fichier .zip.\n3. Vos fichiers Excel sont aussi disponibles individuellement dans le dossier donnees/ si vous voulez juste les récupérer bruts.\n`;
+    // ---------- LES PIÈCES JOINTES AUSSI ----------
+    // L'archive emportait la LISTE des pièces jointes (avEmpDocs et les fiches véhicules, via
+    // etat.json) mais jamais leur CONTENU, qui ne vit que dans l'archive du navigateur. Après
+    // restauration sur un autre poste, l'écran affichait donc des bulletins de paie et des cartes
+    // grises qui n'existaient plus : au clic, « introuvable dans l'archive locale ». Le LISEZMOI
+    // promettait pourtant « toutes vos données ». Un bulletin de paie est une pièce que
+    // l'employeur doit pouvoir produire : il part maintenant dans le zip.
+    let nbPieces = 0, poidsPieces = 0;
+    try {
+      const tout = await this.idbGetAll();
+      const index = []; let n = 0;
+      for (const { key, val } of tout) {
+        const k = String(key || '');
+        if (!/^(payslip|vehicle):/.test(k) || !val || !val.file) continue;
+        try {
+          const bytes = new Uint8Array(await val.file.arrayBuffer());
+          // Nom de fichier NEUTRE (numéroté) + index qui porte la clé d'origine. Encoder la clé
+          // dans le nom obligerait à la reconstituer à la restauration, or « : » et « / » y sont
+          // interdits par Windows : on ne saurait plus lesquels remplacer.
+          const nom = `piece-${String(++n).padStart(3, '0')}${(val.file.name || '').match(/\.[A-Za-z0-9]{1,6}$/) ? (val.file.name.match(/\.[A-Za-z0-9]{1,6}$/) || [''])[0] : ''}`;
+          entries.push({ name: 'pieces-jointes/' + nom, bytes });
+          index.push({ fichier: nom, cle: k, nom: val.file.name || nom, type: val.file.type || '' });
+          nbPieces++; poidsPieces += bytes.length;
+        } catch (e) { /* pièce illisible : jamais comptée en silence, elle manquera à l'index */ }
+      }
+      if (index.length) entries.push({ name: 'pieces-jointes/index.json', bytes: enc.encode(JSON.stringify(index, null, 2)) });
+    } catch (e) {}
+    const ligneP = nbPieces
+      ? `- pieces-jointes/ : ${nbPieces} pièce${nbPieces > 1 ? 's' : ''} jointe${nbPieces > 1 ? 's' : ''} (bulletins de paie, documents de véhicules), ${Math.round(poidsPieces / 1024)} Ko au total. Elles sont remises en place à la restauration.\n`
+      : `- Aucune pièce jointe n'était enregistrée au moment de cette sauvegarde.\n`;
+    const readme = `SAUVEGARDE — Dashboard Faustine\nCréée le ${new Date().toLocaleString('fr-FR')}\n\nContenu de cette archive :\n- Dashboard Achat-Vente.html : une copie complète du tableau de bord, prête à ouvrir sur n'importe quel ordinateur (double-clic, hors ligne).\n- donnees/etat.json : toutes vos données du tableau de bord (imports, crédits, observations, heures, catégories bancaires, réglages…).\n- donnees/*.xlsx : une copie de vos fichiers Excel connectés au moment de la sauvegarde.\n${ligneP}\nPour tout récupérer :\n1. Ouvrez « Dashboard Achat-Vente.html » (double-clic, dans Chrome ou Edge).\n2. Allez dans Paramètres → Sauvegarde complète → « Restaurer une sauvegarde… » et choisissez ce fichier .zip.\n3. Vos fichiers Excel sont aussi disponibles individuellement dans le dossier donnees/ si vous voulez juste les récupérer bruts.\n`;
     entries.push({ name: 'LISEZMOI.txt', bytes: enc.encode(readme) });
     return this.zipBuild(entries, 'application/zip');
   }
@@ -6418,7 +6448,7 @@ class Component {
   // enveloppée d'un catch VIDE, puis location.reload() — un dépassement de quota effaçait donc les
   // données de Faustine sans écrire les nouvelles, et sans un mot. Désormais : photo de l'existant,
   // écriture comptée, et en cas d'échec RETOUR À L'ÉTAT D'AVANT + message explicite, sans recharger.
-  confirmRestore() {
+  async confirmRestore() {
     const rp = this.state.restorePreview; if (!rp) return;
     let avant = null;
     try {
@@ -6446,6 +6476,21 @@ class Component {
       });
       return; // surtout PAS de rechargement : le message doit être lu
     }
+    // Les pièces jointes vivent dans l'archive du navigateur, pas dans localStorage : elles se
+    // remettent en place ici, AVANT le rechargement. Sans ça, la liste revenait sans les fichiers
+    // et l'écran promettait des bulletins de paie introuvables.
+    try {
+      const files = this._restoreFiles || {};
+      const idxBytes = files['pieces-jointes/index.json'];
+      if (idxBytes) {
+        const index = JSON.parse(new TextDecoder().decode(idxBytes));
+        for (const it of (Array.isArray(index) ? index : [])) {
+          const bytes = files['pieces-jointes/' + it.fichier];
+          if (!bytes || !it.cle) continue;
+          try { await this.idbSet(it.cle, { file: new File([bytes], it.nom || it.fichier, { type: it.type || '' }) }); } catch (e) {}
+        }
+      }
+    } catch (e) { /* pièces non remises : la liste le dira au clic, les réglages sont déjà restaurés */ }
     location.reload();
   }
   downloadRestoreFile(name) {
@@ -8173,12 +8218,31 @@ class Component {
     this.saveJSON(Component.MSG_KEY, { list });
     try { this._msgLastRaw = localStorage.getItem(Component.MSG_KEY) || ''; } catch (e) {}
   }
+  // Destinataire RÉELLEMENT valide : un seul calcul, partagé par l'affichage et par l'envoi.
+  // La liste déroulante retombait déjà sur « À tout le monde » quand le destinataire mémorisé
+  // n'existait plus (profil supprimé, ou changement de profil actif), mais l'envoi, lui, lisait
+  // l'état brut : l'écran annonçait « 📢 À tout le monde » et le message partait EN PRIVÉ à
+  // l'ancien destinataire. Même famille que les ETAT_* : ce qui est AFFICHÉ et ce qui est FAIT
+  // doivent venir de la même source.
+  msgDestinataire() {
+    const to = this.state.msgTo;
+    if (to === 'all' || to == null) return 'all';
+    const me = this.activeProfil();
+    const ok = ((this.profCfg() || {}).list || []).some(p => p.id === to && p.id !== me.id);
+    return ok ? to : 'all';
+  }
   sendMessage() {
     const text = (this.state.msgText || '').trim();
     if (!text) return;
     const me = this.activeProfil();
-    const to = this.state.msgTo === 'all' ? 'all' : this.state.msgTo;
-    const m = { id: 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), from: me.id, fromNom: me.nom, to, text: text.slice(0, 2000), ts: Date.now(), readBy: [me.id] };
+    const to = this.msgDestinataire();
+    // Un message plus long que 2 000 caractères était coupé SANS un mot. On le dit maintenant, et
+    // on garde la saisie pour que rien ne soit perdu à l'insu de celle qui l'a écrite.
+    if (text.length > 2000) {
+      this.setState({ msg: { kind: 'error', text: `Ce message fait ${text.length} caractères, la limite est de 2 000. Raccourcissez-le (ou envoyez-le en deux fois) : rien n'a été envoyé, votre texte est toujours là.` } });
+      return;
+    }
+    const m = { id: 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), from: me.id, fromNom: me.nom, to, text, ts: Date.now(), readBy: [me.id] };
     this._saveMessages([...this.msgList(), m]);
     this.setState({ msgText: '' });
   }
@@ -8897,6 +8961,29 @@ class Component {
     rec.rest = Math.max(0, Math.round(((rec.total || 0) - (rec.paid || 0)) * 100) / 100);
     const arr = this._credits(); if (e.i >= 0) arr[e.i] = { ...arr[e.i], ...rec }; else arr.push(rec);
     this.saveCredits(arr); this.setState({ credEdit: null, msg: { kind: 'success', text: `« ${label} » enregistré : mensualité ${this.fmt(rec.mens)}${rec.next ? ', prochaine échéance le ' + rec.next.split('-').reverse().join('/') : ''}.` } });
+  }
+  // ---------- SUPPRIMER UN CRÉDIT : CONFIRMER, PUIS POUVOIR REVENIR ----------
+  // L'inversion était complète : régler une échéance (réversible) demandait confirmation, et
+  // supprimer la fiche entière (irréversible, aucune écriture dans un fichier Excel, donc rien à
+  // récupérer nulle part) partait au premier clic, sans un mot. Même filet que les véhicules.
+  askDeleteCred(i) {
+    const c = this._credits()[i]; if (!c) return;
+    this.setState({ credDelAsk: { i, label: c.label || 'Sans intitulé', ent: c.ent || '', mens: +c.mens || 0, rest: (c.rest != null ? +c.rest : Math.max(0, (+c.total || 0) - (+c.paid || 0))) } });
+  }
+  confirmDeleteCred() {
+    const a = this.state.credDelAsk; if (!a) return;
+    const arr = this._credits(); const c = arr[a.i];
+    if (!c) { this.setState({ credDelAsk: null }); return; }
+    this._credCorbeille = (this._credCorbeille || []).concat([{ i: a.i, c }]);
+    arr.splice(a.i, 1); this.saveCredits(arr);
+    this.setState({ credDelAsk: null, credEdit: null, credRestore: { label: a.label }, msg: { kind: 'ok', text: `« ${a.label} » supprimé. Vous pouvez encore le rétablir depuis le bandeau, tant que cet onglet reste ouvert.` } });
+  }
+  restoreCred() {
+    const r = this.state.credRestore; if (!r) return;
+    const item = (this._credCorbeille || []).pop();
+    if (!item) { this.setState({ credRestore: null, msg: { kind: 'error', text: `« ${r.label} » n'est plus rétablissable : la page a été rechargée depuis la suppression.` } }); return; }
+    const arr = this._credits(); arr.splice(Math.min(item.i, arr.length), 0, item.c); this.saveCredits(arr);
+    this.setState({ credRestore: null, msg: { kind: 'ok', text: `« ${item.c.label || 'Crédit'} » rétabli.` } });
   }
   deleteCred(i) { const arr = this._credits(); if (i < 0 || i >= arr.length) { this.setState({ credEdit: null }); return; } arr.splice(i, 1); this.saveCredits(arr); this.setState({ credEdit: null }); }
   // Bouton \u00ab \u27f3 Rafra\u00eechir \u00bb : m\u00eame circuit que la relecture automatique, en mode FORC\u00c9 (on oublie
@@ -10462,7 +10549,7 @@ class Component {
     // la fiche disparaissait alors sans avoir été enregistrée.
     const onCredBackdrop = e => { if (e && (e.target !== e.currentTarget || this._ovDown !== e.currentTarget)) return; this.credBackdrop(); };
     const ovDown = e => { this._ovDown = e ? e.target : null; };
-    const onCredDelete = () => this.deleteCred(credF.i);
+    const onCredDelete = () => this.askDeleteCred(credF.i);
     const credCommitStyle = `padding:9px 18px;border-radius:9px;font-size:13px;font-weight:700;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit`;
     const credDeleteStyle = 'padding:9px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#b91c1c;background:#fff;border:1px solid #f0c9c9;cursor:pointer;font-family:inherit';
     const credInputStyle = 'width:100%;box-sizing:border-box;padding:8px 11px;border:1px solid #dde3ec;border-radius:9px;font-size:13px;font-family:inherit;color:#0e1b2e;background:#fff';
@@ -11084,7 +11171,7 @@ class Component {
     const onMsgText = e => this.setState({ msgText: e.target.value });
     const onMsgKey = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.sendMessage(); } };
     const onMsgSend = () => this.sendMessage();
-    const msgToValue = (this.state.msgTo === 'all' || profC.list.some(p => p.id === this.state.msgTo && p.id !== msgMe.id)) ? this.state.msgTo : 'all';
+    const msgToValue = this.msgDestinataire(); // MÊME calcul que l'envoi — voir msgDestinataire()
     const msgToOptions = [{ value: 'all', label: '📢 À tout le monde' }, ...profC.list.filter(p => p.id !== msgMe.id).map(p => ({ value: p.id, label: `🔒 En privé à ${p.nom}` }))];
     const onMsgTo = e => this.setState({ msgTo: e.target.value });
     const msgSendStyle = `padding:10px 20px;border-radius:10px;font-size:13px;font-weight:600;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit;white-space:nowrap`;
@@ -12132,6 +12219,18 @@ class Component {
     const hArChevStyle = 'width:22px;text-align:center;color:#8291a5;font-size:11px;flex-shrink:0';
     const hEditStyle = `padding:7px 13px;border-radius:8px;font-size:12px;font-weight:600;color:${accent};background:#fff;border:1px solid ${this.hexToRgba(accent, 0.35)};cursor:pointer;font-family:inherit`;
     const hHeaderSub = hIsMonth ? `Vue mensuelle — ${H_MON[arBase.getMonth()]} ${arBase.getFullYear()}` : hIsYear ? `Vue annuelle — ${arBase.getFullYear()}` : hIsCustomArchives ? 'Archives — choisissez une période au calendrier' : ('Semaine du ' + hNavLabel + (hIsThisWeek ? ' · en cours' : ''));
+    // ---------- Crédits : confirmation de suppression et rétablissement ----------
+    const credDelAsk = this.state.credDelAsk;
+    const credDelOpen = !!credDelAsk;
+    const credDelName = credDelAsk ? `${credDelAsk.label}${credDelAsk.ent ? ' — ' + credDelAsk.ent : ''}` : '';
+    const credDelDetail = credDelAsk ? `Mensualité ${this.fmt(credDelAsk.mens)} · capital restant dû ${this.fmt(credDelAsk.rest)}` : '';
+    const onCredDelCancel = () => this.setState({ credDelAsk: null });
+    const onCredDelConfirm = () => this.confirmDeleteCred();
+    const credRestoreAsk = this.state.credRestore;
+    const credRestoreOpen = !!credRestoreAsk;
+    const credRestoreTxt = credRestoreAsk ? `« ${credRestoreAsk.label} » a été supprimé. Rétablir ?` : '';
+    const onCredRestore = () => this.restoreCred();
+    const onCredRestoreHide = () => this.setState({ credRestore: null });
     // ---------- Véhicules : confirmation de suppression et rétablissement ----------
     const vehDelAsk = this.state.vehDelAsk;
     const vehDelOpen = !!vehDelAsk;
@@ -12463,6 +12562,7 @@ class Component {
       arFrom, arTo, onArFrom, onArTo, arMonthValue, arYearValue, arMonthOptions, arYearOptions, onArMonth, onArYear, hDateStyle, arRows, arEmpty, arPeriodLabel, arCountLabel, hArHeadStyle, hArLineStyle, hArChevStyle, hEditStyle,
       hDelOpen, hDelName, onHDelCancel, onHDelConfirm, hDelSummary, hDelHasHours, onHDelArchive, hDelArchiveStyle, hDelSansNom, hDelPeutSupprimer: !hDelSansNom, hDelBloqueTxt, hNuitTabs, hNuitStatus,
       vehDelOpen, vehDelName, vehDelDetail, onVehDelCancel, onVehDelConfirm, vehRestoreOpen, vehRestoreTxt, onVehRestore, onVehRestoreHide,
+      credDelOpen, credDelName, credDelDetail, onCredDelCancel, onCredDelConfirm, credRestoreOpen, credRestoreTxt, onCredRestore, onCredRestoreHide,
     };
   }
   setState(update, cb) {
