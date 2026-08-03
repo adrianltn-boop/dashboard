@@ -3357,7 +3357,12 @@ class Component {
     // Restant dû : la valeur du fichier (colonne « Remains ») prime quand elle existe réellement,
     // sinon on la recalcule. Une cellule vide n'est PAS un zéro (elle ne veut pas dire « soldé »).
     const remBrut = (o.rem === '' || o.rem == null) ? null : n(o.rem);
-    const rem = remBrut != null ? Math.round(remBrut * 100) / 100 : Math.round((ttc - p1 - p2 - ch) * 100) / 100;
+    // SIGNE INVERSÉ : dans les fichiers réels, « Remains » est NÉGATIF quand il reste à recevoir
+    // (constaté et déjà corrigé côté KPI, cf. gDueOf — mais pas ici ni dans la colonne du tableau).
+    // Un dossier à −10 544 € passait donc le test `rem <= 0.005` et se déclarait SOLDÉ alors que
+    // rien n'avait été encaissé. Le montant qui reste dû est la VALEUR ABSOLUE, quelle que soit la
+    // convention de signe du classeur.
+    const rem = remBrut != null ? Math.abs(Math.round(remBrut * 100) / 100) : Math.round((ttc - p1 - p2 - ch) * 100) / 100;
     if (ttc <= 0.005 && recu <= 0.005) return Component.GRK_FINANCE; // dossier ouvert sans montant : rien à attendre encore
     if (rem <= 0.005) return Component.GRK_SOLDE;
     if (recu > 0.005) return Component.GRK_PARTIEL;
@@ -3376,6 +3381,11 @@ class Component {
     if (!s) return null;
     // ORDRE IMPORTANT : « partiellement réglé » contient « regle », il doit donc être testé AVANT
     // les mots du solde, sinon un dossier partiel serait rattaché à « SOLDÉ ».
+    // NÉGATIONS, testées AVANT tout le reste : « non payé », « pas réglé », « impayé », « unpaid »
+    // et « not paid » contiennent tous un mot du solde. Sans ce test, un dossier explicitement
+    // marqué NON réglé dans le fichier de l'utilisatrice était rattaché à « SOLDÉ » — l'inverse
+    // exact de ce que la cellule dit. Ce sont des libellés qu'on ne devine pas : on les lit.
+    if (/\b(non|pas|jamais|not|un)[\s-]*(paye|payee|paid|regle|reglee|solde|encaiss)/.test(s) || /^(impaye|impayee|unpaid|nonpaye)/.test(s.replace(/[\s-]/g, ''))) return Component.GRK_ATTENTE;
     if (/partiel|partial|acompte/.test(s)) return Component.GRK_PARTIEL;
     if (/sold|paye|paid|regle|clotur|termin|complet|encaiss/.test(s)) return Component.GRK_SOLDE;
     if (/attente|pending|en cours|encours|progress|relanc/.test(s)) return Component.GRK_ATTENTE;
@@ -5210,7 +5220,14 @@ class Component {
   _etatAttendu(ttc, solde, avoir, dateEchIso, todayIso) {
     const t = +ttc || 0, s = +solde || 0, a = +avoir || 0;
     if (a > 0.005 && a >= t - 0.005) return Component.ETAT_AVOIR;
-    if (Math.abs(s) <= 0.005) return Component.ETAT_PAYEE;
+    // Un solde NÉGATIF est un TROP-PERÇU (acompte en trop, arrondi de règlement) : la facture est
+    // soldée, pas partiellement réglée. `Math.abs(s) <= 0.005` ne retenait que le solde exactement
+    // nul, si bien qu'une facture de 1 000 € réglée 1 200 € était écrite « PAYÉE » par commitPay
+    // et attendue « PARTIELLEMENT RÉGLÉE » par la relecture. Le cycle était sans fin : accepter la
+    // correction écrivait « partiellement réglée » sur une facture intégralement encaissée, et le
+    // règlement suivant réécrivait « payée ». _paySuiviEtat, lui, testait déjà `solde <= 0.005` —
+    // c'est la règle des ETAT_* : les deux fonctions doivent dire le MÊME mot.
+    if (s <= 0.005) return Component.ETAT_PAYEE;
     if (t > 0.005 && s < t - 0.005) return Component.ETAT_PARTIELLE;
     if (dateEchIso && todayIso && dateEchIso < todayIso) return Component.ETAT_RETARD;
     return Component.ETAT_ATTENTE;
@@ -5320,6 +5337,14 @@ class Component {
       const ech = c.dateEch >= 0 ? this._cellToIso(rr[c.dateEch]) : '';
       const attendu = this._etatAttendu(ttc, solde, avoir, ech, today);
       const actuel = String(rr[c.etat] == null ? '' : rr[c.etat]).trim();
+      // VENTE FINANCÉE PAR GRENKE : c'est le tableau de bord LUI-MÊME qui a écrit cet état
+      // (_venteEtat → GRENKE_STATUT). _etatAttendu ne connaît pas ce vocabulaire et réclamait donc
+      // « EN ATTENTE » à chaque démarrage, sur une cellule écrite quelques secondes plus tôt —
+      // exactement le piège déjà consigné pour l'onglet Grenke (drapeau `transmis`), resté ouvert
+      // ici. Ce qu'on écrit et ce qu'on attend à la relecture doivent coïncider.
+      // Un écart n'est signalé que si la facture est désormais SOLDÉE alors que la cellule annonce
+      // encore un financement en attente : là, l'information est réellement périmée.
+      if (/grenke/.test(this._norm(actuel)) && attendu !== Component.ETAT_PAYEE) continue;
       if (this._norm(actuel) !== this._norm(attendu)) out.push({ sheetName: sloc.sheetName, rowIdx: r, col: c.etat, ref: num || client, actuel: actuel || '(vide)', attendu });
     }
     return out;
@@ -7246,6 +7271,17 @@ class Component {
     return { title: kind, headers: [], fields: [], emit: () => null };
   }
   _norm(s) { return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim(); }
+  // ---------- \u00ab PAY\u00c9 \u00bb ET \u00ab PAY\u00c9E \u00bb D\u00c9SIGNENT LE M\u00caME \u00c9TAT ----------
+  // Les lignes d'op\u00e9ration portent leur \u00e9tat au MASCULIN quand elles viennent des achats
+  // (mapOperations, saisies d'achat : \u00ab Pay\u00e9 \u00bb) et au F\u00c9MININ quand elles viennent des ventes ou
+  // des factures (venteOps, computeFactures : \u00ab Pay\u00e9e \u00bb). Les deux familles cohabitent sur les
+  // M\u00caMES listes et \u00e9taient compar\u00e9es par \u00e9galit\u00e9 stricte \u00e0 \u00ab Pay\u00e9 \u00bb : aucune vente r\u00e9elle ne
+  // franchissait jamais le filtre. Seules les donn\u00e9es de D\u00c9MONSTRATION portaient le masculin \u2014
+  // d'o\u00f9 un tableau de bord juste en d\u00e9mo et faux en production. Cons\u00e9quence mesur\u00e9e : \u00ab Flux net
+  // (p\u00e9riode) \u00bb valait \u2212d\u00e9caissements en permanence (\u2212500 \u20ac au lieu de +2 500 \u20ac), les
+  // encaissements \u00e9tant tous ignor\u00e9s.
+  // Un seul pr\u00e9dicat, qui accepte les deux formes. \u00ab Partiellement pay\u00e9e \u00bb n'en fait pas partie.
+  _estPaye(r) { const s = this._norm(r && r.status); return s === 'paye' || s === 'payee'; }
   // En-t\u00eate d'une colonne \u00ab commentaire \u00bb (onglet Grenke). PI\u00c8GE \u00c0 NE PAS R\u00c9INTRODUIRE : ne jamais
   // tester includes('com') \u2014 \u00ab customer \u00bb contient aussi \u00ab com \u00bb, la d\u00e9tection viserait alors la
   // colonne Client et le commentaire \u00e9craserait le nom du client.
@@ -9429,7 +9465,7 @@ class Component {
       if (inPrev.length && isFinite(prev) && prev !== 0) { const diff = isCount ? cur - prev : (cur - prev) / Math.abs(prev) * 100; const sign = diff >= 0 ? '+' : '−'; delta = isCount ? sign + Math.abs(diff) : sign + Math.abs(diff).toFixed(1).replace('.', ',') + ' %'; color = diff === 0 ? gray : (diff > 0) === goodUp ? green : red; note = vsNote; }
       return { label, value, delta, deltaColor: color, note, spark: accent }; };
     let kpis;
-    if (view === 'Achats') { const aPaid = r => r.paid != null ? r.paid : (r.status === 'Payé' ? Math.abs(r.amt) : 0); const aReste = r => r.reste != null ? r.reste : (r.status === 'Payé' ? 0 : Math.abs(r.amt)); const aRows = inPeriodActive.filter(r => r.type === 'Achat'); const paidA = aRows.reduce((s, r) => s + aPaid(r), 0); const resteA = aRows.reduce((s, r) => s + aReste(r), 0); const paidAp = inPrevActive.filter(r => r.type === 'Achat').reduce((s, r) => s + aPaid(r), 0); kpis = [kpi('Total des achats', this.fmt(S.ach), S.ach, Sp.ach, false), kpi('Total payé', this.fmt(paidA), paidA, paidAp, true), kpi('Restant à payer', this.fmt(resteA), resteA, 0, false), kpi('Fournisseurs actifs', String(new Set(aRows.map(r => r.partner)).size), 0, 0, true)]; }
+    if (view === 'Achats') { const aPaid = r => r.paid != null ? r.paid : (this._estPaye(r) ? Math.abs(r.amt) : 0); const aReste = r => r.reste != null ? r.reste : (this._estPaye(r) ? 0 : Math.abs(r.amt)); const aRows = inPeriodActive.filter(r => r.type === 'Achat'); const paidA = aRows.reduce((s, r) => s + aPaid(r), 0); const resteA = aRows.reduce((s, r) => s + aReste(r), 0); const paidAp = inPrevActive.filter(r => r.type === 'Achat').reduce((s, r) => s + aPaid(r), 0); kpis = [kpi('Total des achats', this.fmt(S.ach), S.ach, Sp.ach, false), kpi('Total payé', this.fmt(paidA), paidA, paidAp, true), kpi('Restant à payer', this.fmt(resteA), resteA, 0, false), kpi('Fournisseurs actifs', String(new Set(aRows.map(r => r.partner)).size), 0, 0, true)]; }
     else if (view === 'Ventes') {
       const vRows = inPeriodActive.filter(r => r.type === 'Vente');
       const caHT = vRows.reduce((s, r) => s + (r.ht != null ? r.ht : r.amt), 0);
@@ -9449,8 +9485,8 @@ class Component {
       const gScoped = grenkeRows.filter(g => { const d = gDateOf(g); return d ? inSelPeriod(d) : false; });
       const gRecv = gScoped.reduce((s, g) => s + gRecvOf(g), 0);
       const gRecevoir = gScoped.reduce((s, g) => s + gDueOf(g), 0);
-      const paidHors = vRows.reduce((s, r) => s + (r.paid != null ? r.paid : (r.status === 'Payé' ? r.amt : 0)), 0);
-      const recevHors = vRows.reduce((s, r) => s + Math.max(0, (r.reste != null ? r.reste : (r.status === 'Payé' ? 0 : r.amt))), 0);
+      const paidHors = vRows.reduce((s, r) => s + (r.paid != null ? r.paid : (this._estPaye(r) ? r.amt : 0)), 0);
+      const recevHors = vRows.reduce((s, r) => s + Math.max(0, (r.reste != null ? r.reste : (this._estPaye(r) ? 0 : r.amt))), 0);
       // total non soldé toutes périodes confondues (indépendant du filtre)
       const gRecevoirTotal = grenkeRows.reduce((s, g) => s + gDueOf(g), 0);
       const kpiGrenke = kpi('À recevoir Grenke', this.fmt(gRecevoir), gRecevoir, 0, false);
@@ -9462,7 +9498,7 @@ class Component {
         kpiGrenke,
       ];
     }
-    else { const encP = inPeriodActive.filter(r => r.type === 'Vente' && r.status === 'Payé').reduce((s, r) => s + r.amt, 0); const decP = inPeriodActive.filter(r => r.type === 'Achat' && r.status === 'Payé').reduce((s, r) => s + Math.abs(r.amt), 0); const encPp = inPrevActive.filter(r => r.type === 'Vente' && r.status === 'Payé').reduce((s, r) => s + r.amt, 0); const decPp = inPrevActive.filter(r => r.type === 'Achat' && r.status === 'Payé').reduce((s, r) => s + Math.abs(r.amt), 0);
+    else { const encP = inPeriodActive.filter(r => r.type === 'Vente' && this._estPaye(r)).reduce((s, r) => s + r.amt, 0); const decP = inPeriodActive.filter(r => r.type === 'Achat' && this._estPaye(r)).reduce((s, r) => s + Math.abs(r.amt), 0); const encPp = inPrevActive.filter(r => r.type === 'Vente' && this._estPaye(r)).reduce((s, r) => s + r.amt, 0); const decPp = inPrevActive.filter(r => r.type === 'Achat' && this._estPaye(r)).reduce((s, r) => s + Math.abs(r.amt), 0);
       kpis = [kpi('CA ventes', this.fmt(S.ca), S.ca, Sp.ca, true), kpi('Achats pêcheurs', this.fmt(S.ach), S.ach, Sp.ach, false), kpi('Marge brute', this.fmt(S.marge), S.marge, Sp.marge, true), kpi('Flux net (période)', this.fmt(encP - decP), encP - decP, encPp - decPp, true)]; }
 
     // trésorerie
@@ -9655,7 +9691,9 @@ class Component {
       const dateNum = dateO ? this.days(dateO) : -Infinity;
       const dateStr = dateO ? `${this.dd(dateO.d)}/${this.dd(dateO.m)}/${String(dateO.y).slice(2)}` : '—';
       const cust = (g.cust && String(g.cust).trim()) ? g.cust : (fact ? fact.partner : '—');
-      const rem = g.rem != null ? g.rem : Math.round(((g.ttc || 0) - (g.p1 || 0) - (g.p2 || 0) - (g.charge || 0)) * 100) / 100;
+      // Colonne « Remains » à signe inversé (voir _grenkeEtat) : le restant dû est sa valeur absolue.
+      // Sans ça, la colonne du tableau affichait « −10 544,00 € » en VERT, comme un dossier soldé.
+      const rem = g.rem != null ? Math.abs(g.rem) : Math.round(((g.ttc || 0) - (g.p1 || 0) - (g.p2 || 0) - (g.charge || 0)) * 100) / 100;
       // L'état affiché est TOUJOURS déduit (jamais la cellule recopiée, jamais « — ») : voir _grenkeEtat.
       const etat = this._grenkeEtat({ ...g, rem: g.rem }, dateO);
       return { g, L, recv, dateO, dateNum, dateStr, cust, rem, etat };
@@ -9746,7 +9784,7 @@ class Component {
     const grenkeLinkCardStyle = 'width:560px;max-width:100%;max-height:88vh;overflow:auto;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px';
     const grenkeUnlinkStyle = 'padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#b91c1c;background:#fff;border:1px solid #f0c9c9;cursor:pointer;font-family:inherit';
     const grenkeAutoStyle = 'padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#69788c;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit';
-    const achatAll = (isAchatView ? scoped : []).map(r => { const gross = Math.abs(r.amt); const paid = r.paid != null ? r.paid : (r.status === 'Payé' ? gross : 0); const reste = r.reste != null ? r.reste : Math.max(0, gross - paid); const st = reste > 0.005 ? (r.status === 'Retard' ? 'Retard' : 'Non payé') : 'Payé'; const annulled = isAnnule(r); const opWarn = r.paymentWarning || null; return { date: `${this.dd(r.d)}/${this.dd(r.m)}`, ref: r.ref, partner: (r.manual ? '✎ ' : '') + r.partner, paidStr: this.fmt(paid), resteStr: this.fmt(reste), resteColor: reste > 0.005 ? red : green, status: st + (opWarn ? ' ⚠' : ''), statusStyle: st === 'Payé' ? `${badge}background:#e7f5ec;color:${green}` : st === 'Retard' ? `${badge}background:#fdeaea;color:${red}` : `${badge}background:#fef4e6;color:${amber}`, statusTitle: opWarn || '', onTrash: () => this.setState({ trashAsk: { kind: 'op', key: this.opHideKey(r), label: 'Facture ' + (r.ref || '—') + ' · ' + (r.partner || '—') + ' · ' + this.fmt(gross) } }), trashStyle: trashBtnStyle, annulled, notAnnulled: !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none', onCancel: () => this.requestCancelPreview('operations', r.ref), cancelStyle: cancelBtnStyle, onEditRow: () => this.openRowInExcel('operations', r.ref), editStyle: rowEditStyle, onRestore: () => this.requestCancelPreview('operations', r.ref, { restore: true }), restoreStyle: restoreBtnStyle, annuleBadgeStyle }; });
+    const achatAll = (isAchatView ? scoped : []).map(r => { const gross = Math.abs(r.amt); const paid = r.paid != null ? r.paid : (this._estPaye(r) ? gross : 0); const reste = r.reste != null ? r.reste : Math.max(0, gross - paid); const st = reste > 0.005 ? (r.status === 'Retard' ? 'Retard' : 'Non payé') : 'Payé'; const annulled = isAnnule(r); const opWarn = r.paymentWarning || null; return { date: `${this.dd(r.d)}/${this.dd(r.m)}`, ref: r.ref, partner: (r.manual ? '✎ ' : '') + r.partner, paidStr: this.fmt(paid), resteStr: this.fmt(reste), resteColor: reste > 0.005 ? red : green, status: st + (opWarn ? ' ⚠' : ''), statusStyle: st === 'Payé' ? `${badge}background:#e7f5ec;color:${green}` : st === 'Retard' ? `${badge}background:#fdeaea;color:${red}` : `${badge}background:#fef4e6;color:${amber}`, statusTitle: opWarn || '', onTrash: () => this.setState({ trashAsk: { kind: 'op', key: this.opHideKey(r), label: 'Facture ' + (r.ref || '—') + ' · ' + (r.partner || '—') + ' · ' + this.fmt(gross) } }), trashStyle: trashBtnStyle, annulled, notAnnulled: !annulled, rowOpacity: annulled ? '0.45' : '1', refDecoration: annulled ? 'line-through' : 'none', onCancel: () => this.requestCancelPreview('operations', r.ref), cancelStyle: cancelBtnStyle, onEditRow: () => this.openRowInExcel('operations', r.ref), editStyle: rowEditStyle, onRestore: () => this.requestCancelPreview('operations', r.ref, { restore: true }), restoreStyle: restoreBtnStyle, annuleBadgeStyle }; });
     const achatStatusVals = [...new Set(achatAll.map(t => t.status))];
     const achatStatusEff = effStatus('achat', achatStatusVals);
     const achatStatusChips = statusChipsFor('achat', achatStatusVals);
@@ -10729,7 +10767,7 @@ class Component {
     const tiersScopeLabel = tiersMode === 'Mois' ? `${C.MONTHS[aM]} ${aY}` : `Année ${aY}`;
     const partnerType = this.state.tiers === 'Fournisseurs' ? 'Achat' : 'Vente';
     const byP = {};
-    between(tiersRange[0], tiersRange[1]).filter(r => r.type === partnerType).forEach(r => { const p = byP[r.partner] = byP[r.partner] || { n: 0, vol: 0, enc: 0, last: null, cat: r.cat }; p.n++; p.vol += Math.abs(r.amt); if (r.status !== 'Payé') p.enc += (r.reste != null ? r.reste : Math.abs(r.amt)); if (!p.last) p.last = r; });
+    between(tiersRange[0], tiersRange[1]).filter(r => r.type === partnerType).forEach(r => { const p = byP[r.partner] = byP[r.partner] || { n: 0, vol: 0, enc: 0, last: null, cat: r.cat }; p.n++; p.vol += Math.abs(r.amt); if (!this._estPaye(r)) p.enc += (r.reste != null ? r.reste : Math.abs(r.amt)); if (!p.last) p.last = r; });
     const avoirTotals = this.state.avoirTotals || {};
     const partnersRows = Object.entries(byP).sort((a, b) => b[1].vol - a[1].vol).slice(0, 20).map(([name, p]) => { const actif = ymOf(p.last) >= anchor - 1;
       // Avoir disponible (source : onglet Avoirs, relu depuis Excel) — uniquement côté Clients.
