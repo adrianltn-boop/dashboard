@@ -402,7 +402,7 @@ class Component {
   static PAY_OVERRIDE_KEY = 'avPaymentOverrides';
   static MAP_KEY = 'avMappings';
   static AVWMAP_KEY = 'avWriteMap';
-  static APP_VERSION = 'version 37';
+  static APP_VERSION = 'version 38';
   // Mention de copyright affichée dans l'interface (Paramètres) : elle n'accorde aucun
   // droit — le droit d'auteur naît de la création — mais elle informe les tiers et date la
   // revendication. La preuve d'antériorité, elle, repose sur l'historique Git et le dépôt INPI.
@@ -1130,6 +1130,18 @@ class Component {
         preview.push({ label, col: `${this._colLetter(colIdx + 1)}${rowIdx + 1}`, value: display != null ? display : String(val) });
         verifyTargets.push({ sheetName: shName, rowIdx, col: colIdx, val });
       };
+      // VIDER une cellule est un geste légitime — effacer un avoir, par exemple. `put` ignore les
+      // chaînes vides par prudence (ne jamais écraser par accident), donc le correctif « l'avoir
+      // est toujours écrit, même à zéro » passait par lui et NE FAISAIT RIEN : l'audit v37 l'a
+      // prouvé sur le classeur réel (la cellule Avoir restait à 100, solde incohérent avec ses
+      // propres colonnes). putVide est le chemin EXPLICITE : patchXlsxFile écrit une cellule vide.
+      const putVide = (shName, rowIdx, colIdx, label) => {
+        if (colIdx == null || colIdx < 0) return;
+        editsBySheet[shName] = editsBySheet[shName] || {};
+        editsBySheet[shName][rowIdx + ':' + colIdx] = '';
+        preview.push({ label, col: `${this._colLetter(colIdx + 1)}${rowIdx + 1}`, value: '(vidée)' });
+        verifyTargets.push({ sheetName: shName, rowIdx, col: colIdx, val: '' });
+      };
       // Date : écrite en SÉRIE Excel (RÈGLE « Dates Excel ») et sa colonne déclarée dans dateCols
       // pour recevoir un format de date — sinon la série s'afficherait en nombre brut.
       const putDate = (shName, rowIdx, colIdx, iso, label) => {
@@ -1174,7 +1186,8 @@ class Component {
           // portait dès lors un solde qui ne correspondait plus à ses propres colonnes, et le
           // contrôle des soldes signalait un écart à chaque relecture. Écrire une case vide plutôt
           // qu'un zéro : une case vide n'est pas un montant, c'est l'absence d'avoir.
-          put(sloc.sheetName, rowIdx, sloc.cols.avoir, this._vNum(rec.avoir) > 0 ? rec.avoir : '', 'Avoir (Suivi des paiements)', this._vNum(rec.avoir) > 0 ? this.fmt(rec.avoir) : '—');
+          if (this._vNum(rec.avoir) > 0) put(sloc.sheetName, rowIdx, sloc.cols.avoir, rec.avoir, 'Avoir (Suivi des paiements)', this.fmt(rec.avoir));
+          else putVide(sloc.sheetName, rowIdx, sloc.cols.avoir, 'Avoir (Suivi des paiements) — effacé');
           sheets.push(sloc.sheetName);
         } else {
           // TRANSPARENCE : la feuille existe mais la ligne est introuvable. On le DIT dans l'aperçu,
@@ -3464,14 +3477,21 @@ class Component {
     const base = String(name || 'fichier').replace(/\.xlsx?$/i, '');
     let bakName = `${base} — sauvegarde ${stamp}.xlsx`;
     const bytes = new Uint8Array(buf.slice(0));
-    if (this._backupDir && this._backupDir.getFileHandle) {
-      for (let i = 2; i <= 50; i++) {
-        let existe = false;
-        try { await this._backupDir.getFileHandle(bakName); existe = true; } catch (e) { existe = false; } // absent = ce qu'on veut
-        if (!existe) break;
-        bakName = `${base} — sauvegarde ${stamp}-${i}.xlsx`;
+    // Le test d'existence sur disque ne suffit PAS : l'audit v37 a constaté deux écritures dans la
+    // même seconde dont la première sauvegarde a été écrasée (le handle peut être servi depuis un
+    // cache, ou le système répondre « absent » entre l'ouverture et l'écriture). On tient donc
+    // AUSSI le registre en mémoire des noms déjà servis cette session : lui ne ment jamais sur ce
+    // que NOUS avons déjà écrit — et c'est nous le seul écrivain de ces fichiers.
+    this._bakServis = this._bakServis || new Set();
+    for (let i = 2; i <= 99; i++) {
+      let pris = this._bakServis.has(bakName);
+      if (!pris && this._backupDir && this._backupDir.getFileHandle) {
+        try { await this._backupDir.getFileHandle(bakName); pris = true; } catch (e) { pris = false; } // absent = ce qu'on veut
       }
+      if (!pris) break;
+      bakName = `${base} — sauvegarde ${stamp}-${i}.xlsx`;
     }
+    this._bakServis.add(bakName);
     if (this._backupDir && this._backupDir.getFileHandle) {
       try {
         // Autorisation parfois expirée depuis le dernier démarrage : on la redemande avant d'échouer.
@@ -4261,6 +4281,15 @@ class Component {
       const sheetName = this._chequeSheetForNumber(rec.chequeNum, wb, rec.chequier);
       if (!sheetName) return chequeFailed(`Chèque n° ${rec.chequeNum} non complété : aucune feuille ne correspond à la série « ${String(rec.chequeNum).replace(/\D/g, '').slice(0, 3)} » dans ce fichier.`);
       const loc = this._locateChequeRow(wb, sheetName, rec.chequeNum);
+      // MÊME GARDE que le paiement et l'ajout de chèque — ce chemin (flux ACHAT, numéro tapé à la
+      // main) était le SEUL à ne pas l'appeler : l'audit v37 a constaté un chèque émis (480 €,
+      // obs « Facture N°26813 ») réécrit sans un mot par l'achat suivant. Un chèque signé ne se
+      // réécrit sur aucun chemin.
+      const occAchat = this._chequeLigneOccupee(wb, sheetName, loc);
+      if (occAchat) {
+        const libreA = this._chequeProchainLibre(wb, sheetName, rec.chequeNum);
+        return chequeFailed(`Chèque n° ${rec.chequeNum} non écrit : cette ligne est déjà utilisée dans « ${sheetName} » (${occAchat.texte}). Écrire dessus effacerait un chèque réellement émis.${libreA ? ` Premier numéro libre : ${libreA}.` : ''} L'achat, lui, est bien enregistré : corrigez le numéro depuis Paiement pêcheur → « Ajouter un moyen de paiement ».`);
+      }
       const serial = this._excelSerial(rec.date);
       const desc = rec.pecheur || '';
       const obs = this._chequeObsText(1, 1, rec.num || '');
@@ -4561,6 +4590,21 @@ class Component {
         if (cLoc.paieCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.paieCol] = montantPaye; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.paieCol, val: montantPaye }); preview.push({ label: 'Chéquier — Paiement', col: colName(cLoc.paieCol), value: this.fmt(montantPaye) }); }
         if (cLoc.etatCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.etatCol] = 'PAYE'; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.etatCol, val: 'PAYE' }); preview.push({ label: 'Chéquier — Etat', col: colName(cLoc.etatCol), value: 'PAYE' }); }
         if (cLoc.obsCol >= 0) { editsBySheet[chequeSheetName][cLoc.previewIdx + ':' + cLoc.obsCol] = obs; verifyTargets.push({ sheetName: chequeSheetName, rowIdx: cLoc.previewIdx, col: cLoc.obsCol, val: obs }); preview.push({ label: 'Chéquier — Obs', col: colName(cLoc.obsCol), value: obs }); }
+        // Les chèques DÉJÀ portés par la facture sont renumérotés (« 1/1 » → « 1/2 ») — le chemin
+        // « Ajouter un chèque » le faisait, celui du paiement partiel/solde l'avait oublié :
+        // les deux lignes du carnet se déclaraient chacune l'unique chèque de la facture.
+        const _dejaChqNums = String((row[chequeCol] == null ? '' : row[chequeCol])).trim().split('/').map(x => x.trim()).filter(x => /^\d+$/.test(x) && x !== String(pd.chequeNum).trim());
+        _dejaChqNums.forEach((numEx, iEx) => {
+          try {
+            const shEx = this._chequeSheetForNumber(numEx, wb, pd.chequier); if (!shEx) return;
+            const locEx = this._locateChequeRow(wb, shEx, numEx); if (locEx.obsCol < 0) return;
+            const obsEx = this._chequeObsText(iEx + 1, (pd._chqTotal || _dejaChqNums.length + 1), pd.ref || '');
+            editsBySheet[shEx] = editsBySheet[shEx] || {};
+            editsBySheet[shEx][locEx.previewIdx + ':' + locEx.obsCol] = obsEx;
+            verifyTargets.push({ sheetName: shEx, rowIdx: locEx.previewIdx, col: locEx.obsCol, val: obsEx });
+            preview.push({ label: `Chéquier ${numEx} — Obs`, col: colName(locEx.obsCol), value: obsEx });
+          } catch (e) { /* chèque hors carnet connu : rien à renuméroter */ }
+        });
       }
       const allowFormulaCols = this._opsAllowFormulaCols(sheetName, soldeCol, chequeCol);
       this._pendingWrite = { kind: 'operations', buf, handle: hi.handle, name: hi.name, fingerprint, sheetName: chequeSheetName ? `${sheetName}, ${chequeSheetName}` : sheetName, editsBySheet, verifyTargets, refuseFormula: true, allowFormulaCols, after: () => this._paiementAfterWrite(pd.ref) };
@@ -9446,11 +9490,22 @@ class Component {
       // précédent. Ce que la saisie a réellement écrit est déjà connu : achatWriteValues distingue
       // le règlement immédiat du reste. On lit la MÊME chose ici, pour que l'écran et le fichier
       // disent la même phrase (même règle que les ETAT_* du suivi de paiement).
+      // LE FICHIER FAIT FOI POUR L'ÉTAT DE PAIEMENT. La saisie locale gagne le dédoublonnage par
+      // numéro, mais elle ne connaît QUE le moment de la saisie : après un règlement écrit dans le
+      // fichier, elle disait encore « Déjà payé 0 · Solde 1 000 » et la fiche Paiement pêcheur ne
+      // se verrouillait pas — invitation au double paiement (constaté à l'audit v37). Quand le
+      // fichier porte la même référence, ses colonnes de paiement (payé, reste, statut, chèque)
+      // remplacent celles de la saisie.
+      const fileAchatByRef = {};
+      baseAll.forEach(r => { if (r && r.type === 'Achat' && r.ref) fileAchatByRef[this.nrm(r.ref)] = r; });
       const aSai = (this.state.achatsSaisie || []).map(a => {
         const o = isoYMD(a.date); const total = +a.total || 0;
         const cat = (a.lignes && a.lignes[0] && a.lignes[0].espece) ? a.lignes[0].espece : 'Pêche';
         const regle = !!a.paiementImmediat;
-        return { y: o.y, m: o.m, d: o.d, ref: a.num || ('AP-' + a.id), type: 'Achat', partner: a.pecheur, cat, amt: -total, paid: regle ? total : 0, reste: regle ? 0 : total, status: regle ? 'Payé' : 'Non payé', manual: true };
+        const base = { y: o.y, m: o.m, d: o.d, ref: a.num || ('AP-' + a.id), type: 'Achat', partner: a.pecheur, cat, amt: -total, paid: regle ? total : 0, reste: regle ? 0 : total, status: regle ? 'Payé' : 'Non payé', manual: true };
+        const fr = a.num ? fileAchatByRef[this.nrm(a.num)] : null;
+        if (fr) { base.paid = fr.paid != null ? fr.paid : base.paid; base.reste = fr.reste != null ? fr.reste : base.reste; if (fr.status) base.status = fr.status; if (fr.chq != null) base.chq = fr.chq; if (fr.paymentWarning) base.paymentWarning = fr.paymentWarning; }
+        return base;
       });
       // Dédoublonnage en DEUX passes.
       // 1) Par NUMÉRO de facture, la saisie manuelle l'emporte (comportement historique).
@@ -12532,6 +12587,11 @@ class Component {
     const prefixConfirmStyle = `padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#fff;background:${accent};border:none;cursor:pointer;font-family:inherit`;
     const prefixCancelStyle = 'padding:8px 15px;border-radius:9px;font-size:13px;font-weight:600;color:#69788c;background:#fff;border:1px solid #dde3ec;cursor:pointer;font-family:inherit';
     const prefixOverlayStyle = 'position:fixed;inset:0;z-index:72;background:rgba(14,27,46,.42);display:flex;align-items:center;justify-content:center;padding:24px';
+    // Une CONFIRMATION doit passer AU-DESSUS de la fenêtre qui l'a ouverte. La confirmation de
+    // suppression d'un crédit partageait le z-index 72 de la fiche d'édition et se rendait AVANT
+    // elle dans le DOM : entièrement recouverte, boutons inatteignables — « Supprimer » semblait
+    // mort, et seul « Annuler » (qui ferme la fiche) la révélait. Constaté à l'audit v37.
+    const confirmOverlayStyle = 'position:fixed;inset:0;z-index:80;background:rgba(14,27,46,.42);display:flex;align-items:center;justify-content:center;padding:24px';
     const prefixCardStyle = 'width:460px;max-width:100%;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px';
     // Dédiée à l'aperçu d'écriture (writePreview) : peut afficher beaucoup de lignes (écritures
     // multi-feuilles) — plafonnée à 70vh avec défilement interne pour ne jamais dépasser l'écran.
@@ -12739,6 +12799,7 @@ class Component {
       gmDelOpen, gmDelName, onGrkDelConfirm, onGrkDelCancel,
       credPayAskOpen, credPayAskLabel, credPayAskMens, credPayAskHasBank, credPayAskMsg, onCredPayConfirm, onCredPayCancel,
       onPrefixFond, onBankCatFond, onBankLinkFond, onAgFond,
+      confirmOverlayStyle,
       modalErrStyle, prefixErrShow, prefixErrTxt, bankCatErrShow, bankCatErrTxt, bankLinkErrShow, bankLinkErrTxt, agErrShow, agErrTxt,
       onCredNew, credAddStyle, credEditOpen, credIsEdit, credEditTitle, credVals, credTypeIsCredit, credTypeCreditStyle, credTypeAssurStyle, onCredLabel, onCredEnt, onCredTotal, onCredPaid, onCredMens, onCredNext, onCredTypeCredit, onCredTypeAssur, onCredCommit, onCredCancel, onCredDelete, onCredBackdrop, ovDown, onDateBlur, credCommitStyle, credDeleteStyle, credInputStyle, credLabelStyle,
       recoStats, recoRows, recoNote, recoKeyTabs, recoKeyHint, recoEmpty,

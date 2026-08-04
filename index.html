@@ -3373,7 +3373,7 @@
 
   <!-- ============ CRÉDIT — confirmation de suppression ============ -->
   <sc-if value="{{ credDelOpen }}" hint-placeholder-val="{{ false }}">
-    <div style="{{ prefixOverlayStyle }}" onclick="{{ onCredDelCancel }}">
+    <div style="{{ confirmOverlayStyle }}" onclick="{{ onCredDelCancel }}">
       <div style="width:440px;max-width:92vw;background:#fff;border:1px solid #e2e8f1;border-radius:16px;box-shadow:0 30px 60px -24px rgba(14,27,46,.5);font-family:inherit;padding:22px" onclick="{{ ctxStop }}">
         <div style="font-size:11px;font-weight:600;color:#93a1b3;text-transform:uppercase;letter-spacing:.4px">Supprimer un engagement</div>
         <div style="font-size:15px;font-weight:600;color:#0e1b2e;margin-top:6px">🗑 Supprimer « {{ credDelName }} » ?</div>
