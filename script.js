@@ -1104,6 +1104,9 @@ class Component {
     if (i >= 0) arr[i] = rec; else arr.unshift(rec);
     this.savePayTrack(arr); this.setState({ payDraft: this.payDefault() });
     this.refreshPayIdFacture();
+    // Relecture constante : chaque écriture est immédiatement suivie d'un contrôle des états —
+    // si elle a créé (ou résolu) un écart, le bandeau le dit tout de suite, pas au prochain démarrage.
+    this.rafraichirEtats();
   }
   // Aperçu (puis confirmation) d'un enregistrement de paiement client. Écrit dans le fichier ventes :
   //  · « Suivi des paiements » (ligne trouvée par ID Facture) : Montant réglé, Date du paiement,
@@ -8910,7 +8913,29 @@ class Component {
         + (this._stockDir ? 1 : 0) + (this._blDir ? 1 : 0) + (this._transpDir ? 1 : 0) + (this._libDir ? 1 : 0);
       this._relectureEnCours = false;
       this.setState({ lastSync: Date.now(), relecture: { at: Date.now(), total: d.total, groups: d.groups, docs, running: false } });
+      // RELECTURE CONSTANTE DES ÉTATS (demande d'Adrian : « une facture doit forcément avoir un
+      // état correct »). Le contrôle des états ne tournait qu'au DÉMARRAGE : une facture réglée
+      // dans Excel en cours de journée, ou un écart né d'une saisie, restait invisible jusqu'au
+      // lendemain. Il se rejoue désormais à CHAQUE relecture — l'horaire, celle du retour sur
+      // l'onglet, et la forcée — et après chaque écriture (voir _payAfterWrite). Le bandeau dit
+      // toujours l'état réel : il apparaît quand des écarts existent, disparaît quand ils sont
+      // résolus, et se met à jour s'ils changent.
+      this.rafraichirEtats();
     }
+  }
+  // Recalcule les écarts d'état/avoir et met le bandeau à jour — sans jamais écrire.
+  // Verrou dédié : une relecture d'états en cours n'est jamais doublée.
+  async rafraichirEtats() {
+    if (this._etatsEnCours) return;
+    this._etatsEnCours = true;
+    try {
+      const chk = await this._computeVerifs();
+      const n = (chk.avoirs || []).length + (chk.etats || []).length;
+      // Le bandeau reflète TOUJOURS le dernier contrôle : des écarts → il est (re)posé ;
+      // plus aucun → il est retiré. Jamais un bandeau périmé à l'écran.
+      this.setState({ verifPending: n ? { avoirs: chk.avoirs, etats: chk.etats, at: Date.now() } : null });
+    } catch (e) { /* best-effort : un contrôle raté ne casse jamais l'écran */ }
+    finally { this._etatsEnCours = false; }
   }
   // Minuterie horaire. Démarrée au montage, arrêtée quand l'onglet passe en arrière-plan et à la
   // fermeture (clearInterval) : une minuterie oubliée continuerait à réveiller le disque.
