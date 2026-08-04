@@ -724,6 +724,26 @@
   crédit se rendait DERRIÈRE la fiche d'édition —
   invisible, boutons inatteignables.
 
+- ÉTAT DES FACTURES, harmonisation des ANCIENNES lignes
+  (signalé par Adrian) : deux défauts jumeaux dans
+  _etatsEcarts. (1) Une case Solde VIDE n'est pas un
+  zéro — _vNum('') rendait 0 et toute ancienne ligne au
+  solde vide ressortait « attendu PAYÉE », y compris une
+  facture au premier règlement seulement ; accepter la
+  correction écrivait PAYÉE sur une créance ouverte. Sans
+  solde LISIBLE, on ne propose RIEN (même famille que
+  « TTC moins réglé » et « Remains vide »). (2) L'état
+  Grenke ne se posait jamais sur les anciennes factures :
+  _etatAttendu ignore ce vocabulaire. Le rapprochement se
+  fait par _grenkeNumsDuFichier — les CHIFFRES du numéro
+  (gNumKey), car l'onglet Grenke écrit « 3749 » où le
+  suivi écrit « INV-3749 » — et une facture financée non
+  soldée attend GRENKE_STATUT. Une cellule déjà étiquetée
+  Grenke mais absente de l'onglet n'est jamais écrasée
+  (on ne devine pas), sauf facture réellement soldée.
+  Mesuré sur le classeur réel : 15 anciennes factures
+  reçoivent enfin l'état Grenke, 0 faux PAYÉE.
+
 ## Performance (mesurée, pas supposée)
 - fmt() : JAMAIS Number.toLocaleString directement — il
   reconstruit un formateur Intl à chaque appel (~50 µs)

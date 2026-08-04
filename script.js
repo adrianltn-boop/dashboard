@@ -5402,30 +5402,57 @@ class Component {
     return out;
   }
   // Écarts d'état dans « Suivi des paiements » : compare la colonne Etat à l'état attendu.
+  // Les numéros de facture présents dans l'onglet Grenke : une ligne y figure = un financement
+  // transmis. C'est ce qui permet de proposer « EN ATTENTE PAIEMENT GRENKE » sur les ANCIENNES
+  // lignes du suivi — avant, _etatAttendu ignorait tout de Grenke et proposait « EN ATTENTE »
+  // ou « PAYÉE » sur des factures financées (signalé par Adrian : l'état Grenke ne se mettait
+  // jamais sur les anciennes factures).
+  _grenkeNumsDuFichier(wb) {
+    const g = this._grenkeLocate(wb); const set = new Set();
+    if (!g) return set;
+    const sh = wb.find(s => s.name === g.sheetName); if (!sh) return set;
+    for (let r = g.dataStart; r < sh.rows.length; r++) {
+      const v = (sh.rows[r] || [])[g.cols.invoice];
+      // L'onglet Grenke écrit « 3749 » là où le suivi écrit « INV-3749 » : le rapprochement se
+      // fait par les CHIFFRES (gNumKey), la convention déjà utilisée partout ailleurs pour lier
+      // un dossier Grenke à sa facture.
+      const k = this.gNumKey(v);
+      if (k) set.add(k);
+    }
+    return set;
+  }
   _etatsEcarts(wb) {
     const sloc = this._suiviLocate(wb); if (!sloc || sloc.cols.etat < 0) return [];
     const sh = wb.find(s => s.name === sloc.sheetName); if (!sh) return [];
     const rows = sh.rows; const c = sloc.cols; const today = this._payTodayIso(); const out = [];
+    const grkNums = this._grenkeNumsDuFichier(wb);
     for (let r = sloc.dataStart; r < rows.length; r++) {
       const rr = rows[r] || [];
       const num = c.numero >= 0 ? String(rr[c.numero] == null ? '' : rr[c.numero]).trim() : '';
       const client = c.client >= 0 ? String(rr[c.client] == null ? '' : rr[c.client]).trim() : '';
       if (!num && !client) continue; // ligne vide : rien à vérifier
-      const solde = c.solde >= 0 ? (this._vNum(rr[c.solde]) || 0) : NaN;
-      if (isNaN(solde)) continue; // sans solde exploitable, on ne présume rien
+      // UNE CASE SOLDE VIDE N'EST PAS UN ZÉRO. _vNum('') rendait 0, le garde isNaN ne se
+      // déclenchait jamais, et toute ANCIENNE ligne au solde vide (ou en formule illisible)
+      // ressortait « attendu PAYÉE » — y compris une facture qui n'avait reçu qu'un premier
+      // règlement. Accepter la correction écrivait « PAYÉE » sur une créance ouverte (signalé
+      // par Adrian). Même famille que « TTC moins réglé » et « Remains vide n'est pas un
+      // zéro » : sans solde LISIBLE, on ne présume rien et on ne propose rien.
+      const soldeBrut = c.solde >= 0 ? rr[c.solde] : null;
+      if (soldeBrut == null || String(soldeBrut).trim() === '' || !isFinite(parseFloat(this._montantTexte(soldeBrut)))) continue;
+      const solde = this._vNum(soldeBrut);
       const ttc = c.ttc >= 0 ? (this._vNum(rr[c.ttc]) || 0) : 0;
       const avoir = c.avoir >= 0 ? (this._vNum(rr[c.avoir]) || 0) : 0;
       const ech = c.dateEch >= 0 ? this._cellToIso(rr[c.dateEch]) : '';
-      const attendu = this._etatAttendu(ttc, solde, avoir, ech, today);
+      let attendu = this._etatAttendu(ttc, solde, avoir, ech, today);
+      // Facture présente dans l'onglet Grenke et non soldée : l'état attendu est celui du
+      // financement, pas « EN ATTENTE » ni « À RELANCER » — c'est Grenke qu'on attend, pas le
+      // client. C'est ce qui pose ENFIN l'état Grenke sur les anciennes lignes.
+      if (attendu !== Component.ETAT_PAYEE && attendu !== Component.ETAT_AVOIR && num && !/^cn/i.test(num.trim()) && grkNums.has(this.gNumKey(num))) attendu = Component.GRENKE_STATUT;
       const actuel = String(rr[c.etat] == null ? '' : rr[c.etat]).trim();
-      // VENTE FINANCÉE PAR GRENKE : c'est le tableau de bord LUI-MÊME qui a écrit cet état
-      // (_venteEtat → GRENKE_STATUT). _etatAttendu ne connaît pas ce vocabulaire et réclamait donc
-      // « EN ATTENTE » à chaque démarrage, sur une cellule écrite quelques secondes plus tôt —
-      // exactement le piège déjà consigné pour l'onglet Grenke (drapeau `transmis`), resté ouvert
-      // ici. Ce qu'on écrit et ce qu'on attend à la relecture doivent coïncider.
-      // Un écart n'est signalé que si la facture est désormais SOLDÉE alors que la cellule annonce
-      // encore un financement en attente : là, l'information est réellement périmée.
-      if (/grenke/.test(this._norm(actuel)) && attendu !== Component.ETAT_PAYEE) continue;
+      // Cellule déjà étiquetée Grenke mais numéro ABSENT de l'onglet Grenke (financement noté à la
+      // main, jamais transmis dans la feuille) : on ne devine pas, on n'écrase pas — sauf si la
+      // facture est réellement soldée, où l'étiquette est simplement périmée.
+      if (/grenke/.test(this._norm(actuel)) && attendu !== Component.ETAT_PAYEE && attendu !== Component.GRENKE_STATUT) continue;
       if (this._norm(actuel) !== this._norm(attendu)) out.push({ sheetName: sloc.sheetName, rowIdx: r, col: c.etat, ref: num || client, actuel: actuel || '(vide)', attendu });
     }
     return out;
