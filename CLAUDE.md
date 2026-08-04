@@ -699,6 +699,31 @@
   L'écran annonçait « À tout le monde » et le message
   partait en privé à un profil supprimé.
 
+- VIDER une cellule est un geste, pas un oubli : put()
+  ignore les chaînes vides par prudence, donc « écrire une
+  case vide » via put() ne fait RIEN — le correctif de
+  l'avoir effacé a été inopérant tout un cycle d'audit à
+  cause de ça. putVide() est le chemin explicite ; toute
+  remise à vide passe par lui.
+- SAUVEGARDE DATÉE, unicité : le test d'existence sur
+  disque ne suffit pas (deux écritures dans la même
+  seconde l'ont pris en défaut). Registre en mémoire des
+  noms déjà servis (_bakServis) EN PLUS du test disque.
+- Chéquier : le garde de ligne occupée s'applique aux
+  TROIS chemins d'écriture — paiement, ajout de chèque,
+  et flux ACHAT (celui-là avait été oublié : un numéro
+  déjà émis tapé à la main réécrivait la ligne).
+- L'état de PAIEMENT d'un achat vient TOUJOURS du fichier
+  quand il porte la référence : la saisie locale gagne le
+  dédoublonnage mais ne connaît que le moment de la
+  saisie — après un règlement, elle disait encore
+  « payé 0 » et la fiche invitait au double paiement.
+- Une CONFIRMATION passe AU-DESSUS de la fenêtre qui l'a
+  ouverte (confirmOverlayStyle, z-index dédié) : au même
+  z-index, l'ordre du DOM décide, et la confirmation du
+  crédit se rendait DERRIÈRE la fiche d'édition —
+  invisible, boutons inatteignables.
+
 ## Performance (mesurée, pas supposée)
 - fmt() : JAMAIS Number.toLocaleString directement — il
   reconstruit un formateur Intl à chaque appel (~50 µs)
